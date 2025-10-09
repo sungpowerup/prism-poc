@@ -7,27 +7,41 @@ __pycache__/
 venv/
 env/
 ENV/
-
-# PRISM 데이터
-data/
-logs/
-*.db
-*.log
+.venv/
 
 # 환경 변수
 .env
+*.env
+!.env.example
+
+# 데이터
+data/
+logs/
+temp/
+*.db
+*.sqlite
+*.log
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
 # OS
 .DS_Store
 Thumbs.db
+*.bak
+
+# Streamlit
+.streamlit/secrets.toml
 
 # 테스트
 .pytest_cache/
 .coverage
 htmlcov/
+
+# 업로드 파일
+uploads/
+processed/

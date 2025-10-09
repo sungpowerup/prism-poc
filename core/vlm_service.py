@@ -1,220 +1,195 @@
 """
-core/vlm_service.py
-PRISM POC - VLM API 서비스 (한국어 출력)
+VLM Service with Ollama (Local sLLM)
+Ollama Vision Model 서비스 (OCR 통합)
 """
 
 import os
-import base64
-from typing import Dict, Optional
-import anthropic
-from PIL import Image
-import io
 import logging
+import base64
+import requests
+from typing import Dict, Any
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 class VLMService:
-    """Vision Language Model API 서비스"""
+    """Vision Language Model 서비스 (Ollama 로컬)"""
     
     def __init__(self):
-        # Anthropic API 키 로드
-        api_key = os.getenv('ANTHROPIC_API_KEY')
-        if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY 환경 변수가 설정되지 않았습니다.")
+        """초기화"""
+        self.base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        self.model = os.getenv("OLLAMA_MODEL", "llava:7b")
         
-        self.client = anthropic.Anthropic(api_key=api_key)
-        self.model = "claude-3-5-sonnet-20241022"
+        # Ollama 연결 확인
+        try:
+            response = requests.get(f"{self.base_url}/api/tags", timeout=5)
+            if response.status_code == 200:
+                logger.info(f"Ollama 연결 성공 (모델: {self.model})")
+            else:
+                raise ConnectionError("Ollama 서버 응답 없음")
+        except Exception as e:
+            logger.error(f"Ollama 연결 실패: {e}")
+            raise ConnectionError(
+                f"Ollama 서버에 연결할 수 없습니다. "
+                f"'ollama serve'가 실행 중인지 확인하세요."
+            )
     
-    def generate_caption(
+    def _build_prompt_with_ocr(
         self, 
-        image: Image.Image,
-        element_type: str = 'image',
-        context: str = ""
-    ) -> Dict:
+        element_type: str,
+        extracted_text: str
+    ) -> str:
         """
-        이미지에 대한 캡션 생성 (한국어)
+        OCR 텍스트를 포함한 프롬프트 생성
         
         Args:
-            image: PIL Image 객체
-            element_type: Element 타입 ('chart', 'table', 'image', 'diagram')
-            context: 문서 맥락 정보
+            element_type: Element 타입
+            extracted_text: OCR로 추출한 텍스트
             
         Returns:
-            {'caption': str, 'confidence': float}
+            프롬프트 문자열
         """
         
+        type_names = {
+            'chart': '차트',
+            'table': '표',
+            'image': '이미지',
+            'diagram': '다이어그램'
+        }
+        
+        type_name = type_names.get(element_type, '요소')
+        
+        if extracted_text and len(extracted_text) > 10:
+            prompt = f"""다음은 문서 이미지에서 OCR로 추출한 텍스트입니다:
+
+---
+{extracted_text[:1500]}
+---
+
+위 텍스트와 이미지를 함께 분석하여, 이 {type_name}의 내용을 자세히 설명해주세요:
+
+1. 주요 내용: 제목, 핵심 데이터, 중요 정보
+2. 구조: 레이아웃, 시각적 요소
+3. 의미: 핵심 메시지와 중요성
+
+한국어로 명확하게 설명해주세요."""
+        else:
+            prompt = f"""이 {type_name} 이미지를 분석하여 설명해주세요:
+
+1. 내용: 제목, 데이터, 정보
+2. 구조: 레이아웃, 시각적 요소
+3. 의미: 핵심 메시지
+
+한국어로 명확하게 설명해주세요."""
+        
+        return prompt
+    
+    async def generate_caption(
+        self,
+        image_base64: str,
+        element_type: str = "image",
+        extracted_text: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Ollama로 캡션 생성 (OCR 텍스트 포함)
+        
+        Args:
+            image_base64: Base64 인코딩된 이미지
+            element_type: Element 타입
+            extracted_text: OCR로 추출한 텍스트
+            
+        Returns:
+            결과 딕셔너리
+        """
         try:
-            # 이미지를 base64로 변환
-            image_data = self._image_to_base64(image)
+            logger.info(f"Ollama 캡션 생성 중... (타입: {element_type}, OCR: {len(extracted_text)}자)")
             
-            # Element 타입별 프롬프트
-            prompt = self._get_prompt(element_type, context)
+            # 프롬프트 생성
+            prompt = self._build_prompt_with_ocr(element_type, extracted_text)
             
-            # Claude API 호출
-            message = self.client.messages.create(
-                model=self.model,
-                max_tokens=1024,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/png",
-                                "data": image_data
-                            }
-                        },
-                        {
-                            "type": "text",
-                            "text": prompt
-                        }
-                    ]
-                }]
+            # Ollama API 호출
+            response = requests.post(
+                f"{self.base_url}/api/generate",
+                json={
+                    "model": self.model,
+                    "prompt": prompt,
+                    "images": [image_base64],
+                    "stream": False
+                },
+                timeout=300  # 5분 타임아웃
             )
             
-            # 응답 추출
-            caption = message.content[0].text.strip()
+            if response.status_code != 200:
+                raise Exception(f"Ollama API 오류: {response.status_code}")
             
-            # 신뢰도 계산 (간단한 휴리스틱)
-            confidence = self._calculate_confidence(caption, element_type)
+            result_data = response.json()
+            caption = result_data.get('response', '')
             
-            logger.info(f"캡션 생성 성공 ({element_type}): {caption[:50]}...")
+            # 신뢰도 계산
+            confidence = self._calculate_confidence(
+                caption, 
+                extracted_text,
+                element_type
+            )
             
-            return {
+            result = {
                 'caption': caption,
-                'confidence': confidence
+                'confidence': confidence,
+                'usage': {
+                    'input_tokens': 0,  # Ollama는 토큰 정보 제공 안 함
+                    'output_tokens': 0
+                },
+                'model': self.model,
+                'element_type': element_type
             }
             
+            logger.info(f"Ollama 캡션 생성 완료 (신뢰도: {confidence:.2f})")
+            
+            return result
+            
         except Exception as e:
-            logger.error(f"VLM API 호출 실패: {e}")
+            logger.error(f"Ollama 캡션 생성 실패: {e}")
             raise
     
-    def _get_prompt(self, element_type: str, context: str) -> str:
-        """Element 타입별 프롬프트 반환 (한국어 강조)"""
+    def _calculate_confidence(
+        self,
+        caption: str,
+        extracted_text: str,
+        element_type: str
+    ) -> float:
+        """간단한 신뢰도 계산"""
+        confidence = 0.85
         
-        base_instruction = "**중요: 반드시 한국어로만 응답하세요.**\n\n"
+        if len(caption) < 50:
+            confidence -= 0.1
+        elif len(caption) > 300:
+            confidence += 0.05
         
-        prompts = {
-            'chart': base_instruction + f"""이 차트를 분석하여 한국어로 상세히 설명하세요.
-
-문맥: {context}
-
-다음 내용을 포함하세요:
-1. 차트 유형 (막대그래프, 선그래프, 파이차트 등)
-2. X축과 Y축의 의미
-3. 주요 데이터 포인트와 구체적인 수치
-4. 트렌드 및 패턴
-5. 특이사항이나 주목할 점
-
-자연스러운 한국어 문장으로 작성하되, 객관적이고 정확하게 설명하세요.""",
+        if extracted_text and len(extracted_text) > 20:
+            ocr_words = set(extracted_text.split()[:20])
+            caption_words = set(caption.split())
+            overlap = len(ocr_words & caption_words)
+            overlap_ratio = overlap / len(ocr_words) if ocr_words else 0
             
-            'table': base_instruction + f"""이 표의 내용을 한국어로 설명하세요.
-
-문맥: {context}
-
-다음 내용을 포함하세요:
-1. 표의 구조 (행/열 개수, 헤더 정보)
-2. 주요 데이터와 수치
-3. 행렬 간 비교 및 패턴
-4. 합계나 특이사항
-
-표 없이도 이해할 수 있도록 자연스러운 한국어로 서술하세요.""",
-            
-            'image': base_instruction + f"""이 이미지를 한국어로 상세히 설명하세요.
-
-문맥: {context}
-
-다음 내용을 포함하세요:
-1. 이미지의 주요 내용
-2. 시각적 요소 (객체, 색상, 구성)
-3. 이미지 내 텍스트나 수치 (있다면)
-4. 문서에서의 역할
-
-객관적이고 구체적으로 한국어로 설명하세요.""",
-            
-            'diagram': base_instruction + f"""이 다이어그램을 한국어로 분석하세요.
-
-문맥: {context}
-
-다음 내용을 포함하세요:
-1. 다이어그램 유형 (플로우차트, 구조도 등)
-2. 주요 구성 요소
-3. 요소 간 관계 및 흐름
-4. 프로세스나 구조의 핵심
-
-한국어로 명확하게 설명하세요."""
+            if overlap_ratio > 0.3:
+                confidence += 0.05
+        
+        type_weights = {
+            'chart': 1.0,
+            'table': 0.95,
+            'diagram': 0.9,
+            'image': 0.85
         }
         
-        return prompts.get(element_type, prompts['image'])
+        confidence *= type_weights.get(element_type, 1.0)
+        
+        return max(0.0, min(1.0, confidence))
     
-    def _image_to_base64(self, image: Image.Image) -> str:
-        """PIL Image를 base64 문자열로 변환"""
-        buffer = io.BytesIO()
-        
-        # RGB로 변환 (투명도 제거)
-        if image.mode in ('RGBA', 'LA', 'P'):
-            background = Image.new('RGB', image.size, (255, 255, 255))
-            if image.mode == 'P':
-                image = image.convert('RGBA')
-            background.paste(image, mask=image.split()[-1] if 'A' in image.mode else None)
-            image = background
-        
-        image.save(buffer, format='PNG')
-        return base64.b64encode(buffer.getvalue()).decode('utf-8')
-    
-    def _calculate_confidence(self, caption: str, element_type: str) -> float:
-        """신뢰도 계산 (간단한 휴리스틱)"""
-        
-        # 기본 신뢰도
-        confidence = 0.7
-        
-        # 길이 보너스 (적절한 길이)
-        if 50 <= len(caption) <= 500:
-            confidence += 0.1
-        
-        # Element 타입별 키워드 체크
-        type_keywords = {
-            'chart': ['그래프', '차트', '수치', '추이', '변화'],
-            'table': ['표', '행', '열', '데이터', '합계'],
-            'image': ['이미지', '사진', '보여', '나타냅니다'],
-            'diagram': ['다이어그램', '구조', '흐름', '프로세스']
+    def get_stats(self) -> Dict[str, Any]:
+        """서비스 통계 정보"""
+        return {
+            'service': 'VLMService',
+            'model': self.model,
+            'provider': 'Ollama (Local)',
+            'ocr_integration': True
         }
-        
-        keywords = type_keywords.get(element_type, [])
-        if any(kw in caption for kw in keywords):
-            confidence += 0.1
-        
-        # 한국어 체크 (간단히 한글 비율 확인)
-        korean_chars = sum(1 for c in caption if '가' <= c <= '힣')
-        if korean_chars / len(caption) > 0.3:  # 30% 이상 한글
-            confidence += 0.1
-        
-        return min(confidence, 1.0)
-
-
-# 테스트용
-if __name__ == '__main__':
-    import sys
-    
-    if len(sys.argv) < 2:
-        print("사용법: python vlm_service.py <image_path>")
-        sys.exit(1)
-    
-    # .env 파일 로드
-    from dotenv import load_dotenv
-    load_dotenv()
-    
-    # 서비스 초기화
-    service = VLMService()
-    
-    # 이미지 로드
-    image = Image.open(sys.argv[1])
-    
-    # 캡션 생성
-    result = service.generate_caption(image, element_type='chart')
-    
-    print(f"\n캡션: {result['caption']}")
-    print(f"신뢰도: {result['confidence']:.2f}")

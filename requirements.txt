@@ -1,33 +1,31 @@
-# PRISM POC - Python 패키지 의존성
-# PyMuPDF 버전
+# Web Framework
+streamlit==1.31.0
 
-# 핵심 프레임워크
-streamlit==1.32.0
+# PDF Processing
+pypdf==4.0.1
+pdf2image==1.17.0
+pillow==10.4.0
 
-# PDF 처리 (PyMuPDF로 변경)
-PyMuPDF==1.24.0
-Pillow==10.4.0
+# OCR (새로 추가!)
+paddlepaddle
+paddleocr
 
-# 이미지 처리
+# Image Processing
 opencv-python-headless==4.9.0.80
 
-# VLM API
-anthropic==0.25.0
+# AI/ML
+anthropic==0.18.1
 
-# 데이터 처리
-numpy==1.26.4
-pandas==2.2.1
-
-# 품질 평가
+# NLP
 nltk==3.8.1
-rouge-score==0.1.2
 
-# 환경 변수
+# Database
+sqlalchemy==2.0.27
+
+# Utilities
 python-dotenv==1.0.1
+numpy==1.26.4
+pandas==2.2.0
 
-# 데이터베이스
-# (SQLite는 Python 내장)
-
-# 테스트
-pytest==8.1.1
-pytest-cov==4.1.0
+# Logging
+colorlog==6.8.2

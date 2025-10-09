@@ -1,362 +1,446 @@
 """
-app.py
-PRISM POC - Streamlit 메인 애플리케이션 (Local sLLM)
-다운로드 기능 추가 버전
+PRISM POC - Main Application with OCR
+PDF + 이미지 처리 및 VLM 변환 (OCR 통합)
 """
 
 import streamlit as st
-import uuid
+import asyncio
 from pathlib import Path
-from dotenv import load_dotenv
-import time
-import io
 import json
 from datetime import datetime
+import logging
+import sys
 
-# 환경 변수 로드
-load_dotenv()
+# 프로젝트 루트를 PYTHONPATH에 추가
+sys.path.insert(0, str(Path(__file__).parent))
 
-from core.storage import Storage
-from core.model_selector import ModelSelector
 from core.pdf_processor import PDFProcessor
+from core.vlm_service import VLMService
+
+# ElementClassifier는 기존 프로젝트에 있음 (import 유지)
+try:
+    from core.element_classifier import ElementClassifier
+except ImportError:
+    logger.warning("⚠️ ElementClassifier를 찾을 수 없습니다. 기본 분류 사용")
+    ElementClassifier = None
+
+# 로깅 설정
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('logs/app.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # 페이지 설정
 st.set_page_config(
-    page_title="PRISM POC - Local sLLM",
+    page_title="PRISM POC",
     page_icon="🔷",
     layout="wide"
 )
 
-# CSS 스타일
-st.markdown("""
-<style>
-    .main > div {
-        padding-top: 2rem;
-    }
-    .stButton > button {
-        width: 100%;
-    }
-</style>
-""", unsafe_allow_html=True)
 
-# 서비스 초기화
-@st.cache_resource
-def init_services():
-    try:
-        return {
-            'storage': Storage(),
-            'model_selector': ModelSelector(),
-            'pdf_processor': PDFProcessor()
-        }
-    except Exception as e:
-        st.error(f"초기화 오류: {str(e)}")
-        return None
+def init_session_state():
+    """세션 상태 초기화"""
+    if 'processed_results' not in st.session_state:
+        st.session_state.processed_results = None
+    if 'pdf_processor' not in st.session_state:
+        st.session_state.pdf_processor = None
+    if 'vlm_service' not in st.session_state:
+        st.session_state.vlm_service = None
+    if 'classifier' not in st.session_state:
+        st.session_state.classifier = None
 
-services = init_services()
 
-if not services:
-    st.stop()
-
-# VLM 프로바이더 확인
-model_selector = services['model_selector']
-available_providers = model_selector.get_available_providers()
-
-# 세션 상태 초기화
-if 'step' not in st.session_state:
-    st.session_state.step = 1
-if 'session_id' not in st.session_state:
-    st.session_state.session_id = None
-if 'elements' not in st.session_state:
-    st.session_state.elements = []
-if 'results' not in st.session_state:
-    st.session_state.results = []
-if 'filename' not in st.session_state:
-    st.session_state.filename = None
-
-def main():
-    """메인 함수"""
-    
-    # 헤더
+def display_header():
+    """헤더 표시"""
     st.title("🔷 PRISM POC")
-    st.markdown("**VLM 기반 문서 전처리 - Local sLLM**")
-    
-    # 사이드바
-    with st.sidebar:
-        st.header("⚙️ 설정")
-        
-        # VLM 상태
-        if available_providers:
-            provider = model_selector.get_default_provider()
-            st.success(f"🟢 {provider.get_provider_name()}")
-        else:
-            st.error("🔴 Ollama 서버 실행 필요")
-            st.code("ollama serve")
-            st.stop()
-        
-        st.divider()
-        
-        # 통계
-        if st.session_state.results:
-            st.subheader("📊 처리 통계")
-            total = len(st.session_state.results)
-            success = sum(1 for r in st.session_state.results if r.get('caption'))
-            st.metric("성공", f"{success}/{total}")
-    
-    # 메인 컨텐츠
-    if st.session_state.step == 1:
-        show_upload_page()
-    elif st.session_state.step == 2:
-        show_processing_page()
-    elif st.session_state.step == 3:
-        show_results_page()
+    st.markdown("**Progressive Reasoning & Intelligence for Structured Materials**")
+    st.markdown("VLM 기반 문서 전처리 시스템 (OCR 통합)")
+    st.divider()
 
-def show_upload_page():
-    """1단계: 파일 업로드"""
+
+def display_file_upload():
+    """파일 업로드 UI"""
+    st.subheader("📤 Step 1: 문서 업로드")
     
-    st.header("📤 STEP 1: PDF 업로드")
-    
-    uploaded_file = st.file_uploader(
-        "PDF 파일을 선택하세요",
-        type=['pdf'],
-        help="최대 10MB"
+    file_type = st.radio(
+        "파일 타입 선택",
+        ["PDF 문서", "이미지 파일"],
+        horizontal=True
     )
     
-    if uploaded_file:
-        file_size_mb = len(uploaded_file.getvalue()) / (1024 * 1024)
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.info(f"📄 **파일**: {uploaded_file.name}")
-        with col2:
-            st.info(f"📦 **크기**: {file_size_mb:.2f} MB")
-        
-        if st.button("🚀 처리 시작", type="primary"):
-            if file_size_mb > 10:
-                st.error("❌ 파일이 너무 큽니다 (10MB 제한)")
-                return
-            
-            # 세션 생성
-            session_id = str(uuid.uuid4())
-            st.session_state.session_id = session_id
-            st.session_state.filename = uploaded_file.name  # 파일명 저장
-            
-            # PDF 처리
-            try:
-                with st.spinner("PDF 페이지 추출 중..."):
-                    pdf_bytes = uploaded_file.getvalue()
-                    elements = services['pdf_processor'].process_pdf(pdf_bytes, session_id)
-                    
-                    if len(elements) > 20:
-                        st.error("❌ 페이지가 너무 많습니다 (20페이지 제한)")
-                        return
-                    
-                    st.session_state.elements = elements
-                    
-                    # DB 저장
-                    services['storage'].create_session(
-                        session_id=session_id,
-                        filename=uploaded_file.name,
-                        file_size=len(pdf_bytes),
-                        page_count=len(elements)
-                    )
-                    
-                    st.success(f"✅ {len(elements)}개 페이지 추출 완료!")
-                    time.sleep(1)
-                    st.session_state.step = 2
-                    st.rerun()
-            
-            except Exception as e:
-                st.error(f"❌ 오류: {str(e)}")
-                st.exception(e)
+    if file_type == "PDF 문서":
+        uploaded_file = st.file_uploader(
+            "PDF 파일 선택",
+            type=['pdf'],
+            help="최대 10MB, 20페이지 이하"
+        )
+    else:
+        uploaded_file = st.file_uploader(
+            "이미지 파일 선택",
+            type=['png', 'jpg', 'jpeg'],
+            help="차트, 표, 다이어그램 이미지"
+        )
+    
+    return uploaded_file, file_type
 
-def show_processing_page():
-    """2단계: VLM 처리"""
+
+async def process_pdf_async(pdf_path: Path, use_ocr: bool = True):
+    """PDF 비동기 처리"""
     
-    st.header("⚙️ STEP 2: VLM 처리")
+    # 초기화
+    if st.session_state.pdf_processor is None:
+        with st.spinner("🚀 PDF 프로세서 초기화 중..."):
+            st.session_state.pdf_processor = PDFProcessor()
     
-    elements = st.session_state.elements
-    total = len(elements)
+    if st.session_state.vlm_service is None:
+        with st.spinner("🚀 VLM 서비스 초기화 중..."):
+            st.session_state.vlm_service = VLMService()
     
-    st.info(f"총 {total}개 페이지 처리 중... (페이지당 5-10초 소요)")
+    if st.session_state.classifier is None:
+        if ElementClassifier:
+            with st.spinner("🚀 분류기 초기화 중..."):
+                st.session_state.classifier = ElementClassifier()
+        else:
+            st.session_state.classifier = None
     
-    # 프로그레스바
+    pdf_processor = st.session_state.pdf_processor
+    vlm_service = st.session_state.vlm_service
+    classifier = st.session_state.classifier
+    
+    # 페이지 수 확인
+    page_count = pdf_processor.get_page_count(pdf_path)
+    
+    st.info(f"📄 총 {page_count}페이지 처리 시작...")
+    
+    # 진행 상태 표시
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    # 결과 컨테이너
     results = []
-    pdf_processor = services['pdf_processor']
     
-    start_time = time.time()
-    
-    for i, element in enumerate(elements):
-        # 진행률
-        progress = (i + 1) / total
-        progress_bar.progress(progress)
-        status_text.text(f"처리 중... {i+1}/{total} 페이지")
-        
-        # VLM 처리
+    for page_num in range(1, page_count + 1):
         try:
-            image_bytes = pdf_processor.image_to_bytes(element['image'])
+            status_text.text(f"📄 처리 중: {page_num}/{page_count} 페이지...")
             
-            result = model_selector.generate_caption(
-                image_data=image_bytes,
-                element_type='image',
-                context=f"Page {element['page_number']}"
+            # 1) PDF 페이지 처리 (이미지 + OCR)
+            page_data = pdf_processor.process_page(pdf_path, page_num, use_ocr)
+            
+            # 2) Element 타입 분류
+            if classifier:
+                element_type = classifier.classify_element(page_data['image'])
+            else:
+                # 기본값
+                element_type = 'image'
+            
+            # 3) VLM 캡션 생성
+            vlm_result = await vlm_service.generate_caption(
+                page_data['image_base64'],
+                element_type,
+                page_data.get('extracted_text', '')
             )
             
-            result['page_number'] = element['page_number']
-            result['image'] = element['image']
+            # 결과 통합
+            result = {
+                'page_number': page_num,
+                'element_type': element_type,
+                'extracted_text': page_data.get('extracted_text', ''),
+                'ocr_confidence': page_data.get('ocr_confidence', 0.0),
+                'caption': vlm_result['caption'],
+                'caption_confidence': vlm_result['confidence'],
+                'image': page_data['image'],
+                'usage': vlm_result['usage']
+            }
+            
             results.append(result)
             
+            # 진행률 업데이트
+            progress = page_num / page_count
+            progress_bar.progress(progress)
+            
         except Exception as e:
-            results.append({
-                'page_number': element['page_number'],
-                'caption': None,
-                'confidence': 0.0,
-                'error': str(e),
-                'image': element['image']
-            })
+            logger.error(f"❌ 페이지 {page_num} 처리 실패: {e}")
+            st.error(f"페이지 {page_num} 처리 실패: {e}")
     
-    # 완료
-    elapsed = time.time() - start_time
-    st.session_state.results = results
+    progress_bar.empty()
+    status_text.empty()
     
-    progress_bar.progress(1.0)
-    status_text.text(f"✅ 완료! ({elapsed:.1f}초 소요)")
-    
-    st.success(f"🎉 {len(results)}개 페이지 처리 완료")
-    time.sleep(1)
-    
-    st.session_state.step = 3
-    st.rerun()
+    return results
 
-def show_results_page():
-    """3단계: 결과"""
+
+def display_results(results: list):
+    """결과 표시"""
+    if not results:
+        return
     
-    st.header("📊 STEP 3: 처리 결과")
+    st.success(f"✅ {len(results)}개 페이지 처리 완료!")
     
-    results = st.session_state.results
+    # 요약 통계
+    col1, col2, col3, col4 = st.columns(4)
     
-    # 통계
-    total = len(results)
-    success = sum(1 for r in results if r.get('caption'))
-    
-    col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("총 페이지", total)
+        st.metric("총 페이지", len(results))
+    
     with col2:
-        st.metric("성공", success)
+        avg_ocr_conf = sum(r.get('ocr_confidence', 0) for r in results) / len(results)
+        st.metric("평균 OCR 신뢰도", f"{avg_ocr_conf:.2f}")
+    
     with col3:
-        if success > 0:
-            avg_conf = sum(r.get('confidence', 0) for r in results if r.get('caption')) / success
-            st.metric("평균 신뢰도", f"{avg_conf:.0%}")
+        avg_caption_conf = sum(r.get('caption_confidence', 0) for r in results) / len(results)
+        st.metric("평균 VLM 신뢰도", f"{avg_caption_conf:.2f}")
+    
+    with col4:
+        total_tokens = sum(
+            r.get('usage', {}).get('input_tokens', 0) + 
+            r.get('usage', {}).get('output_tokens', 0)
+            for r in results
+        )
+        st.metric("총 토큰", f"{total_tokens:,}")
     
     st.divider()
     
-    # 결과 표시
-    for i, result in enumerate(results):
-        with st.expander(f"📄 페이지 {result['page_number']}", expanded=(i==0)):
-            col1, col2 = st.columns([1, 2])
+    # 페이지별 상세 결과
+    st.subheader("📑 Step 3: 페이지별 결과")
+    
+    for result in results:
+        page_num = result['page_number']
+        element_type = result.get('element_type', 'unknown')
+        
+        # Element 타입 아이콘
+        type_icons = {
+            'chart': '📊',
+            'table': '📋',
+            'diagram': '🔷',
+            'image': '🖼️'
+        }
+        icon = type_icons.get(element_type, '📄')
+        
+        with st.expander(
+            f"{icon} Page {page_num} - {element_type.upper()} "
+            f"(OCR: {result.get('ocr_confidence', 0):.2f}, "
+            f"VLM: {result.get('caption_confidence', 0):.2f})"
+        ):
+            # 탭으로 구분
+            tab1, tab2, tab3, tab4 = st.tabs([
+                "📝 OCR 텍스트",
+                "🎨 VLM 설명",
+                "🖼️ 원본 이미지",
+                "ℹ️ 메타데이터"
+            ])
             
-            with col1:
+            with tab1:
+                st.markdown("### 📝 OCR 추출 텍스트")
+                extracted_text = result.get('extracted_text', '')
+                
+                if extracted_text:
+                    st.text_area(
+                        "추출된 텍스트",
+                        extracted_text,
+                        height=300,
+                        key=f"ocr_{page_num}"
+                    )
+                    st.caption(f"📊 총 {len(extracted_text)}자 추출")
+                else:
+                    st.warning("⚠️ 추출된 텍스트가 없습니다.")
+            
+            with tab2:
+                st.markdown("### 🎨 VLM 생성 설명")
+                st.markdown(result.get('caption', 'N/A'))
+                
+                # 사용량 정보
+                usage = result.get('usage', {})
+                if usage:
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.caption(f"📥 Input: {usage.get('input_tokens', 0):,} tokens")
+                    with col2:
+                        st.caption(f"📤 Output: {usage.get('output_tokens', 0):,} tokens")
+            
+            with tab3:
+                st.markdown("### 🖼️ 원본 이미지")
                 if 'image' in result:
                     st.image(result['image'], use_container_width=True)
-            
-            with col2:
-                if result.get('caption'):
-                    st.success(f"**신뢰도**: {result['confidence']:.0%}")
-                    st.markdown("**생성된 캡션**:")
-                    st.text_area(
-                        "Caption",
-                        result['caption'],
-                        height=200,
-                        key=f"caption_{i}",
-                        label_visibility="collapsed"
-                    )
                 else:
-                    st.error("❌ 처리 실패")
-                    if result.get('error'):
-                        st.code(result['error'])
+                    st.warning("이미지를 표시할 수 없습니다.")
+            
+            with tab4:
+                st.markdown("### ℹ️ 메타데이터")
+                metadata = {
+                    "페이지 번호": page_num,
+                    "Element 타입": element_type,
+                    "OCR 신뢰도": f"{result.get('ocr_confidence', 0):.3f}",
+                    "VLM 신뢰도": f"{result.get('caption_confidence', 0):.3f}",
+                    "OCR 텍스트 길이": f"{len(result.get('extracted_text', ''))} 자",
+                    "VLM 캡션 길이": f"{len(result.get('caption', ''))} 자",
+                    "Input Tokens": f"{result.get('usage', {}).get('input_tokens', 0):,}",
+                    "Output Tokens": f"{result.get('usage', {}).get('output_tokens', 0):,}"
+                }
+                st.json(metadata)
     
-    # 액션 버튼
     st.divider()
+    
+    # 다운로드 버튼
+    st.subheader("💾 결과 다운로드")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        # JSON 다운로드 버튼
-        json_data = create_download_json(results)
-        
+        # JSON 다운로드
+        json_data = prepare_json_export(results)
         st.download_button(
-            label="📥 결과 다운로드 (JSON)",
+            label="📥 JSON 다운로드",
             data=json_data,
             file_name=f"prism_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-            mime="application/json",
-            use_container_width=True
+            mime="application/json"
         )
     
     with col2:
-        # 다시 시작
-        if st.button("🔄 새 문서 처리", type="primary", use_container_width=True):
-            st.session_state.step = 1
-            st.session_state.elements = []
-            st.session_state.results = []
-            st.session_state.session_id = None
-            st.session_state.filename = None
-            st.rerun()
+        # Markdown 다운로드
+        markdown_data = prepare_markdown_export(results)
+        st.download_button(
+            label="📥 Markdown 다운로드",
+            data=markdown_data,
+            file_name=f"prism_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+            mime="text/markdown"
+        )
 
-def create_download_json(results):
-    """다운로드용 JSON 생성"""
-    
-    # 메타데이터
-    metadata = {
-        'processed_at': datetime.now().isoformat(),
-        'session_id': st.session_state.session_id,
-        'filename': st.session_state.filename or 'unknown.pdf',
-        'total_pages': len(results)
+
+def prepare_json_export(results: list) -> str:
+    """JSON 형식으로 결과 준비"""
+    export_data = {
+        "metadata": {
+            "exported_at": datetime.now().isoformat(),
+            "total_pages": len(results),
+            "version": "PRISM POC v1.0 (OCR)"
+        },
+        "summary": {
+            "total_pages": len(results),
+            "avg_ocr_confidence": sum(r.get('ocr_confidence', 0) for r in results) / len(results) if results else 0,
+            "avg_vlm_confidence": sum(r.get('caption_confidence', 0) for r in results) / len(results) if results else 0,
+            "total_tokens": sum(
+                r.get('usage', {}).get('input_tokens', 0) + 
+                r.get('usage', {}).get('output_tokens', 0)
+                for r in results
+            )
+        },
+        "pages": [
+            {
+                "page_number": r['page_number'],
+                "element_type": r.get('element_type'),
+                "extracted_text": r.get('extracted_text'),
+                "ocr_confidence": r.get('ocr_confidence'),
+                "caption": r.get('caption'),
+                "caption_confidence": r.get('caption_confidence'),
+                "usage": r.get('usage')
+            }
+            for r in results
+        ]
     }
     
-    # 통계
-    success_count = sum(1 for r in results if r.get('caption'))
-    avg_confidence = 0
-    if success_count > 0:
-        avg_confidence = sum(r.get('confidence', 0) for r in results if r.get('caption')) / success_count
+    return json.dumps(export_data, ensure_ascii=False, indent=2)
+
+
+def prepare_markdown_export(results: list) -> str:
+    """Markdown 형식으로 결과 준비"""
+    md = f"""# PRISM POC 분석 결과 (OCR 통합)
+
+**생성 시간**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  
+**총 페이지**: {len(results)}  
+**평균 OCR 신뢰도**: {sum(r.get('ocr_confidence', 0) for r in results) / len(results):.3f}  
+**평균 VLM 신뢰도**: {sum(r.get('caption_confidence', 0) for r in results) / len(results):.3f}  
+
+---
+
+"""
     
-    summary = {
-        'total_pages': len(results),
-        'successful': success_count,
-        'failed': len(results) - success_count,
-        'success_rate': success_count / len(results) if results else 0,
-        'avg_confidence': avg_confidence
-    }
-    
-    # 결과 데이터 (이미지 제외)
-    pages = []
     for result in results:
-        page_data = {
-            'page_number': result.get('page_number'),
-            'caption': result.get('caption'),
-            'confidence': result.get('confidence', 0),
-            'processing_time_ms': result.get('processing_time_ms', 0),
-            'provider': result.get('provider', 'local_sllm'),
-            'model': result.get('model', 'unknown')
-        }
+        page_num = result['page_number']
+        element_type = result.get('element_type', 'unknown')
         
-        if result.get('error'):
-            page_data['error'] = result['error']
-        
-        pages.append(page_data)
-    
-    # 최종 JSON
-    output = {
-        'metadata': metadata,
-        'summary': summary,
-        'pages': pages
-    }
-    
-    # JSON 문자열로 변환 (ensure_ascii=False로 한글 지원)
-    return json.dumps(output, indent=2, ensure_ascii=False)
+        md += f"""## 📄 Page {page_num} - {element_type.upper()}
 
-if __name__ == '__main__':
+### 📝 OCR 추출 텍스트
+
+```
+{result.get('extracted_text', 'N/A')}
+```
+
+### 🎨 VLM 생성 설명
+
+{result.get('caption', 'N/A')}
+
+**메타데이터**:
+- OCR 신뢰도: {result.get('ocr_confidence', 0):.3f}
+- VLM 신뢰도: {result.get('caption_confidence', 0):.3f}
+- Input Tokens: {result.get('usage', {}).get('input_tokens', 0):,}
+- Output Tokens: {result.get('usage', {}).get('output_tokens', 0):,}
+
+---
+
+"""
+    
+    return md
+
+
+def main():
+    """메인 함수"""
+    init_session_state()
+    display_header()
+    
+    # 파일 업로드
+    uploaded_file, file_type = display_file_upload()
+    
+    if uploaded_file:
+        # OCR 사용 여부
+        use_ocr = st.checkbox(
+            "📝 OCR 텍스트 추출 사용",
+            value=True,
+            help="PaddleOCR로 문서 텍스트를 추출합니다."
+        )
+        
+        # 처리 시작 버튼
+        if st.button("🚀 처리 시작", type="primary"):
+            # 임시 파일 저장
+            temp_dir = Path("temp")
+            temp_dir.mkdir(exist_ok=True)
+            
+            file_path = temp_dir / uploaded_file.name
+            with open(file_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+            
+            try:
+                if file_type == "PDF 문서":
+                    # PDF 처리
+                    with st.spinner("📄 PDF 처리 중..."):
+                        results = asyncio.run(
+                            process_pdf_async(file_path, use_ocr)
+                        )
+                    
+                    st.session_state.processed_results = results
+                    display_results(results)
+                
+                else:
+                    # 이미지 처리 (단일)
+                    st.info("🖼️ 이미지 처리 기능은 곧 추가됩니다.")
+            
+            except Exception as e:
+                st.error(f"❌ 처리 중 오류 발생: {e}")
+                logger.exception("Processing failed")
+            
+            finally:
+                # 임시 파일 삭제
+                if file_path.exists():
+                    file_path.unlink()
+    
+    # 이전 결과 표시
+    elif st.session_state.processed_results:
+        st.info("💡 이전 처리 결과를 표시하고 있습니다.")
+        display_results(st.session_state.processed_results)
+
+
+if __name__ == "__main__":
     main()
