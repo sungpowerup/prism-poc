@@ -1,6 +1,6 @@
 """
 core/model_selector.py
-PRISM POC - Local sLLM (Ollama) + 한국어 프롬프트
+PRISM POC - Local sLLM 지원 (Ollama)
 """
 
 from typing import Dict, Optional
@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 import os
 import base64
 import requests
-import time
+import json
 
 class VLMProvider(ABC):
     """VLM 프로바이더 추상 클래스"""
@@ -30,137 +30,95 @@ class VLMProvider(ABC):
 
 
 class LocalSLLMProvider(VLMProvider):
-    """Local sLLM (Ollama) 프로바이더 - 한국어 지원"""
+    """Local sLLM (Ollama) 프로바이더"""
     
     def __init__(self):
         self.base_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
         self.model = os.getenv('OLLAMA_MODEL', 'llama3.2-vision')
-        print(f"[DEBUG] Ollama 초기화: {self.model} @ {self.base_url}")
     
     def is_available(self) -> bool:
         """Ollama 서버 실행 여부 확인"""
         try:
-            response = requests.get(f"{self.base_url}/api/tags", timeout=5)
-            available = response.status_code == 200
-            print(f"[DEBUG] Ollama 사용 가능: {available}")
-            return available
-        except Exception as e:
-            print(f"[DEBUG] Ollama 연결 실패: {e}")
+            response = requests.get(f"{self.base_url}/api/tags", timeout=2)
+            return response.status_code == 200
+        except:
             return False
     
     def get_provider_name(self) -> str:
         return f"Local sLLM ({self.model})"
     
     def generate_caption(self, image_data: bytes, element_type: str, context: str = "") -> Dict:
-        """Ollama Vision API 호출 (한국어 출력)"""
-        
-        start_time = time.time()
+        """Ollama Vision API 호출"""
         
         try:
             # 이미지를 base64로 인코딩
             image_b64 = base64.b64encode(image_data).decode('utf-8')
             
-            # 한국어 프롬프트 생성
-            prompt = self._create_korean_prompt(element_type, context)
+            # 프롬프트 생성
+            prompt = self._create_prompt(element_type, context)
             
-            print(f"[DEBUG] API 호출 시작: {self.model}")
-            
-            # Ollama API 호출 - Timeout 늘림
+            # Ollama API 호출
             response = requests.post(
                 f"{self.base_url}/api/generate",
                 json={
                     "model": self.model,
                     "prompt": prompt,
                     "images": [image_b64],
-                    "stream": False,
-                    "options": {
-                        "temperature": 0.3,
-                        "top_p": 0.9,
-                        "num_predict": 512  # 최대 토큰 수
-                    }
+                    "stream": False
                 },
-                timeout=180  # 3분으로 증가
+                timeout=60
             )
-            
-            processing_time = int((time.time() - start_time) * 1000)
-            
-            print(f"[DEBUG] API 응답: {response.status_code}, 시간: {processing_time}ms")
             
             if response.status_code == 200:
                 result = response.json()
                 caption = result.get('response', '').strip()
                 
-                print(f"[DEBUG] 캡션 생성 성공: {len(caption)} 글자")
-                
                 return {
                     'caption': caption,
                     'confidence': self._estimate_confidence(caption, element_type),
-                    'processing_time_ms': processing_time,
-                    'cost_usd': 0.0,
                     'provider': 'local_sllm',
-                    'model': self.model,  # 모델명 포함
+                    'model': self.model,
                     'error': None
                 }
             else:
-                print(f"[DEBUG] API 오류: {response.status_code}")
                 return {
                     'caption': None,
                     'confidence': 0.0,
-                    'processing_time_ms': processing_time,
                     'error': f"Ollama API error: {response.status_code}",
-                    'provider': 'local_sllm',
-                    'model': self.model
+                    'provider': 'local_sllm'
                 }
         
         except Exception as e:
-            processing_time = int((time.time() - start_time) * 1000)
-            print(f"[DEBUG] 예외 발생: {e}")
             return {
                 'caption': None,
                 'confidence': 0.0,
-                'processing_time_ms': processing_time,
                 'error': str(e),
-                'provider': 'local_sllm',
-                'model': self.model
+                'provider': 'local_sllm'
             }
     
-    def _create_korean_prompt(self, element_type: str, context: str) -> str:
-        """Element 타입별 한국어 프롬프트 생성"""
-        
-        # 짧고 명확한 프롬프트 (Timeout 방지)
-        base_instruction = "Respond in Korean only. 한국어로만 답변하세요.\n\n"
+    def _create_prompt(self, element_type: str, context: str) -> str:
+        """Element 타입별 프롬프트 생성"""
         
         prompts = {
-            'chart': base_instruction + "이 차트를 한국어로 간단히 설명하세요. 차트 유형, 주요 데이터, 트렌드를 포함하세요.",
-            'table': base_instruction + "이 표를 한국어로 간단히 설명하세요. 표의 구조와 주요 데이터를 포함하세요.",
-            'image': base_instruction + "이 이미지를 한국어로 간단히 설명하세요. 주요 내용과 시각적 요소를 포함하세요.",
-            'diagram': base_instruction + "이 다이어그램을 한국어로 간단히 설명하세요. 구조와 흐름을 포함하세요."
+            'chart': "Describe this chart or graph in detail. What type of chart is it? What data does it show? What are the key trends?",
+            'table': "Describe this table. What information does it contain? What are the column headers and key data points?",
+            'image': "Describe this image in detail. What are the main subjects and their context?",
+            'diagram': "Describe this diagram and its components. How are the elements connected?"
         }
         
         prompt = prompts.get(element_type, prompts['image'])
-        
         if context:
-            prompt += f"\n문맥: {context}"
+            prompt += f"\n\nContext: {context}"
         
         return prompt
     
     def _estimate_confidence(self, caption: str, element_type: str) -> float:
-        """신뢰도 추정"""
+        """신뢰도 추정 (sLLM은 보수적으로)"""
         if not caption or len(caption) < 20:
             return 0.3
         
-        confidence = min(0.4 + len(caption) / 500, 0.75)
-        
-        # 한국어 체크
-        korean_chars = sum(1 for c in caption if '가' <= c <= '힣')
-        total_chars = len(caption.replace(' ', ''))
-        
-        if total_chars > 0:
-            korean_ratio = korean_chars / total_chars
-            if korean_ratio > 0.3:
-                confidence += 0.1
-        
-        return min(confidence, 0.85)
+        # 길이 기반 신뢰도 (최대 0.75)
+        return min(0.4 + len(caption) / 500, 0.75)
 
 
 class ModelSelector:
@@ -170,17 +128,14 @@ class ModelSelector:
         self.providers = {
             'local_sllm': LocalSLLMProvider()
         }
-        print(f"[DEBUG] ModelSelector 초기화 완료")
     
     def get_available_providers(self) -> Dict[str, VLMProvider]:
         """사용 가능한 프로바이더 목록"""
-        available = {
+        return {
             name: provider 
             for name, provider in self.providers.items() 
             if provider.is_available()
         }
-        print(f"[DEBUG] 사용 가능한 프로바이더: {list(available.keys())}")
-        return available
     
     def get_provider(self, provider_name: str) -> Optional[VLMProvider]:
         """특정 프로바이더 가져오기"""
@@ -203,7 +158,7 @@ class ModelSelector:
         provider_name: str = None,
         context: str = ""
     ) -> Dict:
-        """캡션 생성 (한국어)"""
+        """캡션 생성"""
         
         if provider_name:
             provider = self.get_provider(provider_name)
@@ -214,9 +169,8 @@ class ModelSelector:
             return {
                 'caption': None,
                 'confidence': 0.0,
-                'error': 'Ollama가 실행 중이지 않습니다. ollama serve 명령어로 시작하세요.',
-                'provider': 'none',
-                'model': 'none'
+                'error': 'No VLM provider available. Is Ollama running?',
+                'provider': 'none'
             }
         
         return provider.generate_caption(image_data, element_type, context)

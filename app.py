@@ -1,7 +1,7 @@
 """
 app.py
 PRISM POC - Streamlit 메인 애플리케이션 (Local sLLM)
-간단 버전
+다운로드 기능 추가 버전
 """
 
 import streamlit as st
@@ -10,6 +10,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 import time
 import io
+import json
+from datetime import datetime
 
 # 환경 변수 로드
 load_dotenv()
@@ -68,6 +70,8 @@ if 'elements' not in st.session_state:
     st.session_state.elements = []
 if 'results' not in st.session_state:
     st.session_state.results = []
+if 'filename' not in st.session_state:
+    st.session_state.filename = None
 
 def main():
     """메인 함수"""
@@ -134,6 +138,7 @@ def show_upload_page():
             # 세션 생성
             session_id = str(uuid.uuid4())
             st.session_state.session_id = session_id
+            st.session_state.filename = uploaded_file.name  # 파일명 저장
             
             # PDF 처리
             try:
@@ -274,14 +279,84 @@ def show_results_page():
                     if result.get('error'):
                         st.code(result['error'])
     
-    # 다시 시작
+    # 액션 버튼
     st.divider()
-    if st.button("🔄 새 문서 처리", type="primary"):
-        st.session_state.step = 1
-        st.session_state.elements = []
-        st.session_state.results = []
-        st.session_state.session_id = None
-        st.rerun()
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # JSON 다운로드 버튼
+        json_data = create_download_json(results)
+        
+        st.download_button(
+            label="📥 결과 다운로드 (JSON)",
+            data=json_data,
+            file_name=f"prism_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+            mime="application/json",
+            use_container_width=True
+        )
+    
+    with col2:
+        # 다시 시작
+        if st.button("🔄 새 문서 처리", type="primary", use_container_width=True):
+            st.session_state.step = 1
+            st.session_state.elements = []
+            st.session_state.results = []
+            st.session_state.session_id = None
+            st.session_state.filename = None
+            st.rerun()
+
+def create_download_json(results):
+    """다운로드용 JSON 생성"""
+    
+    # 메타데이터
+    metadata = {
+        'processed_at': datetime.now().isoformat(),
+        'session_id': st.session_state.session_id,
+        'filename': st.session_state.filename or 'unknown.pdf',
+        'total_pages': len(results)
+    }
+    
+    # 통계
+    success_count = sum(1 for r in results if r.get('caption'))
+    avg_confidence = 0
+    if success_count > 0:
+        avg_confidence = sum(r.get('confidence', 0) for r in results if r.get('caption')) / success_count
+    
+    summary = {
+        'total_pages': len(results),
+        'successful': success_count,
+        'failed': len(results) - success_count,
+        'success_rate': success_count / len(results) if results else 0,
+        'avg_confidence': avg_confidence
+    }
+    
+    # 결과 데이터 (이미지 제외)
+    pages = []
+    for result in results:
+        page_data = {
+            'page_number': result.get('page_number'),
+            'caption': result.get('caption'),
+            'confidence': result.get('confidence', 0),
+            'processing_time_ms': result.get('processing_time_ms', 0),
+            'provider': result.get('provider', 'local_sllm'),
+            'model': result.get('model', 'unknown')
+        }
+        
+        if result.get('error'):
+            page_data['error'] = result['error']
+        
+        pages.append(page_data)
+    
+    # 최종 JSON
+    output = {
+        'metadata': metadata,
+        'summary': summary,
+        'pages': pages
+    }
+    
+    # JSON 문자열로 변환 (ensure_ascii=False로 한글 지원)
+    return json.dumps(output, indent=2, ensure_ascii=False)
 
 if __name__ == '__main__':
     main()
