@@ -23,7 +23,7 @@ class PDFProcessor:
     
     def __init__(self):
         """초기화"""
-        logger.info("🚀 PDFProcessor 초기화 중...")
+        logger.info("PDFProcessor 초기화 중...")
         
         # OCR 엔진 초기화
         try:
@@ -37,7 +37,7 @@ class PDFProcessor:
             )
             logger.info("PaddleOCR 초기화 완료 (CPU 모드)")
         except Exception as e:
-            logger.warning(f"⚠️ OCR 초기화 실패: {e}")
+            logger.warning(f"OCR 초기화 실패: {e}")
             self.ocr = None
     
     def _extract_text_with_ocr(self, image: Image.Image) -> str:

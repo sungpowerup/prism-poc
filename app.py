@@ -132,9 +132,18 @@ async def process_pdf_async(pdf_path: Path, use_ocr: bool = True):
             
             # 2) Element 타입 분류
             if classifier:
-                element_type = classifier.classify_element(page_data['image'])
+                try:
+                    # ElementClassifier의 실제 메서드명 확인 필요
+                    if hasattr(classifier, 'classify_element'):
+                        element_type = classifier.classify_element(page_data['image'])
+                    elif hasattr(classifier, 'classify'):
+                        element_type = classifier.classify(page_data['image'])
+                    else:
+                        element_type = 'image'  # 기본값
+                except Exception as e:
+                    logger.warning(f"분류 실패: {e}")
+                    element_type = 'image'
             else:
-                # 기본값
                 element_type = 'image'
             
             # 3) VLM 캡션 생성
