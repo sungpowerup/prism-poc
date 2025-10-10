@@ -1,5 +1,5 @@
 """
-PDF Processor with Fixed Byte Handling
+PDF Processor with Fixed OCR Call
 """
 
 import fitz  # PyMuPDF
@@ -24,14 +24,15 @@ class PDFProcessor:
         try:
             logger.info("PaddleOCR 초기화 중...")
             from paddleocr import PaddleOCR
+            
             self.ocr = PaddleOCR(
                 use_angle_cls=True,
-                lang='korean',
-                show_log=False
+                lang='korean'
             )
             logger.info("OCR 초기화 완료")
         except Exception as e:
             logger.warning(f"OCR 초기화 실패: {e}")
+            logger.info("OCR 없이 계속 진행합니다 (이미지만 추출)")
             self.ocr = None
     
     def process_pdf(self, pdf_data: bytes) -> List[Dict[str, Any]]:
@@ -47,7 +48,7 @@ class PDFProcessor:
         elements = []
         
         try:
-            # ✅ 바이트 데이터를 직접 열기
+            # 바이트 데이터를 직접 열기
             doc = fitz.open(stream=pdf_data, filetype="pdf")
             
             logger.info(f"PDF 열기 성공: {len(doc)} 페이지")
@@ -69,7 +70,8 @@ class PDFProcessor:
                     ocr_text = ""
                     if self.ocr:
                         try:
-                            result = self.ocr.ocr(img_bytes, cls=True)
+                            # ✅ cls 파라미터 제거
+                            result = self.ocr.ocr(img_bytes)
                             if result and result[0]:
                                 ocr_text = "\n".join([
                                     line[1][0] 
@@ -82,7 +84,7 @@ class PDFProcessor:
                     # Element 생성
                     element = {
                         'page': page_num + 1,
-                        'type': 'image',  # 기본 타입
+                        'type': 'image',
                         'confidence': 0.5,
                         'image_base64': img_base64,
                         'ocr_text': ocr_text,
