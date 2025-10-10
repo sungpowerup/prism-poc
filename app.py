@@ -1,14 +1,19 @@
 """
-PRISM POC - 멀티 프로바이더 지원
-Claude + Azure OpenAI + Ollama
+PRISM POC - 메인 애플리케이션
+멀티 프로바이더 지원: Claude + Azure OpenAI + Ollama
 """
 
 import streamlit as st
 import asyncio
 import base64
 import logging
+import os
 from datetime import datetime
 from typing import Dict, List, Any
+from dotenv import load_dotenv
+
+# 환경 변수 로드
+load_dotenv()
 
 # Core 모듈
 from core.pdf_processor import PDFProcessor
@@ -484,7 +489,7 @@ def show_results(results):
             st.rerun()
     
     with col2:
-        # JSON 다운로드
+        # JSON 다운로드 (전체 캡션 포함)
         import json
         results_json = json.dumps({
             'session_id': results['session_id'],
@@ -494,13 +499,18 @@ def show_results(results):
             'failed': results['failed'],
             'total_time': results.get('total_time', 0),
             'total_cost': results.get('total_cost', 0),
-            'elements_summary': [
+            'elements': [
                 {
                     'page': e.get('page', 0),
                     'status': e.get('status', 'unknown'),
-                    'caption_length': len(e.get('vlm_caption', '')),
+                    'provider': e.get('provider', 'Unknown'),
+                    'model': e.get('model', 'Unknown'),
+                    'caption': e.get('vlm_caption', ''),
                     'confidence': e.get('vlm_confidence', 0),
-                    'cost_usd': e.get('cost_usd', 0)
+                    'processing_time': e.get('processing_time', 0),
+                    'cost_usd': e.get('cost_usd', 0),
+                    'ocr_text': e.get('ocr_text', ''),
+                    'error': e.get('error', '') if e.get('status') == 'failed' else ''
                 }
                 for e in results['elements']
             ]
