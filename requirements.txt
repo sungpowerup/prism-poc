@@ -1,22 +1,25 @@
+# PRISM POC - Python 의존성 패키지
+
 # Web Framework
 streamlit==1.31.0
 
 # PDF Processing
-pypdf==4.0.1
+PyMuPDF==1.23.8              # ✅ 추가! (빠른 PDF 처리)
 pdf2image==1.17.0
 pillow==10.4.0
 
-# OCR (새로 추가!)
-paddlepaddle
-paddleocr
+# OCR
+paddlepaddle                 # PaddleOCR 의존성
+paddleocr                    # 한글 OCR
 
 # Image Processing
 opencv-python-headless==4.9.0.80
+numpy==1.26.4
 
 # AI/ML
-anthropic==0.18.1
+anthropic==0.18.1            # Claude API
 
-# NLP
+# NLP (품질 평가용)
 nltk==3.8.1
 
 # Database
@@ -24,8 +27,9 @@ sqlalchemy==2.0.27
 
 # Utilities
 python-dotenv==1.0.1
-numpy==1.26.4
 pandas==2.2.0
-
-# Logging
 colorlog==6.8.2
+
+# Testing (개발용)
+pytest==8.0.2
+pytest-cov==4.1.0

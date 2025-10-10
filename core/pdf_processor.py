@@ -1,280 +1,269 @@
 """
-PDF Processor with OCR Integration
-PDF 파싱, Element 추출 및 OCR 텍스트 추출
+core/pdf_processor.py
+PRISM POC - PDF 처리 (수정: OCR use_gpu 제거)
 """
 
-import logging
-from pathlib import Path
-from typing import List, Dict, Any
 import io
+import time
+from pathlib import Path
+from typing import Dict, List, Optional
 import base64
 
-from PIL import Image
-import numpy as np
-from pypdf import PdfReader
 from pdf2image import convert_from_path
-from paddleocr import PaddleOCR
+from PIL import Image
+import fitz  # PyMuPDF
 
-logger = logging.getLogger(__name__)
+# OCR (선택적)
+try:
+    from paddleocr import PaddleOCR
+    PADDLEOCR_AVAILABLE = True
+except ImportError:
+    PADDLEOCR_AVAILABLE = False
 
+from utils.logger import setup_logger
+
+logger = setup_logger(__name__)
 
 class PDFProcessor:
-    """PDF 문서 처리기 (OCR 통합)"""
+    """PDF 문서 처리 클래스"""
     
     def __init__(self):
         """초기화"""
         logger.info("PDFProcessor 초기화 중...")
+        self.ocr = None
+        self._init_ocr()
+    
+    def _init_ocr(self):
+        """PaddleOCR 초기화 (선택적)"""
+        if not PADDLEOCR_AVAILABLE:
+            logger.warning("PaddleOCR 미설치 - OCR 기능 비활성화")
+            return
         
-        # OCR 엔진 초기화
         try:
             logger.info("PaddleOCR 초기화 중...")
+            
+            # ✅ use_gpu 파라미터 제거 (기본값 사용)
             self.ocr = PaddleOCR(
-                lang='korean',
-                use_gpu=False,  # RTX 3050 4GB는 부족하므로 CPU 사용
                 use_angle_cls=True,
-                det_db_thresh=0.3
-                # show_log는 PaddleOCR 3.2.0에서 제거됨
+                lang='korean',
+                show_log=False  # 로그 줄이기
             )
-            logger.info("PaddleOCR 초기화 완료 (CPU 모드)")
+            
+            logger.info("PaddleOCR 초기화 완료")
+            
         except Exception as e:
             logger.warning(f"OCR 초기화 실패: {e}")
             self.ocr = None
     
-    def _extract_text_with_ocr(self, image: Image.Image) -> str:
+    def get_page_count(self, pdf_path: Path) -> int:
+        """PDF 페이지 수 확인"""
+        try:
+            doc = fitz.open(pdf_path)
+            count = len(doc)
+            doc.close()
+            return count
+        except Exception as e:
+            logger.error(f"PDF 열기 실패: {e}")
+            raise
+    
+    def extract_text_ocr(self, image: Image.Image) -> str:
         """
         OCR로 텍스트 추출
         
         Args:
-            image: PIL Image 객체
-            
+            image: PIL Image
+        
         Returns:
             추출된 텍스트
         """
         if self.ocr is None:
-            logger.warning("⚠️ OCR 엔진이 초기화되지 않음")
+            logger.warning("OCR 사용 불가 - 빈 문자열 반환")
             return ""
         
         try:
-            # PIL Image를 numpy array로 변환
+            # PIL → numpy array
+            import numpy as np
             img_array = np.array(image)
             
             # OCR 실행
-            result = self.ocr.ocr(img_array)
+            result = self.ocr.ocr(img_array, cls=True)
             
             if not result or not result[0]:
                 return ""
             
-            # 텍스트 추출 (신뢰도 50% 이상만)
+            # 텍스트 추출
             texts = []
             for line in result[0]:
-                if len(line) >= 2:
-                    text = line[1][0]
-                    confidence = line[1][1]
-                    
-                    if confidence > 0.5:
-                        texts.append(text)
+                try:
+                    if len(line) >= 2 and len(line[1]) >= 2:
+                        text = line[1][0]
+                        if text and text.strip():
+                            texts.append(text)
+                except (IndexError, TypeError) as e:
+                    logger.debug(f"OCR 라인 파싱 실패: {e}")
+                    continue
             
-            # 연속된 빈 줄 제거
-            extracted = "\n".join(texts)
-            import re
-            extracted = re.sub(r'\n{3,}', '\n\n', extracted)
+            extracted_text = ' '.join(texts)
+            logger.info(f"OCR 추출 완료: {len(extracted_text)}자")
             
-            logger.debug(f"📝 OCR 추출: {len(texts)}줄, {len(extracted)}자")
-            
-            return extracted.strip()
+            return extracted_text
             
         except Exception as e:
-            logger.error(f"❌ OCR 처리 오류: {e}")
+            logger.error(f"OCR 처리 오류: {e}")
             return ""
     
-    def _calculate_ocr_confidence(self, image: Image.Image) -> float:
+    def classify_image_type(self, image: Image.Image) -> Dict:
         """
-        OCR 신뢰도 계산
+        이미지 타입 간단 분류
         
-        Args:
-            image: PIL Image 객체
-            
         Returns:
-            평균 신뢰도 (0.0 ~ 1.0)
+            {
+                'element_type': 'chart' | 'table' | 'image' | 'diagram',
+                'confidence': float,
+                'reasoning': str
+            }
         """
-        if self.ocr is None:
-            return 0.0
+        # 간단한 기본 분류 (실제로는 ElementClassifier 사용)
+        width, height = image.size
+        aspect_ratio = width / height
         
-        try:
-            img_array = np.array(image)
-            result = self.ocr.ocr(img_array)
-            
-            if not result or not result[0]:
-                return 0.0
-            
-            confidences = []
-            for line in result[0]:
-                if len(line) >= 2:
-                    conf = line[1][1]
-                    confidences.append(conf)
-            
-            if not confidences:
-                return 0.0
-            
-            return sum(confidences) / len(confidences)
-            
-        except Exception as e:
-            logger.error(f"❌ 신뢰도 계산 오류: {e}")
-            return 0.0
-    
-    def get_page_count(self, pdf_path: Path) -> int:
-        """
-        PDF 페이지 수 확인
-        
-        Args:
-            pdf_path: PDF 파일 경로
-            
-        Returns:
-            페이지 수
-        """
-        try:
-            reader = PdfReader(str(pdf_path))
-            return len(reader.pages)
-        except Exception as e:
-            logger.error(f"❌ PDF 페이지 수 확인 실패: {e}")
-            raise
-    
-    def extract_page_as_image(self, pdf_path: Path, page_num: int) -> Image.Image:
-        """
-        PDF 페이지를 이미지로 변환
-        
-        Args:
-            pdf_path: PDF 파일 경로
-            page_num: 페이지 번호 (1-based)
-            
-        Returns:
-            PIL Image 객체
-        """
-        try:
-            # pdf2image로 변환 (300 DPI)
-            images = convert_from_path(
-                str(pdf_path),
-                first_page=page_num,
-                last_page=page_num,
-                dpi=300
-            )
-            
-            if not images:
-                raise ValueError(f"페이지 {page_num} 변환 실패")
-            
-            return images[0]
-            
-        except Exception as e:
-            logger.error(f"❌ 페이지 {page_num} 이미지 변환 실패: {e}")
-            raise
+        # 일단 모두 'image'로 분류
+        return {
+            'element_type': 'image',
+            'confidence': 0.5,
+            'reasoning': f'Default classification (size: {width}x{height}, ratio: {aspect_ratio:.2f})'
+        }
     
     def process_page(
         self, 
         pdf_path: Path, 
         page_num: int,
         use_ocr: bool = True
-    ) -> Dict[str, Any]:
+    ) -> Dict:
         """
-        PDF 페이지 처리 (이미지 + OCR)
+        페이지 처리 (이미지 변환 + OCR)
         
         Args:
             pdf_path: PDF 파일 경로
             page_num: 페이지 번호 (1-based)
             use_ocr: OCR 사용 여부
-            
+        
         Returns:
-            처리 결과 딕셔너리
+            {
+                'page_num': int,
+                'image': PIL.Image,
+                'image_base64': str,
+                'ocr_text': str,
+                'element_type': Dict,
+                'processing_time': float
+            }
         """
-        logger.info(f"📄 Page {page_num} 처리 시작...")
+        start_time = time.time()
+        
+        logger.info(f"Page {page_num} 처리 시작...")
         
         try:
-            # 1) 페이지를 이미지로 변환
-            image = self.extract_page_as_image(pdf_path, page_num)
+            # 1) PDF → 이미지 변환
+            images = convert_from_path(
+                pdf_path,
+                first_page=page_num,
+                last_page=page_num,
+                dpi=200  # 적절한 해상도
+            )
             
-            # 2) OCR 텍스트 추출
-            extracted_text = ""
-            ocr_confidence = 0.0
+            if not images:
+                raise ValueError(f"페이지 {page_num} 변환 실패")
             
-            if use_ocr and self.ocr:
-                logger.info(f"📝 Page {page_num}: OCR 텍스트 추출 중...")
-                extracted_text = self._extract_text_with_ocr(image)
-                ocr_confidence = self._calculate_ocr_confidence(image)
-                logger.info(f"✅ Page {page_num}: OCR 완료 ({len(extracted_text)} chars, conf: {ocr_confidence:.2f})")
+            page_image = images[0]
             
-            # 3) 이미지를 Base64로 인코딩 (VLM 전송용)
+            # 2) Base64 인코딩
             buffered = io.BytesIO()
-            image.save(buffered, format="PNG")
+            page_image.save(buffered, format="PNG")
             image_base64 = base64.b64encode(buffered.getvalue()).decode()
             
-            result = {
-                'page_number': page_num,
-                'image': image,
+            # 3) OCR 텍스트 추출
+            ocr_text = ""
+            if use_ocr and self.ocr:
+                ocr_text = self.extract_text_ocr(page_image)
+            
+            # 4) Element 타입 분류
+            element_type = self.classify_image_type(page_image)
+            
+            processing_time = time.time() - start_time
+            
+            logger.info(f"Page {page_num} 처리 완료 ({processing_time:.2f}초)")
+            
+            return {
+                'page_num': page_num,
+                'image': page_image,
                 'image_base64': image_base64,
-                'extracted_text': extracted_text,
-                'ocr_confidence': ocr_confidence,
-                'width': image.width,
-                'height': image.height,
-                'format': image.format or 'PNG'
+                'ocr_text': ocr_text,
+                'element_type': element_type,
+                'processing_time': processing_time
             }
             
-            logger.info(f"✅ Page {page_num} 처리 완료")
-            
-            return result
-            
         except Exception as e:
-            logger.error(f"❌ Page {page_num} 처리 실패: {e}")
+            logger.error(f"페이지 {page_num} 처리 실패: {e}")
             raise
     
-    def process_document(
+    def process_pdf(
         self, 
         pdf_path: Path,
-        use_ocr: bool = True
-    ) -> List[Dict[str, Any]]:
+        use_ocr: bool = True,
+        max_pages: Optional[int] = None
+    ) -> List[Dict]:
         """
-        전체 PDF 문서 처리
+        전체 PDF 처리
         
         Args:
             pdf_path: PDF 파일 경로
             use_ocr: OCR 사용 여부
-            
+            max_pages: 최대 처리 페이지 (None이면 전체)
+        
         Returns:
-            페이지별 처리 결과 리스트
+            페이지 데이터 리스트
         """
-        try:
-            # 페이지 수 확인
-            page_count = self.get_page_count(pdf_path)
-            logger.info(f"📄 총 {page_count}페이지 처리 시작")
-            
-            results = []
-            
-            for page_num in range(1, page_count + 1):
-                try:
-                    result = self.process_page(pdf_path, page_num, use_ocr)
-                    results.append(result)
-                except Exception as e:
-                    logger.error(f"❌ Page {page_num} 처리 실패: {e}")
-                    # 실패한 페이지는 건너뛰고 계속 진행
-                    results.append({
-                        'page_number': page_num,
-                        'error': str(e),
-                        'extracted_text': '',
-                        'ocr_confidence': 0.0
-                    })
-            
-            logger.info(f"✅ 문서 처리 완료: {len(results)}/{page_count} 페이지")
-            
-            return results
-            
-        except Exception as e:
-            logger.error(f"❌ 문서 처리 실패: {e}")
-            raise
+        page_count = self.get_page_count(pdf_path)
+        
+        if max_pages:
+            page_count = min(page_count, max_pages)
+        
+        logger.info(f"총 {page_count}페이지 처리 시작")
+        
+        results = []
+        
+        for page_num in range(1, page_count + 1):
+            try:
+                page_data = self.process_page(pdf_path, page_num, use_ocr)
+                results.append(page_data)
+            except Exception as e:
+                logger.error(f"페이지 {page_num} 처리 실패: {e}")
+                # 실패해도 계속 진행
+                results.append({
+                    'page_num': page_num,
+                    'error': str(e)
+                })
+        
+        logger.info(f"PDF 처리 완료: {len(results)}페이지")
+        
+        return results
+
+
+# 테스트용
+if __name__ == '__main__':
+    processor = PDFProcessor()
     
-    def get_stats(self) -> Dict[str, Any]:
-        """프로세서 통계 정보"""
-        return {
-            'processor': 'PDFProcessor',
-            'ocr_engine': 'PaddleOCR' if self.ocr else 'None',
-            'ocr_language': 'korean',
-            'ocr_mode': 'CPU',
-            'supported_formats': ['PDF']
-        }
+    # 샘플 PDF 처리
+    pdf_path = Path('sample.pdf')
+    
+    if pdf_path.exists():
+        results = processor.process_pdf(pdf_path, max_pages=3)
+        
+        for result in results:
+            if 'error' not in result:
+                print(f"Page {result['page_num']}: {len(result['ocr_text'])}자 추출")
+                print(f"  Element: {result['element_type']['element_type']}")
+            else:
+                print(f"Page {result['page_num']}: 실패 - {result['error']}")
+    else:
+        print(f"파일 없음: {pdf_path}")
