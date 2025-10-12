@@ -1,10 +1,13 @@
 """
-PRISM Phase 2.1 - Fallback Table Extractor
+PRISM Phase 2.1 - Fallback Table Extractor (품질 개선)
 
-Detectron2 없이도 OCR 기반으로 표를 추출합니다.
+개선 사항:
+- ✅ 동적 정렬 임계값 적용 (한글 OCR 고려)
+- ✅ 최소 열/행 조건 완화
+- ✅ 표 품질 검증 완화
 
 Author: 박준호 (AI/ML Lead)
-Date: 2025-10-13
+Date: 2025-10-13 (개선)
 """
 
 from typing import List, Dict, Tuple, Optional
@@ -14,12 +17,20 @@ from collections import defaultdict
 
 
 @dataclass
+class OCRBox:
+    """OCR 결과 박스"""
+    text: str
+    bbox: Tuple[float, float, float, float]  # (x1, y1, x2, y2)
+    confidence: float = 1.0
+
+
+@dataclass
 class TableCell:
     """표 셀 정보"""
     text: str
     row: int
     col: int
-    bbox: Tuple[float, float, float, float]  # (x1, y1, x2, y2)
+    bbox: Tuple[float, float, float, float]
     confidence: float = 1.0
 
 
@@ -35,15 +46,13 @@ class ExtractedTable:
     
     def to_markdown(self) -> str:
         """Markdown 표 변환"""
-        # 행/열 구조 생성
         grid = {}
         for cell in self.cells:
             grid[(cell.row, cell.col)] = cell.text
         
-        # Markdown 생성
         lines = []
         
-        # 헤더 (첫 행)
+        # 헤더
         header_cols = []
         for col in range(self.num_cols):
             text = grid.get((0, col), "")
@@ -76,20 +85,19 @@ class ExtractedTable:
 
 class FallbackTableExtractor:
     """
-    OCR 기반 표 추출기
+    OCR 기반 표 추출기 (품질 개선)
     
-    전략:
-    1. OCR bbox들의 정렬 패턴 분석
-    2. 수평/수직으로 정렬된 텍스트 그룹 탐지
-    3. 행/열 구조 추론
-    4. 표 경계 확정
+    개선 전략:
+    1. 🎯 동적 정렬 임계값 (한글 OCR은 정렬이 덜 정확)
+    2. 🎯 최소 열/행 조건 완화 (2x2 표도 허용)
+    3. 🎯 표 품질 검증 완화 (50% 셀 채움율)
     """
     
     def __init__(
         self,
-        min_cols: int = 3,
+        min_cols: int = 2,           # 기존: 3
         min_rows: int = 2,
-        alignment_threshold: float = 10.0
+        alignment_threshold: float = 20.0  # 기존: 10.0
     ):
         """
         Args:
@@ -122,181 +130,158 @@ class FallbackTableExtractor:
         # 1. OCR 결과를 셀 후보로 변환
         cells = self._ocr_to_cells(ocr_result)
         
-        # 2. 수평/수직 정렬 분석
-        row_groups = self._group_by_rows(cells)
-        col_groups = self._group_by_cols(cells)
+        # 2. 행/열 그룹핑
+        rows = self._group_by_rows(cells)
+        cols = self._find_columns(rows)
         
-        # 3. 표 후보 탐지
-        table_candidates = self._detect_table_regions(
-            cells, row_groups, col_groups
-        )
+        # 3. 표 조건 검증
+        if len(rows) < self.min_rows or len(cols) < self.min_cols:
+            return []
         
-        # 4. 표 검증 및 구조화
-        tables = []
-        for candidate in table_candidates:
-            table = self._build_table(candidate, page_num)
-            if table:
-                tables.append(table)
+        # 4. 표 구조 생성
+        table = self._build_table(rows, cols, page_num)
         
-        return tables
+        if table:
+            return [table]
+        return []
     
     def _ocr_to_cells(self, ocr_result: List[Dict]) -> List[Dict]:
         """OCR 결과를 셀 후보로 변환"""
         cells = []
         
         for item in ocr_result:
-            bbox = item.get("bbox", [])
-            text = item.get("text", "").strip()
+            bbox = item["bbox"]
+            text = item["text"]
             
-            if not text or len(bbox) != 4:
-                continue
+            # bbox를 (x1, y1, x2, y2)로 변환
+            if isinstance(bbox[0], list):
+                # [[x1,y1], [x2,y1], [x2,y2], [x1,y2]]
+                x_coords = [p[0] for p in bbox]
+                y_coords = [p[1] for p in bbox]
+                x1, x2 = min(x_coords), max(x_coords)
+                y1, y2 = min(y_coords), max(y_coords)
+            else:
+                # [x1, y1, x2, y2]
+                x1, y1, x2, y2 = bbox
             
-            # bbox: [[x1,y1], [x2,y1], [x2,y2], [x1,y2]]
-            x_coords = [p[0] for p in bbox]
-            y_coords = [p[1] for p in bbox]
-            
-            cell = {
+            cells.append({
                 "text": text,
-                "x1": min(x_coords),
-                "y1": min(y_coords),
-                "x2": max(x_coords),
-                "y2": max(y_coords),
-                "cx": (min(x_coords) + max(x_coords)) / 2,
-                "cy": (min(y_coords) + max(y_coords)) / 2,
-            }
-            cells.append(cell)
+                "x1": x1,
+                "y1": y1,
+                "x2": x2,
+                "y2": y2,
+                "center_x": (x1 + x2) / 2,
+                "center_y": (y1 + y2) / 2
+            })
         
         return cells
     
     def _group_by_rows(self, cells: List[Dict]) -> List[List[Dict]]:
-        """Y 좌표 기준으로 행 그룹화"""
+        """셀을 행으로 그룹핑"""
         if not cells:
             return []
         
-        # Y 중심 좌표로 정렬
-        sorted_cells = sorted(cells, key=lambda c: c["cy"])
+        # y 좌표로 정렬
+        sorted_cells = sorted(cells, key=lambda c: c["y1"])
         
         rows = []
         current_row = [sorted_cells[0]]
         
+        # 🎯 동적 행 간격 계산
+        avg_height = np.mean([c["y2"] - c["y1"] for c in cells])
+        row_gap = avg_height * 0.5  # 평균 높이의 50%
+        
         for cell in sorted_cells[1:]:
-            # 이전 셀과 Y 좌표 차이
-            prev_cy = current_row[-1]["cy"]
-            diff = abs(cell["cy"] - prev_cy)
+            # 이전 행과 y 좌표 차이
+            prev_y = current_row[-1]["y1"]
             
-            if diff < self.alignment_threshold:
-                # 같은 행
+            if abs(cell["y1"] - prev_y) < row_gap:
                 current_row.append(cell)
             else:
-                # 새 행
-                rows.append(current_row)
+                # 새 행 시작
+                rows.append(sorted(current_row, key=lambda c: c["x1"]))
                 current_row = [cell]
         
+        # 마지막 행 추가
         if current_row:
-            rows.append(current_row)
+            rows.append(sorted(current_row, key=lambda c: c["x1"]))
         
         return rows
     
-    def _group_by_cols(self, cells: List[Dict]) -> List[List[Dict]]:
-        """X 좌표 기준으로 열 그룹화"""
-        if not cells:
+    def _find_columns(self, rows: List[List[Dict]]) -> List[float]:
+        """
+        행들의 x 좌표를 분석하여 열 경계 찾기
+        🎯 개선: 동적 임계값 적용
+        """
+        if not rows:
             return []
         
-        # X 중심 좌표로 정렬
-        sorted_cells = sorted(cells, key=lambda c: c["cx"])
+        # 모든 셀의 x 좌표 수집
+        all_x = []
+        for row in rows:
+            for cell in row:
+                all_x.append(cell["x1"])
         
-        cols = []
-        current_col = [sorted_cells[0]]
+        if not all_x:
+            return []
         
-        for cell in sorted_cells[1:]:
-            # 이전 셀과 X 좌표 차이
-            prev_cx = current_col[-1]["cx"]
-            diff = abs(cell["cx"] - prev_cx)
-            
-            if diff < self.alignment_threshold:
-                # 같은 열
-                current_col.append(cell)
+        all_x = sorted(set(all_x))
+        
+        # 클러스터링
+        columns = []
+        current_cluster = [all_x[0]]
+        
+        # 🎯 동적 임계값 (한글은 정렬이 덜 정확함)
+        dynamic_threshold = self.alignment_threshold * 1.5
+        
+        for x in all_x[1:]:
+            if x - current_cluster[-1] < dynamic_threshold:
+                current_cluster.append(x)
             else:
-                # 새 열
-                cols.append(current_col)
-                current_col = [cell]
+                columns.append(sum(current_cluster) / len(current_cluster))
+                current_cluster = [x]
         
-        if current_col:
-            cols.append(current_col)
+        if current_cluster:
+            columns.append(sum(current_cluster) / len(current_cluster))
         
-        return cols
-    
-    def _detect_table_regions(
-        self,
-        cells: List[Dict],
-        row_groups: List[List[Dict]],
-        col_groups: List[List[Dict]]
-    ) -> List[Dict]:
-        """표 후보 영역 탐지"""
-        candidates = []
-        
-        # 연속된 행/열이 많은 영역 찾기
-        for i, row_group in enumerate(row_groups):
-            if len(row_group) < self.min_cols:
-                continue
-            
-            # 연속된 행 찾기
-            consecutive_rows = [row_group]
-            for j in range(i + 1, len(row_groups)):
-                next_row = row_groups[j]
-                
-                # 열 개수가 비슷하고 정렬되어 있으면 연속된 행
-                if abs(len(next_row) - len(row_group)) <= 1:
-                    consecutive_rows.append(next_row)
-                else:
-                    break
-            
-            # 표 조건 확인
-            if len(consecutive_rows) >= self.min_rows:
-                # 모든 셀 수집
-                table_cells = []
-                for row in consecutive_rows:
-                    table_cells.extend(row)
-                
-                # 표 경계 계산
-                x1 = min(c["x1"] for c in table_cells)
-                y1 = min(c["y1"] for c in table_cells)
-                x2 = max(c["x2"] for c in table_cells)
-                y2 = max(c["y2"] for c in table_cells)
-                
-                candidate = {
-                    "cells": table_cells,
-                    "rows": consecutive_rows,
-                    "bbox": (x1, y1, x2, y2),
-                    "num_rows": len(consecutive_rows),
-                    "num_cols": len(row_group)  # 첫 행 기준
-                }
-                candidates.append(candidate)
-        
-        return candidates
+        return columns
     
     def _build_table(
         self,
-        candidate: Dict,
+        rows: List[List[Dict]],
+        columns: List[float],
         page_num: int
     ) -> Optional[ExtractedTable]:
         """표 구조 생성"""
-        cells = candidate["cells"]
-        num_rows = candidate["num_rows"]
-        num_cols = candidate["num_cols"]
-        bbox = candidate["bbox"]
+        num_rows = len(rows)
+        num_cols = len(columns)
         
-        # 행/열 인덱스 할당
-        rows = candidate["rows"]
+        # 전체 bbox 계산
+        all_cells_flat = [cell for row in rows for cell in row]
+        x1 = min(c["x1"] for c in all_cells_flat)
+        y1 = min(c["y1"] for c in all_cells_flat)
+        x2 = max(c["x2"] for c in all_cells_flat)
+        y2 = max(c["y2"] for c in all_cells_flat)
+        bbox = (x1, y1, x2, y2)
+        
+        # 표 셀 생성
         table_cells = []
         
         for row_idx, row in enumerate(rows):
-            # X 좌표로 열 순서 정렬
-            sorted_row = sorted(row, key=lambda c: c["cx"])
-            
-            for col_idx, cell in enumerate(sorted_row):
-                if col_idx >= num_cols:
-                    break
+            for cell in row:
+                # 가장 가까운 열 찾기
+                col_idx = 0
+                min_dist = abs(cell["x1"] - columns[0])
+                
+                for i, col_x in enumerate(columns):
+                    dist = abs(cell["x1"] - col_x)
+                    if dist < min_dist:
+                        min_dist = dist
+                        col_idx = i
+                
+                # 🎯 완화된 거리 임계값
+                if min_dist > self.alignment_threshold * 2:
+                    continue
                 
                 table_cell = TableCell(
                     text=cell["text"],
@@ -307,9 +292,11 @@ class FallbackTableExtractor:
                 )
                 table_cells.append(table_cell)
         
-        # 표 품질 검증
-        if len(table_cells) < num_rows * num_cols * 0.7:
-            # 셀이 너무 적으면 표가 아닐 가능성
+        # 🎯 표 품질 검증 완화 (70% → 50%)
+        expected_cells = num_rows * num_cols
+        actual_cells = len(table_cells)
+        
+        if actual_cells < expected_cells * 0.5:
             return None
         
         table = ExtractedTable(
@@ -324,9 +311,8 @@ class FallbackTableExtractor:
         return table
 
 
-# 간단한 테스트
+# 테스트
 if __name__ == "__main__":
-    # 샘플 OCR 결과
     sample_ocr = [
         {"text": "구분", "bbox": [[10, 10], [50, 10], [50, 30], [10, 30]]},
         {"text": "항목1", "bbox": [[60, 10], [100, 10], [100, 30], [60, 30]]},
@@ -336,7 +322,7 @@ if __name__ == "__main__":
         {"text": "데이터2", "bbox": [[110, 40], [150, 40], [150, 60], [110, 60]]},
     ]
     
-    extractor = FallbackTableExtractor(min_cols=2, min_rows=2)
+    extractor = FallbackTableExtractor(min_cols=2, min_rows=2, alignment_threshold=20.0)
     tables = extractor.extract_tables(sample_ocr, page_num=1)
     
     print(f"✅ Found {len(tables)} table(s)")
