@@ -1,7 +1,7 @@
 """
-PRISM Phase 2.2 - Claude Vision Table Extractor
+PRISM Phase 2.2 - Claude Vision Table Extractor (dotenv 지원)
 
-Claude Vision API를 사용하여 표를 추출합니다.
+.env 파일에서 자동으로 API 키를 읽습니다.
 
 Author: 박준호 (AI/ML Lead)
 Date: 2025-10-13
@@ -13,6 +13,15 @@ from typing import List, Optional, Tuple
 from dataclasses import dataclass
 from PIL import Image
 import io
+
+# ✅ .env 파일 자동 로드
+try:
+    from dotenv import load_dotenv
+    load_dotenv()  # .env 파일에서 환경변수 로드
+    print("✅ .env file loaded")
+except ImportError:
+    print("⚠️  python-dotenv not installed. Using system environment variables.")
+
 import anthropic
 
 
@@ -23,7 +32,7 @@ class ExtractedTable:
     description: str
     page_num: int
     bbox: Tuple[float, float, float, float]
-    confidence: float = 0.95  # Claude Vision은 높은 정확도
+    confidence: float = 0.95
     
     def to_dict(self):
         return {
@@ -39,26 +48,31 @@ class ClaudeVisionTableExtractor:
     """
     Claude Vision API를 사용한 표 추출기
     
-    장점:
-    - 표 구조 완벽 인식
-    - 한글 정확도 95%+
-    - Markdown 자동 변환
-    - 표 설명까지 생성
+    .env 파일 또는 환경변수에서 ANTHROPIC_API_KEY를 자동으로 읽습니다.
     """
     
     def __init__(self, api_key: Optional[str] = None):
         """
         Args:
-            api_key: Anthropic API 키 (없으면 환경변수에서 읽음)
+            api_key: Anthropic API 키 (없으면 .env 또는 환경변수에서 읽음)
         """
+        # API 키 우선순위: 파라미터 > 환경변수 > .env
         self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
         
         if not self.api_key:
-            print("⚠️  ANTHROPIC_API_KEY not found. Table extraction will be skipped.")
+            print("❌ ANTHROPIC_API_KEY not found")
+            print("\n해결 방법:")
+            print("  1. .env 파일에 추가:")
+            print("     echo 'ANTHROPIC_API_KEY=sk-ant-...' >> .env")
+            print("\n  2. 환경변수로 설정 (PowerShell):")
+            print("     $env:ANTHROPIC_API_KEY='sk-ant-...'")
+            print("\n  3. 환경변수로 설정 (CMD):")
+            print("     set ANTHROPIC_API_KEY=sk-ant-...")
             self.client = None
         else:
             self.client = anthropic.Anthropic(api_key=self.api_key)
-            print("✅ Claude Vision Table Extractor initialized")
+            print(f"✅ Claude Vision Table Extractor initialized")
+            print(f"   API Key: {self.api_key[:20]}...")
     
     def extract_tables_from_page(
         self,
@@ -78,9 +92,10 @@ class ClaudeVisionTableExtractor:
             추출된 표 리스트
         """
         if not self.client:
+            print("  ⚠️  Claude Vision unavailable (no API key)")
             return []
         
-        # 1. 표 영역 탐지 (OCR bbox 기반 휴리스틱)
+        # 1. 표 영역 탐지
         table_regions = self._detect_table_regions(page_image, ocr_boxes)
         
         if not table_regions:
@@ -104,7 +119,7 @@ class ClaudeVisionTableExtractor:
                 tables.append(table)
                 print(f"  ✅ Table {i+1} extracted successfully")
             else:
-                print(f"  ⚠️  Table {i+1} extraction failed")
+                print(f"  ⚠️  Table {i+1} extraction failed or no table found")
         
         return tables
     
@@ -113,22 +128,8 @@ class ClaudeVisionTableExtractor:
         page_image: Image.Image,
         ocr_boxes: List[dict] = None
     ) -> List[Tuple[int, int, int, int]]:
-        """
-        표 영역 탐지 (간단한 휴리스틱)
-        
-        전략:
-        1. OCR bbox들의 밀도가 높은 영역 찾기
-        2. 정렬 패턴이 있는 영역 찾기
-        3. 전체 페이지를 하나의 영역으로 간주 (단순화)
-        
-        Returns:
-            [(x1, y1, x2, y2), ...] 형태의 bbox 리스트
-        """
-        # 🎯 단순화: 전체 페이지를 하나의 표 영역으로
-        # (실제로는 더 정교한 알고리즘 필요)
+        """표 영역 탐지 (전체 페이지)"""
         width, height = page_image.size
-        
-        # 전체 페이지
         return [(0, 0, width, height)]
     
     def _extract_single_table(
@@ -137,17 +138,7 @@ class ClaudeVisionTableExtractor:
         region: Tuple[int, int, int, int],
         page_num: int
     ) -> Optional[ExtractedTable]:
-        """
-        단일 표 추출 (Claude Vision 사용)
-        
-        Args:
-            page_image: 페이지 이미지
-            region: 표 영역 (x1, y1, x2, y2)
-            page_num: 페이지 번호
-            
-        Returns:
-            추출된 표 또는 None
-        """
+        """단일 표 추출 (Claude Vision 사용)"""
         try:
             # 1. 표 영역 크롭
             x1, y1, x2, y2 = region
@@ -246,38 +237,21 @@ DESCRIPTION_END
 # 테스트
 if __name__ == "__main__":
     import sys
-    from pathlib import Path
     
-    # API 키 확인
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        print("❌ ANTHROPIC_API_KEY not found")
-        print("Please set environment variable:")
-        print("  export ANTHROPIC_API_KEY='your-key'")
+    print("=" * 60)
+    print("Claude Vision Table Extractor Test")
+    print("=" * 60)
+    print()
+    
+    # Extractor 초기화
+    extractor = ClaudeVisionTableExtractor()
+    
+    if not extractor.client:
+        print("\n❌ Initialization failed")
         sys.exit(1)
     
-    # 테스트 이미지
-    test_image_path = "test_table.png"
-    if not Path(test_image_path).exists():
-        print(f"⚠️  Test image not found: {test_image_path}")
-        print("Creating a simple test...")
-        
-        # 간단한 테스트 (실제 이미지 없이)
-        extractor = ClaudeVisionTableExtractor(api_key)
-        print("\n✅ Extractor initialized successfully")
-        print("\nTo test with real PDF:")
-        print("  python core/phase2_pipeline.py <pdf_path>")
-    else:
-        # 실제 이미지 테스트
-        extractor = ClaudeVisionTableExtractor(api_key)
-        
-        image = Image.open(test_image_path)
-        tables = extractor.extract_tables_from_page(image, page_num=1)
-        
-        print(f"\n✅ Extracted {len(tables)} table(s)")
-        for i, table in enumerate(tables):
-            print(f"\nTable {i+1}:")
-            print(f"  Page: {table.page_num}")
-            print(f"  Confidence: {table.confidence}")
-            print(f"  Description: {table.description}")
-            print(f"\nMarkdown:\n{table.markdown}")
+    print("\n✅ Initialization successful!")
+    print("\nTo test with actual PDF:")
+    print("  streamlit run app_phase2.py")
+    print("  또는")
+    print("  python core/phase2_pipeline.py test_parser_02.pdf")
