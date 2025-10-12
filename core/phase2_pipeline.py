@@ -37,17 +37,25 @@ class Phase2Pipeline:
     
     def __init__(
         self,
+        azure_endpoint: Optional[str] = None,
+        azure_api_key: Optional[str] = None,
         chunk_size: int = 512,
         chunk_overlap: int = 50,
         use_full_claude_vision: bool = True
     ):
         """
         Args:
+            azure_endpoint: Azure OpenAI 엔드포인트 (선택)
+            azure_api_key: Azure OpenAI API 키 (선택)
             chunk_size: 청크 크기
             chunk_overlap: 청크 오버랩
             use_full_claude_vision: 전체 페이지 Claude Vision 사용 여부
         """
         print("Initializing PRISM Phase 2.3 Pipeline (Full Claude Vision)...")
+        
+        # Azure OpenAI 설정 저장
+        self.azure_endpoint = azure_endpoint
+        self.azure_api_key = azure_api_key
         
         # 1. Layout Detector (참고용)
         self.layout_detector = LayoutDetector()
@@ -55,7 +63,11 @@ class Phase2Pipeline:
         # 2. ⭐ Claude Full Page Extractor (핵심!)
         self.use_full_claude_vision = use_full_claude_vision
         if use_full_claude_vision:
-            self.claude_extractor = ClaudeFullPageExtractor()
+            # Azure 설정을 ClaudeFullPageExtractor에 전달
+            self.claude_extractor = ClaudeFullPageExtractor(
+                azure_endpoint=azure_endpoint,
+                azure_api_key=azure_api_key
+            )
             if self.claude_extractor.client:
                 print("✅ Full Claude Vision enabled")
             else:
@@ -70,138 +82,156 @@ class Phase2Pipeline:
         
         # 4. Document Analyzer
         self.analyzer = DocumentAnalyzer()
-        
-        print("✅ Phase 2.3 Pipeline ready (Full Claude Vision)\n")
     
     def process(
         self,
         pdf_path: str,
-        max_pages: int = 10,
-        output_dir: str = "output"
+        max_pages: Optional[int] = None
     ) -> Dict:
         """
-        PDF 처리 메인 함수
+        PDF 문서 전체 처리 (Phase 2.3)
         
         Args:
             pdf_path: PDF 파일 경로
-            max_pages: 처리할 최대 페이지 수
-            output_dir: 결과 저장 디렉토리
+            max_pages: 최대 처리 페이지 수
             
         Returns:
-            처리 결과 딕셔너리
+            {
+                'chunks': [...],
+                'statistics': {...},
+                'output_path': '...'
+            }
         """
         start_time = time.time()
         
-        # 출력 디렉토리 생성
-        os.makedirs(output_dir, exist_ok=True)
-        
-        # PDF 열기
-        doc = fitz.open(pdf_path)
-        total_pages = min(len(doc), max_pages)
-        
         print("=" * 60)
         print(f"Processing: {Path(pdf_path).name}")
-        print(f"Pages: {total_pages}")
+        print(f"Pages: {max_pages or 'all'}")
         print(f"Method: Full Claude Vision")
         print("=" * 60)
         print()
         
-        # ⭐ Step 1: 전체 페이지를 Claude Vision으로 처리
-        print(f"🤖 Step 1/3: Processing with Claude Vision...")
+        # Step 1: Claude Vision으로 전체 페이지 분석
+        print("🤖 Step 1/3: Processing with Claude Vision...")
+        all_elements = []
         
-        page_contents = []
-        all_texts = []
-        all_tables = []
+        doc = fitz.open(pdf_path)
+        pages_to_process = min(len(doc), max_pages) if max_pages else len(doc)
         
-        for page_num in range(total_pages):
+        for page_num in range(pages_to_process):
+            print(f"  🤖 Processing page {page_num + 1} with Claude Vision...")
+            
+            # 페이지를 이미지로 변환
             page = doc[page_num]
-            pix = page.get_pixmap(dpi=150)
+            pix = page.get_pixmap(dpi=200)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             
-            if self.use_full_claude_vision:
-                # Claude Vision으로 전체 페이지 처리
-                page_content = self.claude_extractor.extract_page(img, page_num + 1)
+            # Claude Vision으로 전체 페이지 분석
+            page_content = self.claude_extractor.extract_full_page(img, page_num + 1)
+            
+            if page_content:
+                # 섹션을 DocumentElement로 변환
+                for section in page_content.sections:
+                    element = DocumentElement(
+                        type=ElementType.SECTION,
+                        bbox=(0, 0, pix.width, pix.height),
+                        confidence=0.95,
+                        text=section.text,
+                        metadata={
+                            'title': section.title,
+                            'type': section.type,
+                            'page_num': page_num + 1
+                        }
+                    )
+                    all_elements.append(element)
                 
-                if page_content:
-                    page_contents.append(page_content)
-                    
-                    # 텍스트 수집
-                    for section in page_content.sections:
-                        all_texts.append({
-                            "page_num": page_num + 1,
-                            "text": f"{section.title}: {section.content}",
-                            "type": "section",
-                            "confidence": 0.95
-                        })
-                    
-                    for text_block in page_content.text_blocks:
-                        all_texts.append({
-                            "page_num": page_num + 1,
-                            "text": text_block,
-                            "type": "paragraph",
-                            "confidence": 0.95
-                        })
-                    
-                    # 표 수집
-                    all_tables.extend(page_content.tables)
-        
-        print(f"✓ Extracted {len(all_texts)} text blocks")
-        print(f"✓ Extracted {len(all_tables)} tables")
-        print()
-        
-        # Step 2: Intelligent Chunking
-        print(f"🧩 Step 2/3: Intelligent chunking...")
-        
-        class SimpleStructure:
-            pass
-        
-        structure = SimpleStructure()
-        result = self.chunker.chunk(structure, all_texts, all_tables, [])
-        print(f"✓ Created {len(result.chunks)} chunks")
-        print()
-        
-        # Step 3: 결과 저장
-        print(f"💾 Step 3/3: Saving results...")
-        self._save_results(pdf_path, result, output_dir)
-        
-        elapsed = time.time() - start_time
-        print("=" * 60)
-        print("✅ Processing complete!")
-        print(f"Time: {elapsed:.1f}s")
-        print(f"Output: {output_dir}")
-        print("=" * 60)
-        print()
+                # 표를 DocumentElement로 변환
+                for table in page_content.tables:
+                    element = DocumentElement(
+                        type=ElementType.TABLE,
+                        bbox=(0, 0, pix.width, pix.height),
+                        confidence=0.95,
+                        text=table.markdown,
+                        metadata={
+                            'caption': table.caption,
+                            'page_num': page_num + 1
+                        }
+                    )
+                    all_elements.append(element)
+                
+                print(f"  ✅ Page {page_num + 1} extracted:")
+                print(f"     - Sections: {len(page_content.sections)}")
+                print(f"     - Tables: {len(page_content.tables)}")
+                print(f"     - Text blocks: {len(page_content.text_blocks)}")
         
         doc.close()
         
-        return {
-            "pages": len(page_contents),
-            "texts": len(all_texts),
-            "tables": len(all_tables),
-            "chunks": len(result.chunks),
-            "statistics": result.statistics,
-            "elapsed_time": elapsed
-        }
-    
-    def _save_results(
-        self,
-        pdf_path: str,
-        result,
-        output_dir: str
-    ) -> None:
-        """결과 저장"""
-        import json
+        # 통계
+        text_elements = [e for e in all_elements if e.type in [ElementType.TEXT, ElementType.SECTION]]
+        table_elements = [e for e in all_elements if e.type == ElementType.TABLE]
         
+        print()
+        print(f"✓ Extracted {len(text_elements)} text blocks")
+        print(f"✓ Extracted {len(table_elements)} tables")
+        print()
+        
+        # Step 2: Intelligent Chunking
+        print("🧩 Step 2/3: Intelligent chunking...")
+        chunks = self.chunker.create_chunks(all_elements)
+        print(f"✓ Created {len(chunks)} chunks")
+        print()
+        
+        # Step 3: 결과 저장
+        print("💾 Step 3/3: Saving results...")
+        output_dir = Path("output")
+        output_dir.mkdir(exist_ok=True)
+        
+        # 파일명 생성
         pdf_name = Path(pdf_path).stem
-        output_path = Path(output_dir) / f"{pdf_name}_chunks.json"
+        output_path = output_dir / f"{pdf_name}_chunks.json"
+        
+        # JSON 저장
+        import json
+        result = {
+            'chunks': [
+                {
+                    'chunk_id': chunk.chunk_id,
+                    'type': chunk.type,
+                    'content': chunk.content,
+                    'page_num': chunk.page_num,
+                    'metadata': chunk.metadata
+                }
+                for chunk in chunks
+            ],
+            'statistics': {
+                'total_pages': pages_to_process,
+                'total_chunks': len(chunks),
+                'text_chunks': len([c for c in chunks if c.type == 'text']),
+                'table_chunks': len([c for c in chunks if c.type == 'table']),
+                'processing_time': time.time() - start_time
+            }
+        }
         
         with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(result.to_dict(), f, ensure_ascii=False, indent=2)
+            json.dump(result, f, ensure_ascii=False, indent=2)
         
         print(f"📝 Saved: {output_path}")
+        print()
+        
+        # 완료
+        duration = time.time() - start_time
+        print("=" * 60)
+        print("✅ Processing complete!")
+        print(f"Time: {duration:.1f}s")
+        print(f"Output: {output_dir}")
+        print("=" * 60)
+        
+        result['output_path'] = str(output_path)
+        return result
 
 
-if __name__ == "__main__":
+def main():
+    """CLI 실행"""
     import sys
     
     if len(sys.argv) < 2:
@@ -209,19 +239,18 @@ if __name__ == "__main__":
         sys.exit(1)
     
     pdf_path = sys.argv[1]
-    max_pages = int(sys.argv[2]) if len(sys.argv) > 2 else 10
+    max_pages = int(sys.argv[2]) if len(sys.argv) > 2 else None
+    
+    # 환경변수에서 Azure 설정 읽기
+    azure_endpoint = os.environ.get('AZURE_OPENAI_ENDPOINT')
+    azure_api_key = os.environ.get('AZURE_OPENAI_API_KEY')
     
     pipeline = Phase2Pipeline(
-        chunk_size=512,
-        chunk_overlap=50,
-        use_full_claude_vision=True
+        azure_endpoint=azure_endpoint,
+        azure_api_key=azure_api_key
     )
-    
-    result = pipeline.process(pdf_path, max_pages=max_pages)
-    
-    print("\n📊 Summary:")
-    print(f"  Pages: {result['pages']}")
-    print(f"  Texts: {result['texts']}")
-    print(f"  Tables: {result['tables']}")
-    print(f"  Chunks: {result['chunks']}")
-    print(f"  Time: {result['elapsed_time']:.1f}s")
+    pipeline.process(pdf_path, max_pages=max_pages)
+
+
+if __name__ == "__main__":
+    main()
