@@ -1,5 +1,5 @@
 """
-PRISM Phase 2.1 - Enhanced Pipeline
+PRISM Phase 2.1 - Enhanced Pipeline (수정)
 
 개선 사항:
 - Fallback Table Extractor 통합
@@ -16,9 +16,11 @@ from pathlib import Path
 from typing import List, Dict, Optional
 from PIL import Image
 import fitz  # PyMuPDF
+from paddleocr import PaddleOCR
 
 from models.layout_detector import LayoutDetector, DocumentElement, ElementType
-from core.text_extractor import PaddleOCRExtractor
+# ✅ 수정: TextExtractor로 변경
+from core.text_extractor import TextExtractor
 from core.table_extractor_fallback import FallbackTableExtractor, ExtractedTable
 from core.image_captioner import ImageCaptioner
 from core.intelligent_chunker import IntelligentChunker
@@ -56,8 +58,17 @@ class Phase2Pipeline:
         # 1. Layout Detector
         self.layout_detector = LayoutDetector()
         
-        # 2. Text Extractor
-        self.text_extractor = PaddleOCRExtractor()
+        # 2. ✅ Text Extractor (수정)
+        self.text_extractor = TextExtractor(use_ocr_fallback=True)
+        
+        # ✅ PaddleOCR 직접 초기화 (표 추출용)
+        print("Loading PaddleOCR for table extraction...")
+        self.ocr = PaddleOCR(
+            use_angle_cls=True,
+            lang='korean',
+            show_log=False
+        )
+        print("PaddleOCR loaded successfully")
         
         # 3. ⭐ Fallback Table Extractor (신규)
         self.fallback_table_extractor = FallbackTableExtractor(
@@ -149,10 +160,26 @@ class Phase2Pipeline:
             pix = page.get_pixmap(dpi=150)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             
-            # OCR 추출
-            extracted, ocr_result = self.text_extractor.extract(img, page_num + 1)
-            texts.extend(extracted)
-            ocr_results.append((page_num + 1, ocr_result))
+            # ✅ OCR 추출 (수정)
+            import numpy as np
+            result = self.ocr.ocr(np.array(img), cls=True)
+            
+            if result and result[0]:
+                for line in result[0]:
+                    bbox_coords = line[0]
+                    text_data = line[1]
+                    text = text_data[0]
+                    confidence = text_data[1]
+                    
+                    texts.append({
+                        "page_num": page_num + 1,
+                        "text": text,
+                        "bbox": bbox_coords,
+                        "confidence": confidence
+                    })
+                
+                # OCR 결과 저장 (표 추출용)
+                ocr_results.append((page_num + 1, result[0]))
         
         print(f"✓ Extracted {len(texts)} text blocks")
         print()
@@ -175,7 +202,13 @@ class Phase2Pipeline:
         
         # Step 5: ⭐ Intelligent Chunking (개선)
         print(f"🧩 Step 5/5: Intelligent chunking...")
-        structure = self.analyzer.analyze_structure(elements)
+        
+        # ✅ 수정: analyze_structure 대신 간단한 구조 객체 생성
+        class SimpleStructure:
+            """간단한 문서 구조 (Chunker 호환용)"""
+            pass
+        
+        structure = SimpleStructure()
         result = self.chunker.chunk(structure, texts, tables, captions)
         print(f"✓ Created {len(result.chunks)} chunks")
         print()
@@ -190,6 +223,8 @@ class Phase2Pipeline:
         print(f"Output: {output_dir}")
         print("=" * 60)
         print()
+        
+        doc.close()
         
         return {
             "elements": len(elements),
@@ -230,16 +265,14 @@ class Phase2Pipeline:
             # OCR 결과를 dict 리스트로 변환
             ocr_dicts = []
             for item in ocr_result:
-                if isinstance(item, dict):
-                    ocr_dicts.append(item)
-                elif isinstance(item, tuple) and len(item) >= 2:
-                    # (bbox, (text, confidence)) 형식
-                    bbox, text_data = item[0], item[1]
-                    text = text_data[0] if isinstance(text_data, tuple) else str(text_data)
-                    ocr_dicts.append({
-                        "text": text,
-                        "bbox": bbox
-                    })
+                bbox = item[0]  # [[x1,y1], [x2,y1], [x2,y2], [x1,y2]]
+                text_data = item[1]  # (text, confidence)
+                text = text_data[0]
+                
+                ocr_dicts.append({
+                    "text": text,
+                    "bbox": bbox
+                })
             
             # Fallback Extractor로 표 추출
             page_tables = self.fallback_table_extractor.extract_tables(

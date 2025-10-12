@@ -1,17 +1,17 @@
 """
-PRISM Phase 2 - Streamlit Web App
+PRISM Phase 2 - Streamlit Web App (수정)
 
 Phase 2 파이프라인을 위한 웹 인터페이스
 
 Author: 최동현 (Frontend Lead)
-Date: 2025-10-12
+Date: 2025-10-13
 """
 
 import streamlit as st
 import time
 import json
 from pathlib import Path
-import shutil
+import traceback
 
 # Phase 2 모듈
 from core.phase2_pipeline import Phase2Pipeline
@@ -90,17 +90,27 @@ def main():
             )
         
         with col2:
-            vlm_provider = st.selectbox(
-                "VLM Provider",
-                ["claude", "azure", "ollama"],
-                help="이미지 캡션 생성에 사용할 VLM"
+            use_vlm = st.checkbox(
+                "VLM 사용 (이미지 캡션 생성)",
+                value=False,
+                help="체크하면 이미지에 대한 자연어 설명 생성 (시간 소요)"
             )
+            
+            if use_vlm:
+                vlm_provider = st.selectbox(
+                    "VLM Provider",
+                    ["claude", "azure", "ollama"],
+                    help="이미지 캡션 생성에 사용할 VLM"
+                )
+            else:
+                vlm_provider = "claude"  # 기본값
         
         # 처리 버튼
         if st.button("🚀 문서 처리 시작", type="primary"):
             process_document(
                 st.session_state["uploaded_file"],
                 max_pages,
+                use_vlm,
                 vlm_provider
             )
     
@@ -108,14 +118,19 @@ def main():
     with tab3:
         st.header("📊 처리 결과")
         
-        if not (PROCESSED_DIR / "chunks.json").exists():
-            st.info("처리된 문서가 없습니다")
+        if "result" not in st.session_state:
+            st.info("처리된 문서가 없습니다. Process 탭에서 문서를 처리하세요.")
             return
         
         show_results()
 
 
-def process_document(pdf_path: str, max_pages: int, vlm_provider: str):
+def process_document(
+    pdf_path: str, 
+    max_pages: int, 
+    use_vlm: bool,
+    vlm_provider: str
+):
     """문서 처리"""
     
     # 진행 상황
@@ -125,41 +140,60 @@ def process_document(pdf_path: str, max_pages: int, vlm_provider: str):
     try:
         # 파이프라인 초기화
         status_text.text("파이프라인 초기화 중...")
+        
+        # ✅ 수정: dpi 파라미터 제거, 올바른 파라미터만 전달
         pipeline = Phase2Pipeline(
+            use_vlm=use_vlm,
             vlm_provider=vlm_provider,
-            dpi=200,
-            chunk_size=512
+            chunk_size=512,
+            chunk_overlap=50
         )
         progress_bar.progress(10)
         
         # 문서 처리
         status_text.text("문서 분석 중...")
-        result = pipeline.process(pdf_path, max_pages)
+        progress_bar.progress(20)
+        
+        result = pipeline.process(
+            pdf_path=pdf_path,
+            output_dir=str(PROCESSED_DIR),
+            max_pages=max_pages
+        )
+        
         progress_bar.progress(100)
         
         # 결과 저장
         st.session_state["result"] = result
         
         # 성공 메시지
+        status_text.empty()
         st.success("✅ 문서 처리 완료!")
         
         # 요약
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("처리 페이지", result["pages_processed"])
+            st.metric("Elements", result["elements"])
         with col2:
-            st.metric("텍스트 블록", result["elements"]["text_blocks"])
+            st.metric("텍스트 블록", result["texts"])
         with col3:
-            st.metric("표", result["elements"]["tables"])
+            st.metric("표", result["tables"])
         with col4:
-            st.metric("청크", result["chunks"]["total_chunks"])
+            st.metric("청크", result["chunks"])
         
         # 처리 시간
-        st.info(f"⏱️ 처리 시간: {result['processing_time']:.1f}초")
+        st.info(f"⏱️ 처리 시간: {result['elapsed_time']:.1f}초")
+        
+        # 통계
+        with st.expander("📊 상세 통계"):
+            stats = result.get("statistics", {})
+            for key, value in stats.items():
+                st.write(f"**{key}**: {value}")
         
     except Exception as e:
+        progress_bar.progress(0)
+        status_text.empty()
         st.error(f"❌ 처리 실패: {e}")
-        import traceback
+        
         with st.expander("에러 상세"):
             st.code(traceback.format_exc())
 
@@ -167,8 +201,21 @@ def process_document(pdf_path: str, max_pages: int, vlm_provider: str):
 def show_results():
     """결과 표시"""
     
+    if "result" not in st.session_state:
+        st.warning("처리된 결과가 없습니다")
+        return
+    
+    result = st.session_state["result"]
+    
+    # 파일명 추출
+    filename = Path(st.session_state.get("filename", "unknown")).stem
+    chunks_path = PROCESSED_DIR / f"{filename}_chunks.json"
+    
+    if not chunks_path.exists():
+        st.error(f"청크 파일을 찾을 수 없습니다: {chunks_path}")
+        return
+    
     # chunks.json 로드
-    chunks_path = PROCESSED_DIR / "chunks.json"
     with open(chunks_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     
@@ -187,73 +234,64 @@ def show_results():
     with col4:
         st.metric("이미지 청크", statistics.get("image_chunks", 0))
     
+    # 평균 청크 크기
+    avg_size = statistics.get("avg_chunk_size", 0)
+    st.metric("평균 청크 크기", f"{avg_size:.0f} characters")
+    
     # 청크 목록
-    st.subheader("📄 청크 목록")
+    st.subheader("📝 청크 목록")
     
     # 필터
-    chunk_type = st.selectbox(
-        "청크 타입",
-        ["all", "text", "table", "image"]
-    )
+    chunk_types = ["all", "text", "table", "image"]
+    selected_type = st.selectbox("청크 타입 필터", chunk_types)
     
     # 필터링
-    filtered_chunks = chunks
-    if chunk_type != "all":
-        filtered_chunks = [c for c in chunks if c["type"] == chunk_type]
+    if selected_type == "all":
+        filtered_chunks = chunks
+    else:
+        filtered_chunks = [c for c in chunks if c.get("type") == selected_type]
     
-    st.info(f"표시 중: {len(filtered_chunks)} / {len(chunks)} 청크")
+    st.write(f"총 {len(filtered_chunks)}개 청크")
     
     # 청크 표시
-    for i, chunk in enumerate(filtered_chunks[:50]):  # 최대 50개
-        with st.expander(f"[{chunk['type'].upper()}] {chunk['chunk_id']} (Page {chunk['page_num']})"):
-            st.markdown("**Content:**")
-            st.text_area(
-                f"chunk_{i}",
-                chunk["content"],
-                height=150,
-                key=f"chunk_content_{i}",
-                label_visibility="collapsed"
-            )
+    for i, chunk in enumerate(filtered_chunks):
+        chunk_type = chunk.get("type", "unknown")
+        chunk_id = chunk.get("chunk_id", f"chunk_{i}")
+        content = chunk.get("content", "")
+        page_num = chunk.get("page_num", "?")
+        metadata = chunk.get("metadata", {})
+        
+        # 아이콘
+        icon_map = {
+            "text": "📝",
+            "table": "📊",
+            "image": "🖼️"
+        }
+        icon = icon_map.get(chunk_type, "📄")
+        
+        with st.expander(f"{icon} {chunk_id} (Page {page_num})"):
+            # 타입별 표시
+            if chunk_type == "table":
+                st.markdown(content)
+            else:
+                st.text(content[:500] + "..." if len(content) > 500 else content)
             
-            st.markdown("**Metadata:**")
-            st.json(chunk["metadata"])
-            
-            if chunk.get("has_embedding"):
-                st.info("✅ 임베딩 포함")
-    
-    if len(filtered_chunks) > 50:
-        st.warning(f"⚠️ 처음 50개만 표시됨 ({len(filtered_chunks) - 50}개 더 있음)")
+            # 메타데이터
+            if metadata:
+                st.caption(f"Metadata: {metadata}")
     
     # 다운로드
     st.subheader("💾 다운로드")
     
-    col1, col2 = st.columns(2)
+    with open(chunks_path, "r", encoding="utf-8") as f:
+        json_data = f.read()
     
-    with col1:
-        # chunks.json 다운로드
-        with open(chunks_path, "r", encoding="utf-8") as f:
-            chunks_json = f.read()
-        
-        st.download_button(
-            "📥 chunks.json 다운로드",
-            chunks_json,
-            file_name="chunks.json",
-            mime="application/json"
-        )
-    
-    with col2:
-        # report.md 다운로드 (있으면)
-        report_path = PROCESSED_DIR / "report.md"
-        if report_path.exists():
-            with open(report_path, "r", encoding="utf-8") as f:
-                report_md = f.read()
-            
-            st.download_button(
-                "📥 report.md 다운로드",
-                report_md,
-                file_name="report.md",
-                mime="text/markdown"
-            )
+    st.download_button(
+        label="📥 JSON 다운로드",
+        data=json_data,
+        file_name=f"{filename}_chunks.json",
+        mime="application/json"
+    )
 
 
 if __name__ == "__main__":
