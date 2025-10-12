@@ -59,15 +59,21 @@ class VLMProvider(ABC):
 class ClaudeProvider(VLMProvider):
     """Anthropic Claude Vision API"""
     
-    def __init__(self):
+    def __init__(self, require_key: bool = True):
+        """
+        Args:
+            require_key: API 키 필수 여부 (False면 None 허용)
+        """
         from anthropic import Anthropic
         
         api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
+        
+        if not api_key and require_key:
             raise ValueError("ANTHROPIC_API_KEY not found in environment")
         
-        self.client = Anthropic(api_key=api_key)
+        self.client = Anthropic(api_key=api_key) if api_key else None
         self.model = "claude-3-5-sonnet-20241022"
+        self.has_key = api_key is not None
     
     def analyze(self, image: Image.Image, prompt: str) -> Optional[str]:
         """Claude Vision으로 이미지 분석"""

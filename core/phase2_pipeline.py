@@ -32,7 +32,8 @@ class Phase2Pipeline:
         vlm_provider: str = "claude",
         dpi: int = 200,
         chunk_size: int = 512,
-        chunk_overlap: int = 50
+        chunk_overlap: int = 50,
+        require_vlm_key: bool = False  # ⭐ 추가
     ):
         """
         Args:
@@ -40,13 +41,17 @@ class Phase2Pipeline:
             dpi: PDF 이미지 변환 해상도
             chunk_size: 청크 크기 (토큰)
             chunk_overlap: 청크 중복 (토큰)
+            require_vlm_key: VLM API 키 필수 여부
         """
         print("Initializing PRISM Phase 2 Pipeline...")
         
         self.analyzer = DocumentAnalyzer(dpi=dpi)
         self.text_extractor = TextExtractor(use_ocr_fallback=True)
         self.table_parser = TableParser()
-        self.image_captioner = ImageCaptioner(provider=vlm_provider)
+        self.image_captioner = ImageCaptioner(
+            provider=vlm_provider,
+            require_key=require_vlm_key  # ⭐ 전달
+        )
         self.chunker = IntelligentChunker(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap
@@ -121,19 +126,6 @@ class Phase2Pipeline:
         # 처리 시간
         elapsed_time = time.time() - start_time
         
-        # 결과 저장
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
-        
-        self._save_results(
-            output_path,
-            structure,
-            texts,
-            tables,
-            captions,
-            chunking_result
-        )
-        
         # 결과 요약
         result = {
             "document": pdf_path,
@@ -150,13 +142,8 @@ class Phase2Pipeline:
         
         print(f"\n{'='*60}")
         print(f"✅ Processing complete!")
-        print(f"{'='*60}")
-        print(f"⏱️  Time: {elapsed_time:.2f}s")
-        print(f"📊 Chunks: {result['chunks']['total_chunks']}")
-        print(f"   - Text: {result['chunks']['by_type'].get('text', 0)}")
-        print(f"   - Table: {result['chunks']['by_type'].get('table', 0)}")
-        print(f"   - Image: {result['chunks']['by_type'].get('image', 0)}")
-        print(f"📁 Output: {output_path}")
+        print(f"Time: {elapsed_time:.1f}s")
+        print(f"Output: {output_path}")
         print(f"{'='*60}\n")
         
         return result
@@ -170,103 +157,92 @@ class Phase2Pipeline:
         captions: list,
         chunking_result: ChunkingResult
     ):
-        """처리 결과 저장"""
+        """결과를 파일로 저장"""
         
-        # 1. 문서 구조
+        # 1. structure.json
         with open(output_path / "structure.json", "w", encoding="utf-8") as f:
             json.dump(structure.to_dict(), f, ensure_ascii=False, indent=2)
         
-        # 2. 추출된 텍스트
+        # 2. texts.json
         with open(output_path / "texts.json", "w", encoding="utf-8") as f:
-            json.dump(
-                [t.to_dict() for t in texts], 
-                f, ensure_ascii=False, indent=2
-            )
+            json.dump(texts, f, ensure_ascii=False, indent=2)
         
-        # 3. 표 (Markdown + JSON)
+        # 3. tables (JSON + Markdown)
         for i, table in enumerate(tables):
-            # Markdown
-            with open(output_path / f"table_{i+1}.md", "w", encoding="utf-8") as f:
-                f.write(table.to_markdown())
-            
             # JSON
             with open(output_path / f"table_{i+1}.json", "w", encoding="utf-8") as f:
                 json.dump(table.to_json(), f, ensure_ascii=False, indent=2)
+            
+            # Markdown
+            with open(output_path / f"table_{i+1}.md", "w", encoding="utf-8") as f:
+                f.write(table.to_markdown())
         
-        # 4. 이미지 캡션
+        # 4. captions.json
+        captions_dict = [c.to_dict() for c in captions]
         with open(output_path / "captions.json", "w", encoding="utf-8") as f:
-            json.dump(
-                [c.to_dict() for c in captions], 
-                f, ensure_ascii=False, indent=2
-            )
+            json.dump(captions_dict, f, ensure_ascii=False, indent=2)
         
-        # 5. 최종 청크 (RAG용)
+        # 5. chunks.json (⭐ 가장 중요!)
         with open(output_path / "chunks.json", "w", encoding="utf-8") as f:
             json.dump(chunking_result.to_dict(), f, ensure_ascii=False, indent=2)
         
-        # 6. 사람이 읽기 쉬운 Markdown 리포트
-        self._generate_report(output_path, texts, tables, captions, chunking_result)
+        # 6. report.md (사람이 읽기 쉬운 리포트)
+        self._generate_report(output_path, structure, texts, tables, captions, chunking_result)
     
     def _generate_report(
         self,
         output_path: Path,
+        structure: DocumentStructure,
         texts: list,
         tables: list,
         captions: list,
         chunking_result: ChunkingResult
     ):
-        """사람이 읽기 쉬운 Markdown 리포트 생성"""
+        """사람이 읽기 쉬운 리포트 생성"""
         
-        lines = []
-        lines.append("# PRISM Phase 2 - Processing Report\n")
+        report_lines = [
+            "# PRISM Phase 2 - Processing Report",
+            "",
+            "## Document Information",
+            f"- Total Pages: {structure.total_pages}",
+            f"- Text Blocks: {len(texts)}",
+            f"- Tables: {len(tables)}",
+            f"- Images: {len(captions)}",
+            "",
+            "## Chunking Statistics",
+            f"- Total Chunks: {chunking_result.statistics['total_chunks']}",
+            f"- Text Chunks: {chunking_result.statistics['text_chunks']}",
+            f"- Table Chunks: {chunking_result.statistics['table_chunks']}",
+            f"- Image Chunks: {chunking_result.statistics['image_chunks']}",
+            f"- Average Chunk Size: {chunking_result.statistics['avg_chunk_size']:.0f} chars",
+            f"- Has Embeddings: {chunking_result.statistics['has_embeddings']}",
+            "",
+            "## Sample Chunks",
+            ""
+        ]
         
-        # 통계
-        lines.append("## Statistics\n")
-        lines.append(f"- **Text Blocks**: {len(texts)}")
-        lines.append(f"- **Tables**: {len(tables)}")
-        lines.append(f"- **Images/Charts**: {len(captions)}")
-        lines.append(f"- **Total Chunks**: {chunking_result.statistics['total_chunks']}")
-        lines.append(f"- **Total Tokens**: {chunking_result.statistics['total_tokens']}\n")
+        # 샘플 청크 (처음 3개)
+        for i, chunk in enumerate(chunking_result.chunks[:3]):
+            report_lines.extend([
+                f"### Chunk {i+1} ({chunk.type.upper()})",
+                f"**Page**: {chunk.page_num}",
+                f"**ID**: {chunk.chunk_id}",
+                "",
+                "```",
+                chunk.content[:200] + ("..." if len(chunk.content) > 200 else ""),
+                "```",
+                ""
+            ])
         
-        # 텍스트 샘플
-        lines.append("## Text Samples\n")
-        for i, text in enumerate(texts[:5]):
-            lines.append(f"### Block {i+1} (Page {text.page_num})\n")
-            preview = text.content[:300] + "..." if len(text.content) > 300 else text.content
-            lines.append(f"{preview}\n")
-        
-        # 표
-        lines.append("## Tables\n")
-        for i, table in enumerate(tables):
-            lines.append(f"### Table {i+1} (Page {table.page_num})\n")
-            lines.append(table.to_markdown())
-            lines.append("\n")
-        
-        # 이미지 캡션
-        lines.append("## Image Captions\n")
-        for i, caption in enumerate(captions):
-            lines.append(f"### Image {i+1} (Page {caption.element.page_num})\n")
-            lines.append(f"{caption.caption}\n")
-        
-        # 청크 샘플
-        lines.append("## Chunk Samples\n")
-        for i, chunk in enumerate(chunking_result.chunks[:10]):
-            lines.append(f"### Chunk {i+1}: `{chunk.chunk_id}`\n")
-            lines.append(f"- **Type**: {chunk.type}")
-            lines.append(f"- **Page**: {chunk.metadata.get('page', 'N/A')}")
-            content_preview = chunk.content[:200] + "..." if len(chunk.content) > 200 else chunk.content
-            lines.append(f"- **Content**: {content_preview}\n")
-        
-        # 저장
+        # 파일 저장
         with open(output_path / "report.md", "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
+            f.write("\n".join(report_lines))
 
 
-# 테스트 실행
+# CLI 실행
 if __name__ == "__main__":
     import sys
     
-    # 명령줄 인자
     if len(sys.argv) < 2:
         print("Usage: python phase2_pipeline.py <pdf_path> [max_pages]")
         sys.exit(1)
@@ -274,15 +250,26 @@ if __name__ == "__main__":
     pdf_path = sys.argv[1]
     max_pages = int(sys.argv[2]) if len(sys.argv) > 2 else None
     
-    # 파이프라인 실행
+    # 파이프라인 실행 (API 키 없어도 OK)
     pipeline = Phase2Pipeline(
-        vlm_provider="claude",  # or "azure", "ollama"
-        dpi=200,
-        chunk_size=512,
-        chunk_overlap=50
+        vlm_provider="claude",
+        require_vlm_key=False  # ⭐ API 키 선택적
     )
     
-    result = pipeline.process(pdf_path, max_pages=max_pages)
+    result = pipeline.process(pdf_path, max_pages)
     
-    print("\n📊 Processing Summary:")
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    print("\n✅ Done! Check results in:", result["output_dir"])
+저장
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        
+        self._save_results(
+            output_path,
+            structure,
+            texts,
+            tables,
+            captions,
+            chunking_result
+        )
+        
+        # 결과

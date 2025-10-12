@@ -8,13 +8,13 @@ Date: 2025-10-11
 """
 
 from PIL import Image
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 from dataclasses import dataclass
 import base64
 import io
 
 from models.layout_detector import DocumentElement, ElementType, ImageTypeClassifier
-from core.providers import VLMProvider
+from core.providers import VLMProvider, ClaudeProvider
 
 
 @dataclass
@@ -44,14 +44,30 @@ class ImageCaptioner:
     3. 캡션은 간결하고 정보적
     """
     
-    def __init__(self, provider: str = "claude"):
+    def __init__(self, provider: str = "claude", require_key: bool = False):
         """
         Args:
             provider: VLM 프로바이더 ("claude", "azure", "ollama")
+            require_key: API 키 필수 여부
         """
-        self.provider = VLMProvider.create(provider)
-        self.classifier = ImageTypeClassifier()
-        self.provider_name = provider
+        try:
+            # API 키 선택적으로 생성
+            if provider == "claude":
+                self.provider = ClaudeProvider(require_key=require_key)
+            else:
+                self.provider = VLMProvider.create(provider)
+            
+            self.classifier = ImageTypeClassifier()
+            self.provider_name = provider
+        except ValueError as e:
+            if not require_key:
+                # API 키 없어도 OK
+                print(f"⚠️  {e}. VLM features will be disabled.")
+                self.provider = None
+                self.classifier = ImageTypeClassifier()
+                self.provider_name = provider
+            else:
+                raise
     
     def should_caption(self, element: DocumentElement) -> bool:
         """
@@ -90,6 +106,10 @@ class ImageCaptioner:
         if not self.should_caption(element):
             return None
         
+        if not self.provider:
+            print("⚠️  VLM provider not available. Skipping caption generation.")
+            return None
+        
         # 프롬프트 생성
         prompt = self._build_prompt(element.type, context)
         
@@ -126,92 +146,48 @@ class ImageCaptioner:
             
             ElementType.IMAGE: """이 이미지를 간단히 설명해주세요.
 
-- 주요 객체/내용
-- 문서에서의 역할 (설명/예시/장식)
-
-2-3문장으로 간결하게 작성해주세요."""
+**주요 내용과 목적을 한두 문장으로 요약해주세요.**"""
         }
         
         prompt = base_prompts.get(element_type, base_prompts[ElementType.IMAGE])
         
-        # 문맥 추가 (있으면)
+        # 문맥 추가
         if context:
-            prompt = f"**문서 맥락**: {context}\n\n{prompt}"
+            prompt = f"문서 맥락: {context}\n\n{prompt}"
         
         return prompt
     
     def generate_captions_batch(
         self,
         pdf_path: str,
-        elements: list[DocumentElement],
+        elements: List[DocumentElement],
         analyzer
-    ) -> list[ImageCaption]:
+    ) -> List[ImageCaption]:
         """
-        여러 이미지를 일괄 처리
+        여러 이미지 일괄 캡션 생성
         
         Args:
-            pdf_path: PDF 파일 경로
-            elements: 이미지 요소 리스트
-            analyzer: DocumentAnalyzer 인스턴스
+            pdf_path: PDF 경로
+            elements: 이미지 요소 목록
+            analyzer: DocumentAnalyzer
             
         Returns:
-            생성된 캡션 리스트
+            캡션 목록
         """
         captions = []
         
         for element in elements:
-            # 캡션 필요 여부 체크
             if not self.should_caption(element):
                 continue
             
             # 이미지 크롭
-            cropped = analyzer.extract_element_image(pdf_path, element)
+            image = analyzer.crop_element(pdf_path, element)
+            if not image:
+                continue
             
             # 캡션 생성
-            caption = self.generate_caption(cropped, element)
-            
+            caption = self.generate_caption(image, element)
             if caption:
                 captions.append(caption)
-                print(f"✓ Page {element.page_num}: {element.type.value} captioned")
         
         return captions
-
-
-# 테스트 코드
-if __name__ == "__main__":
-    from core.document_analyzer import DocumentAnalyzer
-    from models.layout_detector import ElementType
-    import json
-    
-    # 1. 문서 분석
-    analyzer = DocumentAnalyzer()
-    structure = analyzer.analyze("data/uploads/test_document.pdf", max_pages=3)
-    
-    # 2. 이미지/차트 요소만 추출
-    image_elements = structure.get_all_elements_by_type(ElementType.IMAGE)
-    chart_elements = structure.get_all_elements_by_type(ElementType.CHART)
-    all_visual = image_elements + chart_elements
-    
-    print(f"시각 요소 {len(all_visual)}개 발견")
-    
-    # 3. 캡션 생성
-    captioner = ImageCaptioner(provider="claude")
-    
-    captions = captioner.generate_captions_batch(
-        "data/uploads/test_document.pdf",
-        all_visual,
-        analyzer
-    )
-    
-    print(f"\n캡션 생성 완료: {len(captions)}개")
-    
-    # 4. 결과 저장
-    results = [c.to_dict() for c in captions]
-    with open("data/processed/image_captions.json", "w", encoding="utf-8") as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
-    
-    # 5. 샘플 출력
-    print("\n=== 생성된 캡션 ===")
-    for i, caption in enumerate(captions[:3]):
-        print(f"\n[Image {i+1}] (Page {caption.element.page_num}, {caption.provider})")
-        print(caption.caption)

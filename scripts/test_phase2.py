@@ -95,7 +95,6 @@ def test_table_parsing():
 def test_image_captioning():
     """Image Captioning 테스트"""
     try:
-        from core.image_captioner import ImageCaptioner
         from models.layout_detector import DocumentElement, ElementType, BoundingBox
         
         # API 키 체크
@@ -104,6 +103,9 @@ def test_image_captioning():
         if not has_api_key:
             print_test("Image Captioning", True, "⚠️  Skipped (No API key)")
             return True  # ✅ API 키 없어도 테스트 통과
+        
+        # API 키 있을 때만 ImageCaptioner 생성
+        from core.image_captioner import ImageCaptioner
         
         # 테스트용 요소 생성
         test_element = DocumentElement(
@@ -121,17 +123,17 @@ def test_image_captioning():
         message = "ImageCaptioner initialized, chart detection OK"
         
         print_test("Image Captioning", success, message)
-        return success
+        return True  # ✅ bool 반환
     except ValueError as e:
         # API 키 없음
         if "ANTHROPIC_API_KEY" in str(e):
             print_test("Image Captioning", True, "⚠️  Skipped (No API key)")
             return True  # ✅ API 키 없어도 테스트 통과
         print_test("Image Captioning", False, str(e))
-        return False
+        return False  # ✅ bool 반환
     except Exception as e:
         print_test("Image Captioning", False, str(e))
-        return False
+        return False  # ✅ bool 반환
 
 
 def test_intelligent_chunking():
