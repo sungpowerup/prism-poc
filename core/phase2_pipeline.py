@@ -1,269 +1,303 @@
 """
-PRISM Phase 2 - Main Processing Pipeline
+PRISM Phase 2.1 - Enhanced Pipeline
 
-전체 문서 처리 파이프라인을 통합합니다.
+개선 사항:
+- Fallback Table Extractor 통합
+- 개선된 Intelligent Chunker 통합
+- 표 추출 품질 향상
 
-Author: 전체 팀
-Date: 2025-10-11
+Author: 이서영 (Backend Lead) + 박준호 (AI/ML Lead)
+Date: 2025-10-13
 """
 
+import os
 import time
-from typing import Dict, Optional
 from pathlib import Path
-import json
+from typing import List, Dict, Optional
+from PIL import Image
+import fitz  # PyMuPDF
 
-from core.document_analyzer import DocumentAnalyzer, DocumentStructure
-from core.text_extractor import TextExtractor
-from core.table_parser import TableParser
+from models.layout_detector import LayoutDetector, DocumentElement, ElementType
+from core.text_extractor import PaddleOCRExtractor
+from core.table_extractor_fallback import FallbackTableExtractor, ExtractedTable
 from core.image_captioner import ImageCaptioner
-from core.intelligent_chunker import IntelligentChunker, ChunkingResult
-from models.layout_detector import ElementType
+from core.intelligent_chunker import IntelligentChunker
+from core.document_analyzer import DocumentAnalyzer
 
 
 class Phase2Pipeline:
     """
-    PRISM Phase 2 전체 파이프라인
+    PRISM Phase 2.1 파이프라인 (개선)
     
-    PDF → Layout Detection → Text/Table/Image 추출 → 지능형 청킹
+    처리 단계:
+    1. Layout Detection (Detectron2 또는 Mock)
+    2. Text Extraction (PaddleOCR)
+    3. ⭐ Table Parsing (Detectron2 + Fallback)
+    4. Image Captioning (VLM - 선택)
+    5. ⭐ Intelligent Chunking (개선)
     """
     
     def __init__(
         self,
+        use_vlm: bool = False,
         vlm_provider: str = "claude",
-        dpi: int = 200,
         chunk_size: int = 512,
-        chunk_overlap: int = 50,
-        require_vlm_key: bool = False
+        chunk_overlap: int = 50
     ):
         """
         Args:
-            vlm_provider: VLM 프로바이더 ("claude", "azure", "ollama")
-            dpi: PDF 이미지 변환 해상도
-            chunk_size: 청크 크기 (토큰)
-            chunk_overlap: 청크 중복 (토큰)
-            require_vlm_key: VLM API 키 필수 여부
+            use_vlm: VLM 사용 여부
+            vlm_provider: VLM 제공자 (claude/azure/ollama)
+            chunk_size: 청크 크기
+            chunk_overlap: 청크 오버랩
         """
-        print("Initializing PRISM Phase 2 Pipeline...")
+        print("Initializing PRISM Phase 2.1 Pipeline...")
         
-        self.analyzer = DocumentAnalyzer(dpi=dpi)
-        self.text_extractor = TextExtractor(use_ocr_fallback=True)
-        self.table_parser = TableParser()
-        self.image_captioner = ImageCaptioner(
-            provider=vlm_provider,
-            require_key=require_vlm_key
+        # 1. Layout Detector
+        self.layout_detector = LayoutDetector()
+        
+        # 2. Text Extractor
+        self.text_extractor = PaddleOCRExtractor()
+        
+        # 3. ⭐ Fallback Table Extractor (신규)
+        self.fallback_table_extractor = FallbackTableExtractor(
+            min_cols=3,
+            min_rows=2,
+            alignment_threshold=10.0
         )
+        print("✅ Fallback Table Extractor loaded")
+        
+        # 4. Image Captioner (선택)
+        self.use_vlm = use_vlm
+        if use_vlm:
+            self.image_captioner = ImageCaptioner(
+                provider=vlm_provider,
+                require_key=False
+            )
+        else:
+            self.image_captioner = None
+        
+        # 5. ⭐ Intelligent Chunker (개선)
         self.chunker = IntelligentChunker(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap
         )
         
-        print("✅ Pipeline initialized successfully")
+        # 6. Document Analyzer
+        self.analyzer = DocumentAnalyzer()
+        
+        print("✅ Pipeline initialized successfully\n")
     
     def process(
-        self, 
-        pdf_path: str, 
-        max_pages: Optional[int] = None,
-        output_dir: str = "data/processed"
+        self,
+        pdf_path: str,
+        output_dir: str = "data/processed",
+        max_pages: Optional[int] = None
     ) -> Dict:
         """
-        문서 전체 처리
+        PDF 처리
         
         Args:
-            pdf_path: PDF 파일 경로
-            max_pages: 최대 처리 페이지
+            pdf_path: PDF 경로
             output_dir: 출력 디렉토리
+            max_pages: 최대 페이지 수
             
         Returns:
-            처리 결과 딕셔너리
+            처리 결과
         """
         start_time = time.time()
         
-        print(f"\n{'='*60}")
-        print(f"PRISM Phase 2 - Document Processing")
-        print(f"{'='*60}")
+        print("=" * 60)
+        print("PRISM Phase 2.1 - Document Processing")
+        print("=" * 60)
         print(f"Input: {pdf_path}")
         print(f"Max pages: {max_pages or 'All'}")
-        print(f"{'='*60}\n")
+        print("=" * 60)
+        print()
         
-        # 1. 문서 분석 (Layout Detection)
-        print("📄 Step 1/5: Analyzing document structure...")
-        structure = self.analyzer.analyze(pdf_path, max_pages)
-        print(f"✓ Found {structure.total_pages} pages")
+        # 출력 디렉토리 생성
+        Path(output_dir).mkdir(parents=True, exist_ok=True)
         
-        # 2. 텍스트 추출
-        print("\n📝 Step 2/5: Extracting text...")
-        text_elements = structure.get_all_elements_by_type(ElementType.TEXT)
-        title_elements = structure.get_all_elements_by_type(ElementType.TITLE)
-        all_text_elements = text_elements + title_elements
+        # PDF 로드
+        doc = fitz.open(pdf_path)
+        total_pages = len(doc)
+        if max_pages:
+            total_pages = min(total_pages, max_pages)
         
-        texts = self.text_extractor.extract_all_text(pdf_path, all_text_elements)
+        # Step 1: Layout Detection
+        print(f"📄 Step 1/5: Analyzing document structure...")
+        elements = []
+        for page_num in range(total_pages):
+            page = doc[page_num]
+            pix = page.get_pixmap(dpi=150)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            
+            print(f"Analyzing page {page_num + 1}/{total_pages}...")
+            page_elements = self.layout_detector.detect(img, page_num + 1)
+            elements.extend(page_elements)
+        
+        print(f"✓ Found {len(elements)} elements")
+        print()
+        
+        # Step 2: Text Extraction
+        print(f"📝 Step 2/5: Extracting text...")
+        texts = []
+        ocr_results = []  # ⭐ OCR 결과 저장 (표 추출용)
+        
+        for page_num in range(total_pages):
+            page = doc[page_num]
+            pix = page.get_pixmap(dpi=150)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            
+            # OCR 추출
+            extracted, ocr_result = self.text_extractor.extract(img, page_num + 1)
+            texts.extend(extracted)
+            ocr_results.append((page_num + 1, ocr_result))
+        
         print(f"✓ Extracted {len(texts)} text blocks")
+        print()
         
-        # 3. 표 파싱
-        print("\n📊 Step 3/5: Parsing tables...")
-        table_elements = structure.get_all_elements_by_type(ElementType.TABLE)
-        tables = self.table_parser.parse_all_tables(pdf_path, table_elements)
+        # Step 3: ⭐ Table Parsing (개선)
+        print(f"📊 Step 3/5: Parsing tables...")
+        tables = self._parse_tables_enhanced(elements, ocr_results)
         print(f"✓ Parsed {len(tables)} tables")
+        print()
         
-        # 4. 이미지 캡션
-        print("\n🖼️  Step 4/5: Generating image captions...")
-        image_elements = structure.get_all_elements_by_type(ElementType.IMAGE)
-        chart_elements = structure.get_all_elements_by_type(ElementType.CHART)
-        all_visual = image_elements + chart_elements
-        
-        captions = self.image_captioner.generate_captions_batch(
-            pdf_path, 
-            all_visual, 
-            self.analyzer
-        )
+        # Step 4: Image Captioning
+        print(f"🖼️  Step 4/5: Generating image captions...")
+        captions = []
+        if self.use_vlm and self.image_captioner:
+            captions = self._generate_captions(elements, doc)
+        else:
+            print("⚠️  VLM disabled, skipping captions")
         print(f"✓ Generated {len(captions)} captions")
+        print()
         
-        # 5. 지능형 청킹
-        print("\n🧩 Step 5/5: Intelligent chunking...")
-        chunking_result = self.chunker.chunk(structure, texts, tables, captions)
-        print(f"✓ Created {chunking_result.statistics['total_chunks']} chunks")
-        
-        # 처리 시간
-        elapsed_time = time.time() - start_time
+        # Step 5: ⭐ Intelligent Chunking (개선)
+        print(f"🧩 Step 5/5: Intelligent chunking...")
+        structure = self.analyzer.analyze_structure(elements)
+        result = self.chunker.chunk(structure, texts, tables, captions)
+        print(f"✓ Created {len(result.chunks)} chunks")
+        print()
         
         # 결과 저장
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
+        self._save_results(pdf_path, result, output_dir)
         
-        self._save_results(
-            output_path,
-            structure,
-            texts,
-            tables,
-            captions,
-            chunking_result
-        )
+        elapsed = time.time() - start_time
+        print("=" * 60)
+        print("✅ Processing complete!")
+        print(f"Time: {elapsed:.1f}s")
+        print(f"Output: {output_dir}")
+        print("=" * 60)
+        print()
         
-        # 결과 요약
-        result = {
-            "document": pdf_path,
-            "pages_processed": structure.total_pages,
-            "processing_time": elapsed_time,
-            "elements": {
-                "text_blocks": len(texts),
-                "tables": len(tables),
-                "images": len(captions)
-            },
-            "chunks": chunking_result.statistics,
-            "output_dir": str(output_path)
+        return {
+            "elements": len(elements),
+            "texts": len(texts),
+            "tables": len(tables),
+            "captions": len(captions),
+            "chunks": len(result.chunks),
+            "statistics": result.statistics,
+            "elapsed_time": elapsed
         }
+    
+    def _parse_tables_enhanced(
+        self,
+        elements: List[DocumentElement],
+        ocr_results: List[tuple]
+    ) -> List[ExtractedTable]:
+        """
+        표 파싱 (개선)
         
-        print(f"\n{'='*60}")
-        print(f"✅ Processing complete!")
-        print(f"Time: {elapsed_time:.1f}s")
-        print(f"Output: {output_path}")
-        print(f"{'='*60}\n")
+        전략:
+        1. Detectron2가 TABLE을 탐지하면 우선 사용
+        2. 탐지 실패 시 Fallback Extractor 사용
+        """
+        tables = []
         
-        return result
+        # 1. Detectron2 탐지 표
+        detectron_tables = [e for e in elements if e.type == ElementType.TABLE]
+        
+        if detectron_tables:
+            print(f"  ✅ Detectron2 found {len(detectron_tables)} tables")
+            for table_element in detectron_tables:
+                # TODO: Detectron2 표를 구조화
+                # 현재는 placeholder
+                pass
+        
+        # 2. ⭐ Fallback Extractor (OCR 기반)
+        for page_num, ocr_result in ocr_results:
+            # OCR 결과를 dict 리스트로 변환
+            ocr_dicts = []
+            for item in ocr_result:
+                if isinstance(item, dict):
+                    ocr_dicts.append(item)
+                elif isinstance(item, tuple) and len(item) >= 2:
+                    # (bbox, (text, confidence)) 형식
+                    bbox, text_data = item[0], item[1]
+                    text = text_data[0] if isinstance(text_data, tuple) else str(text_data)
+                    ocr_dicts.append({
+                        "text": text,
+                        "bbox": bbox
+                    })
+            
+            # Fallback Extractor로 표 추출
+            page_tables = self.fallback_table_extractor.extract_tables(
+                ocr_dicts, page_num
+            )
+            
+            if page_tables:
+                print(f"  ✅ Fallback found {len(page_tables)} tables on page {page_num}")
+            
+            tables.extend(page_tables)
+        
+        return tables
+    
+    def _generate_captions(
+        self,
+        elements: List[DocumentElement],
+        doc
+    ) -> List:
+        """이미지 캡션 생성"""
+        captions = []
+        
+        for element in elements:
+            if not self.image_captioner.should_caption(element):
+                continue
+            
+            # 페이지 이미지 로드
+            page = doc[element.page_number - 1]
+            pix = page.get_pixmap(dpi=150)
+            page_img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            
+            # 캡션 생성
+            caption = self.image_captioner.generate_caption(
+                page_img, element
+            )
+            if caption:
+                captions.append(caption)
+        
+        return captions
     
     def _save_results(
         self,
-        output_path: Path,
-        structure: DocumentStructure,
-        texts: list,
-        tables: list,
-        captions: list,
-        chunking_result: ChunkingResult
-    ):
-        """결과를 파일로 저장"""
+        pdf_path: str,
+        result,
+        output_dir: str
+    ) -> None:
+        """결과 저장"""
+        import json
         
-        # 1. structure.json
-        with open(output_path / "structure.json", "w", encoding="utf-8") as f:
-            json.dump(structure.to_dict(), f, ensure_ascii=False, indent=2)
+        pdf_name = Path(pdf_path).stem
+        output_path = Path(output_dir) / f"{pdf_name}_chunks.json"
         
-        # 2. texts.json
-        # ⭐ ExtractedText 객체를 dict로 변환
-        texts_dict = []
-        for text in texts:
-            if hasattr(text, 'to_dict'):
-                texts_dict.append(text.to_dict())
-            elif isinstance(text, dict):
-                texts_dict.append(text)
-            else:
-                # 알 수 없는 타입은 스킵
-                print(f"⚠️  Unknown text type: {type(text)}")
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(result.to_dict(), f, ensure_ascii=False, indent=2)
         
-        with open(output_path / "texts.json", "w", encoding="utf-8") as f:
-            json.dump(texts_dict, f, ensure_ascii=False, indent=2)
-        
-        # 3. tables (JSON + Markdown)
-        for i, table in enumerate(tables):
-            # JSON
-            with open(output_path / f"table_{i+1}.json", "w", encoding="utf-8") as f:
-                json.dump(table.to_json(), f, ensure_ascii=False, indent=2)
-            
-            # Markdown
-            with open(output_path / f"table_{i+1}.md", "w", encoding="utf-8") as f:
-                f.write(table.to_markdown())
-        
-        # 4. captions.json
-        captions_dict = [c.to_dict() for c in captions]
-        with open(output_path / "captions.json", "w", encoding="utf-8") as f:
-            json.dump(captions_dict, f, ensure_ascii=False, indent=2)
-        
-        # 5. chunks.json (⭐ 가장 중요!)
-        with open(output_path / "chunks.json", "w", encoding="utf-8") as f:
-            json.dump(chunking_result.to_dict(), f, ensure_ascii=False, indent=2)
-        
-        # 6. report.md (사람이 읽기 쉬운 리포트)
-        self._generate_report(output_path, structure, texts, tables, captions, chunking_result)
-    
-    def _generate_report(
-        self,
-        output_path: Path,
-        structure: DocumentStructure,
-        texts: list,
-        tables: list,
-        captions: list,
-        chunking_result: ChunkingResult
-    ):
-        """사람이 읽기 쉬운 리포트 생성"""
-        
-        report_lines = [
-            "# PRISM Phase 2 - Processing Report",
-            "",
-            "## Document Information",
-            f"- Total Pages: {structure.total_pages}",
-            f"- Text Blocks: {len(texts)}",
-            f"- Tables: {len(tables)}",
-            f"- Images: {len(captions)}",
-            "",
-            "## Chunking Statistics",
-            f"- Total Chunks: {chunking_result.statistics['total_chunks']}",
-            f"- Text Chunks: {chunking_result.statistics['text_chunks']}",
-            f"- Table Chunks: {chunking_result.statistics['table_chunks']}",
-            f"- Image Chunks: {chunking_result.statistics['image_chunks']}",
-            f"- Average Chunk Size: {chunking_result.statistics['avg_chunk_size']:.0f} chars",
-            f"- Has Embeddings: {chunking_result.statistics['has_embeddings']}",
-            "",
-            "## Sample Chunks",
-            ""
-        ]
-        
-        # 샘플 청크 (처음 3개)
-        for i, chunk in enumerate(chunking_result.chunks[:3]):
-            report_lines.extend([
-                f"### Chunk {i+1} ({chunk.type.upper()})",
-                f"**Page**: {chunk.page_num}",
-                f"**ID**: {chunk.chunk_id}",
-                "",
-                "```",
-                chunk.content[:200] + ("..." if len(chunk.content) > 200 else ""),
-                "```",
-                ""
-            ])
-        
-        # 파일 저장
-        with open(output_path / "report.md", "w", encoding="utf-8") as f:
-            f.write("\n".join(report_lines))
+        print(f"📝 Saved: {output_path}")
 
 
-# CLI 실행
+# CLI
 if __name__ == "__main__":
     import sys
     
@@ -272,14 +306,21 @@ if __name__ == "__main__":
         sys.exit(1)
     
     pdf_path = sys.argv[1]
-    max_pages = int(sys.argv[2]) if len(sys.argv) > 2 else None
+    max_pages = int(sys.argv[2]) if len(sys.argv) > 2 else 10
     
-    # 파이프라인 실행 (API 키 없어도 OK)
     pipeline = Phase2Pipeline(
-        vlm_provider="claude",
-        require_vlm_key=False
+        use_vlm=False,  # VLM 비활성화 (테스트용)
+        chunk_size=512,
+        chunk_overlap=50
     )
     
-    result = pipeline.process(pdf_path, max_pages)
+    result = pipeline.process(pdf_path, max_pages=max_pages)
     
-    print("\n✅ Done! Check results in:", result["output_dir"])
+    print("\n📊 Summary:")
+    print(f"  Elements: {result['elements']}")
+    print(f"  Texts: {result['texts']}")
+    print(f"  Tables: {result['tables']}")
+    print(f"  Chunks: {result['chunks']}")
+    print(f"\n  Statistics:")
+    for k, v in result['statistics'].items():
+        print(f"    {k}: {v}")
