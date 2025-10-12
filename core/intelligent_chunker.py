@@ -4,7 +4,7 @@ PRISM Phase 2 - Intelligent Chunker
 RAG를 위한 지능형 문서 청킹 모듈
 
 Author: 이서영 (Backend Lead)
-Date: 2025-10-11
+Date: 2025-10-12
 """
 
 from typing import List, Dict, Optional
@@ -64,7 +64,7 @@ class IntelligentChunker:
         self,
         chunk_size: int = 512,
         chunk_overlap: int = 50,
-        use_embeddings: bool = False  # ⭐ 기본값 False
+        use_embeddings: bool = False
     ):
         """
         Args:
@@ -93,7 +93,7 @@ class IntelligentChunker:
     def chunk(
         self,
         structure: DocumentStructure,
-        texts: List[Dict],
+        texts: List,  # ⭐ ExtractedText 객체 또는 dict 리스트
         tables: List,
         captions: List
     ) -> ChunkingResult:
@@ -102,7 +102,7 @@ class IntelligentChunker:
         
         Args:
             structure: 문서 구조
-            texts: 추출된 텍스트 목록
+            texts: 추출된 텍스트 목록 (ExtractedText 객체 또는 dict)
             tables: 파싱된 표 목록
             captions: 이미지 캡션 목록
             
@@ -134,7 +134,7 @@ class IntelligentChunker:
     
     def _chunk_texts(
         self, 
-        texts: List[Dict],
+        texts: List,
         structure: DocumentStructure
     ) -> List[Chunk]:
         """텍스트를 의미 기반으로 청킹"""
@@ -143,15 +143,31 @@ class IntelligentChunker:
         # 페이지별 그룹화
         by_page = {}
         for text_data in texts:
-            page = text_data.get("page_num", 1)
+            # ⭐ ExtractedText 객체 또는 dict 모두 지원
+            if hasattr(text_data, 'page_num'):
+                # ExtractedText 객체
+                page = text_data.page_num
+                content = text_data.content
+            elif isinstance(text_data, dict):
+                # dict
+                page = text_data.get("page_num", 1)
+                content = text_data.get("text", "")
+            else:
+                # 알 수 없는 타입
+                print(f"⚠️  Unknown text_data type: {type(text_data)}")
+                continue
+            
             if page not in by_page:
                 by_page[page] = []
-            by_page[page].append(text_data)
+            by_page[page].append(content)
         
         # 페이지별 청킹
         for page_num, page_texts in sorted(by_page.items()):
             # 페이지 내 텍스트를 하나로 합침
-            full_text = "\n\n".join(t["text"] for t in page_texts)
+            full_text = "\n\n".join(page_texts)
+            
+            if not full_text.strip():
+                continue
             
             # 토큰 기반 분할
             tokens = self.tokenizer.encode(full_text)

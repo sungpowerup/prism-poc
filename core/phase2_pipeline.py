@@ -177,8 +177,19 @@ class Phase2Pipeline:
             json.dump(structure.to_dict(), f, ensure_ascii=False, indent=2)
         
         # 2. texts.json
+        # ⭐ ExtractedText 객체를 dict로 변환
+        texts_dict = []
+        for text in texts:
+            if hasattr(text, 'to_dict'):
+                texts_dict.append(text.to_dict())
+            elif isinstance(text, dict):
+                texts_dict.append(text)
+            else:
+                # 알 수 없는 타입은 스킵
+                print(f"⚠️  Unknown text type: {type(text)}")
+        
         with open(output_path / "texts.json", "w", encoding="utf-8") as f:
-            json.dump(texts, f, ensure_ascii=False, indent=2)
+            json.dump(texts_dict, f, ensure_ascii=False, indent=2)
         
         # 3. tables (JSON + Markdown)
         for i, table in enumerate(tables):
