@@ -33,7 +33,7 @@ class Phase2Pipeline:
         dpi: int = 200,
         chunk_size: int = 512,
         chunk_overlap: int = 50,
-        require_vlm_key: bool = False  # ⭐ 추가
+        require_vlm_key: bool = False
     ):
         """
         Args:
@@ -50,7 +50,7 @@ class Phase2Pipeline:
         self.table_parser = TableParser()
         self.image_captioner = ImageCaptioner(
             provider=vlm_provider,
-            require_key=require_vlm_key  # ⭐ 전달
+            require_key=require_vlm_key
         )
         self.chunker = IntelligentChunker(
             chunk_size=chunk_size,
@@ -125,6 +125,19 @@ class Phase2Pipeline:
         
         # 처리 시간
         elapsed_time = time.time() - start_time
+        
+        # 결과 저장
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+        
+        self._save_results(
+            output_path,
+            structure,
+            texts,
+            tables,
+            captions,
+            chunking_result
+        )
         
         # 결과 요약
         result = {
@@ -253,23 +266,9 @@ if __name__ == "__main__":
     # 파이프라인 실행 (API 키 없어도 OK)
     pipeline = Phase2Pipeline(
         vlm_provider="claude",
-        require_vlm_key=False  # ⭐ API 키 선택적
+        require_vlm_key=False
     )
     
     result = pipeline.process(pdf_path, max_pages)
     
     print("\n✅ Done! Check results in:", result["output_dir"])
-저장
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
-        
-        self._save_results(
-            output_path,
-            structure,
-            texts,
-            tables,
-            captions,
-            chunking_result
-        )
-        
-        # 결과
