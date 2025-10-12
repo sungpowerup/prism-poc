@@ -27,7 +27,7 @@ layoutparser==0.3.4
 torchvision==0.17.0
 torch==2.2.0
 
-# Option 2: Detectron2 (고급)
+# Option 2: Detectron2 (고급 - 선택사항)
 # detectron2 @ git+https://github.com/facebookresearch/detectron2.git
 
 # ========== Table Detection (NEW!) ==========
@@ -38,7 +38,7 @@ timm==0.9.12
 # ========== Text Chunking (NEW!) ==========
 langchain==0.1.7
 langchain-community==0.0.20
-# sentence-transformers==2.5.1  # 임베딩 제외 (Phase 3에서 필요시 활성화)
+sentence-transformers==2.5.1  # ✅ 활성화 (intelligent_chunker에서 필요)
 tiktoken==0.6.0
 
 # ========== VLM Providers ==========
@@ -49,8 +49,9 @@ anthropic==0.18.1
 requests==2.31.0
 
 # Ollama (local)
+# ollama는 별도 설치
 
-# ========== Vector Store (NEW!) ==========
+# ========== Vector Store ==========
 # chromadb==0.4.22  # Phase 3에서 활성화
 # qdrant-client==1.7.3  # 프로덕션용
 
@@ -77,9 +78,10 @@ pytest-cov==4.1.0
 #    pip install -r requirements_phase2.txt
 #
 # 3. Layout Detection 모델 다운로드
-#    python -c "import layoutparser as lp; lp.Detectron2LayoutModel('lp://PubLayNet/faster_rcnn_R_50_FPN_3x/config')"
+#    python scripts/download_models.py
 #
-# 4. (임베딩 제외 - Phase 3에서 필요시 추가)
+# 4. Sentence Transformer 모델 (자동 다운로드)
+#    - 첫 실행 시 자동으로 다운로드됨 (~400MB)
 #
 # ========================================
 # 주의사항
@@ -88,4 +90,4 @@ pytest-cov==4.1.0
 # - Torch 패키지는 큰 용량 (>1GB)
 # - GPU 사용 시 CUDA 버전 확인 필요
 # - Detectron2는 빌드 시간 오래 걸림 (선택적)
-#
+# - sentence-transformers 첫 실행 시 모델 자동 다운로드
