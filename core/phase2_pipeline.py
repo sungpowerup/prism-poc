@@ -84,6 +84,64 @@ class Phase2Pipeline:
         # 4. Document Analyzer
         self.analyzer = DocumentAnalyzer()
     
+    def _format_chart_data_points(self, data_points):
+        """
+        데이터 포인트를 읽기 쉬운 문자열로 변환
+        
+        다양한 데이터 구조를 처리:
+        - Simple: {"label": "남성", "value": 45.2}
+        - Category: {"category": "입장료", "values": [...]}
+        - League: {"league": "K리그1", "male": 60.1, "female": 39.9}
+        """
+        lines = []
+        
+        for dp in data_points:
+            # Simple structure
+            if 'label' in dp and 'value' in dp:
+                label = dp.get('label', '')
+                value = dp.get('value', '')
+                unit = dp.get('unit', '')
+                lines.append(f"  - {label}: {value}{unit}")
+            
+            # Category structure
+            elif 'category' in dp:
+                category = dp.get('category', '')
+                lines.append(f"\n[{category}]")
+                
+                # Check for 'values' or 'points'
+                nested = dp.get('values') or dp.get('points', [])
+                for item in nested:
+                    label = item.get('label', '')
+                    value = item.get('value', '')
+                    unit = item.get('unit', '')
+                    lines.append(f"  - {label}: {value}{unit}")
+            
+            # League structure (male/female)
+            elif 'league' in dp and 'male' in dp:
+                league = dp.get('league', '')
+                male = dp.get('male', '')
+                female = dp.get('female', '')
+                unit = dp.get('unit', '%')
+                lines.append(f"  - {league}: 남 {male}{unit} / 여 {female}{unit}")
+            
+            # League structure (age_groups)
+            elif 'league' in dp and 'age_groups' in dp:
+                league = dp.get('league', '')
+                age_groups = dp.get('age_groups', {})
+                lines.append(f"\n[{league}]")
+                for age, value in age_groups.items():
+                    lines.append(f"  - {age}: {value}%")
+            
+            # Customer segments
+            elif any(key in dp for key in ['신규관람객', '지속관람객', '이탈위험객']):
+                league = dp.get('league', '데이터')
+                lines.append(f"\n[{league}]")
+                for key in ['신규관람객', '지속관람객', '이탈위험객']:
+                    if key in dp:
+                        lines.append(f"  - {key}: {dp[key]}%")
+        
+        return '\n'.join(lines) if lines else "  - (데이터 없음)"
+    
     def process(
         self,
         pdf_path: str,
@@ -114,15 +172,15 @@ class Phase2Pipeline:
         
         # Step 1: Claude Vision으로 전체 페이지 분석
         print("🤖 Step 1/3: Processing with Claude Vision (Phase 2.4)...")
-        all_chunks = []  # ✅ DocumentElement 대신 직접 chunk 생성
+        all_chunks = []
         
         doc = fitz.open(pdf_path)
         pages_to_process = min(len(doc), max_pages) if max_pages else len(doc)
         
         text_chunk_count = 0
         table_chunk_count = 0
-        chart_chunk_count = 0  # ✅ 추가
-        figure_chunk_count = 0  # ✅ 추가
+        chart_chunk_count = 0
+        figure_chunk_count = 0
         
         for page_num in range(pages_to_process):
             print(f"  🤖 Processing page {page_num + 1} with Claude Vision...")
@@ -263,8 +321,8 @@ class Phase2Pipeline:
                 'total_chunks': len(all_chunks),
                 'text_chunks': text_chunk_count,
                 'table_chunks': table_chunk_count,
-                'chart_chunks': chart_chunk_count,  # ✅ 추가
-                'figure_chunks': figure_chunk_count,  # ✅ 추가
+                'chart_chunks': chart_chunk_count,
+                'figure_chunks': figure_chunk_count,
                 'processing_time': time.time() - start_time
             }
         }
