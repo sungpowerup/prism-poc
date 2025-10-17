@@ -1,502 +1,581 @@
 """
-PRISM POC - Beautiful Modern UI
-멀티 프로바이더 지원: Claude + Azure OpenAI + Ollama
+PRISM - Final Version with Fixes
+- max_pages 파라미터 안전 처리
+- API 키 확인 강화
+- 에러 메시지 개선
 """
 
 import streamlit as st
-import asyncio
-import base64
-import logging
 import os
+from pathlib import Path
+import json
 from datetime import datetime
-from typing import Dict, List, Any
-from dotenv import load_dotenv
-
-# 환경 변수 로드
-load_dotenv()
-
-# Core 모듈
 from core.pdf_processor import PDFProcessor
 from core.multi_vlm_service import MultiVLMService
 
-# 로깅 설정
-os.makedirs('logs', exist_ok=True)
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('logs/app.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
-
-
-# ========== Streamlit 설정 ==========
+# ============================================================
+# 페이지 설정
+# ============================================================
 st.set_page_config(
-    page_title="PRISM - 지능형 문서 이해",
-    page_icon="🔷",
+    page_title="PRISM",
+    page_icon="📄",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-
-# ========== Modern CSS ==========
+# ============================================================
+# 깔끔한 디자인
+# ============================================================
 st.markdown("""
 <style>
-    /* 전역 폰트 */
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-    
-    * {
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    :root {
+        --primary: #1a56db;
+        --secondary: #6b7280;
+        --success: #059669;
+        --border: #e5e7eb;
+        --text: #111827;
+        --text-secondary: #6b7280;
+        --bg-secondary: #f9fafb;
     }
     
-    /* 메인 컨테이너 */
     .main {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 2rem;
+        background-color: var(--bg-secondary);
+        padding-top: 2rem;
     }
     
-    /* 헤더 */
-    .main-header {
+    .stat-card {
         background: white;
-        padding: 2rem;
-        border-radius: 20px;
-        box-shadow: 0 10px 40px rgba(0,0,0,0.1);
-        margin-bottom: 2rem;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 1.25rem;
         text-align: center;
     }
     
-    .main-header h1 {
-        font-size: 2.8rem;
-        font-weight: 700;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
+    .stat-label {
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
         margin-bottom: 0.5rem;
     }
     
-    .main-header p {
-        font-size: 1.1rem;
-        color: #6b7280;
-        font-weight: 400;
+    .stat-value {
+        font-size: 1.875rem;
+        font-weight: 700;
+        color: var(--text);
     }
     
-    /* 카드 스타일 */
-    .card {
+    .panel {
         background: white;
+        border: 1px solid var(--border);
+        border-radius: 8px;
         padding: 1.5rem;
-        border-radius: 15px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.08);
-        margin-bottom: 1.5rem;
-        transition: transform 0.2s, box-shadow 0.2s;
     }
     
-    .card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 30px rgba(0,0,0,0.12);
+    .panel-header {
+        font-size: 0.875rem;
+        font-weight: 600;
+        color: var(--text);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 1rem;
+        padding-bottom: 0.75rem;
+        border-bottom: 1px solid var(--border);
     }
     
-    /* 사이드바 */
-    [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
+    .chunk-item {
+        background: white;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 1rem;
+        margin-bottom: 1rem;
     }
     
-    [data-testid="stSidebar"] .element-container {
-        color: white;
+    .chunk-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 0.75rem;
+        padding-bottom: 0.75rem;
+        border-bottom: 1px solid var(--border);
     }
     
-    [data-testid="stSidebar"] h1,
-    [data-testid="stSidebar"] h2,
-    [data-testid="stSidebar"] h3 {
-        color: white !important;
+    .chunk-id {
+        font-family: 'Monaco', 'Courier New', monospace;
+        font-size: 0.75rem;
+        color: var(--text-secondary);
     }
     
-    /* 버튼 */
+    .chunk-type {
+        display: inline-block;
+        padding: 0.25rem 0.625rem;
+        border-radius: 4px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+    }
+    
+    .type-text { background: #e0e7ff; color: #3730a3; }
+    .type-chart { background: #fef3c7; color: #92400e; }
+    .type-table { background: #dbeafe; color: #1e40af; }
+    .type-figure { background: #fce7f3; color: #9f1239; }
+    .type-title { background: #d1fae5; color: #065f46; }
+    
+    .chunk-content {
+        font-size: 0.875rem;
+        line-height: 1.6;
+        color: var(--text);
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+    
     .stButton > button {
-        width: 100%;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: var(--primary);
         color: white;
         border: none;
-        border-radius: 12px;
-        padding: 0.75rem 1.5rem;
-        font-weight: 600;
-        font-size: 1rem;
-        transition: all 0.3s;
-        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        border-radius: 6px;
+        padding: 0.625rem 1.25rem;
+        font-weight: 500;
+        font-size: 0.875rem;
     }
     
     .stButton > button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        background: #1e40af;
     }
     
-    /* 메트릭 카드 */
-    [data-testid="stMetricValue"] {
-        font-size: 2rem;
-        font-weight: 700;
-        color: #667eea;
-    }
-    
-    /* 프로그레스 바 */
-    .stProgress > div > div {
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        border-radius: 10px;
-    }
-    
-    /* 파일 업로더 */
-    [data-testid="stFileUploader"] {
-        background: white;
-        border: 2px dashed #667eea;
-        border-radius: 15px;
-        padding: 2rem;
-        text-align: center;
-    }
-    
-    /* Expander */
-    .streamlit-expanderHeader {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white !important;
-        border-radius: 10px;
-        font-weight: 600;
-    }
-    
-    /* Success/Error/Info boxes */
-    .stSuccess, .stError, .stInfo, .stWarning {
-        border-radius: 12px;
-        padding: 1rem;
-    }
-    
-    /* 다운로드 버튼 */
     .stDownloadButton > button {
         background: white;
-        color: #667eea;
-        border: 2px solid #667eea;
-        border-radius: 12px;
-        padding: 0.75rem 1.5rem;
-        font-weight: 600;
-        transition: all 0.3s;
+        color: var(--primary);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 0.625rem 1.25rem;
+        font-weight: 500;
+        font-size: 0.875rem;
     }
     
-    .stDownloadButton > button:hover {
-        background: #667eea;
-        color: white;
+    [data-testid="stSidebar"] {
+        background: white;
+        border-right: 1px solid var(--border);
+    }
+    
+    .sidebar-title {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--text);
+        margin-bottom: 0.25rem;
+    }
+    
+    .sidebar-subtitle {
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+        margin-bottom: 2rem;
     }
 </style>
 """, unsafe_allow_html=True)
 
+# ============================================================
+# Helper Functions
+# ============================================================
 
-# ========== 세션 상태 초기화 ==========
+def save_json_utf8(data, filepath):
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def convert_to_markdown(data):
+    md_lines = []
+    md_lines.append("# PRISM 문서 추출 결과\n")
+    md_lines.append(f"**처리 일시:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+    
+    stats = data.get('statistics', {})
+    md_lines.append("## 통계\n")
+    md_lines.append(f"- 총 페이지: {stats.get('total_pages', 0)}")
+    md_lines.append(f"- 총 청크: {stats.get('total_chunks', 0)}")
+    md_lines.append(f"- 텍스트: {stats.get('text_chunks', 0)}")
+    md_lines.append(f"- 표: {stats.get('table_chunks', 0)}")
+    md_lines.append(f"- 차트: {stats.get('chart_chunks', 0)}")
+    md_lines.append(f"- 이미지: {stats.get('image_chunks', 0)}\n")
+    
+    chunks = data.get('chunks', [])
+    current_page = None
+    
+    for chunk in chunks:
+        page_num = chunk.get('page_num', 0)
+        if page_num != current_page:
+            current_page = page_num
+            md_lines.append(f"\n## 페이지 {page_num}\n")
+        
+        chunk_id = chunk.get('chunk_id', '')
+        content = chunk.get('content', '')
+        md_lines.append(f"### {chunk_id}\n")
+        md_lines.append(content)
+        md_lines.append("\n---\n")
+    
+    return "\n".join(md_lines)
+
+# ============================================================
+# 세션 초기화
+# ============================================================
+
 if 'vlm_service' not in st.session_state:
-    default_provider = os.getenv('DEFAULT_VLM_PROVIDER', 'claude')
-    st.session_state.vlm_service = MultiVLMService(default_provider=default_provider)
+    try:
+        default_provider = os.getenv('DEFAULT_VLM_PROVIDER', 'claude')
+        st.session_state.vlm_service = MultiVLMService(default_provider=default_provider)
+    except Exception as e:
+        st.session_state.vlm_service = None
 
 if 'pdf_processor' not in st.session_state:
-    st.session_state.pdf_processor = PDFProcessor()
-
-if 'processing_results' not in st.session_state:
-    st.session_state.processing_results = None
-
-
-# ========== 사이드바 - 프로바이더 선택 ==========
-def show_provider_selector():
-    """프로바이더 선택 UI"""
-    st.sidebar.markdown("### 🤖 VLM 모델 선택")
-    
-    vlm_service = st.session_state.vlm_service
-    
-    # 사용 가능한 프로바이더 조회
-    providers_dict = vlm_service.get_available_providers()
-    
-    # 사용 가능한 프로바이더만 필터링
-    available_providers = []
-    provider_keys = []
-    
-    for key, info in providers_dict.items():
-        if info['available']:
-            available_providers.append(info)
-            provider_keys.append(key)
-    
-    if not available_providers:
-        st.sidebar.error("⚠️ 사용 가능한 프로바이더가 없습니다!")
-        st.sidebar.info("""
-        **설정 방법:**
-        1. `.env` 파일 생성
-        2. API 키 입력
-        3. 앱 재시작
-        """)
-        return
-    
-    # 현재 프로바이더
-    current_key = vlm_service.current_provider_key
-    
-    # 현재 선택된 인덱스 찾기
     try:
-        current_index = provider_keys.index(current_key)
-    except ValueError:
-        current_index = 0
-    
-    # 프로바이더 이름 리스트
-    provider_names = [p['name'] for p in available_providers]
-    
-    # 선택 UI
-    selected_name = st.sidebar.selectbox(
-        "VLM 모델",
-        provider_names,
-        index=current_index,
-        help="문서 이미지를 분석할 AI 모델"
-    )
-    
-    # 선택된 프로바이더의 키 찾기
-    selected_index = provider_names.index(selected_name)
-    selected_key = provider_keys[selected_index]
-    selected_info = available_providers[selected_index]
-    
-    # 프로바이더 변경
-    if selected_key != current_key:
-        vlm_service.set_provider(selected_key)
-        st.sidebar.success(f"✅ {selected_info['name']}")
-        st.rerun()
-    
-    # 선택된 프로바이더 정보
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("#### 📊 모델 정보")
-    
-    with st.sidebar.expander("상세 정보", expanded=True):
-        st.markdown(f"**제공사:** {selected_info['provider']}")
-        st.markdown(f"**모델:** {selected_info['model']}")
-        st.markdown(f"**속도:** {selected_info['speed']}")
-        st.markdown(f"**품질:** {selected_info['quality']}")
-        st.markdown(f"**비용:** {selected_info['cost']}")
-    
-    # 모든 프로바이더 상태
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("#### 🔌 전체 상태")
-    
-    for key, info in providers_dict.items():
-        status = "🟢" if info['available'] else "🔴"
-        st.sidebar.caption(f"{status} {info['name']}")
+        st.session_state.pdf_processor = PDFProcessor()
+    except Exception as e:
+        st.session_state.pdf_processor = None
 
+# ============================================================
+# 메인 UI
+# ============================================================
 
-# ========== 비동기 PDF 처리 ==========
-async def process_pdf_async(pdf_bytes: bytes):
-    """PDF를 비동기로 처리"""
-    
-    vlm_service = st.session_state.vlm_service
-    processor = st.session_state.pdf_processor
-    
-    session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    logger.info(f"PDF 처리 시작: {session_id}")
-    
-    # Element 추출
-    with st.spinner("📄 PDF 페이지 추출 중..."):
-        try:
-            elements = processor.process_pdf(pdf_bytes)
-        except Exception as e:
-            logger.error(f"PDF 처리 실패: {e}", exc_info=True)
-            st.error(f"❌ PDF 처리 실패: {str(e)}")
-            return None
-    
-    if not elements:
-        st.warning("⚠️ 페이지를 찾을 수 없습니다")
-        return None
-    
-    st.success(f"✅ {len(elements)}개 페이지 추출 완료")
-    
-    # 진행 상태
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-    
-    results = []
-    total_cost = 0.0
-    total_time = 0.0
-    
-    # 각 Element 처리
-    for idx, element in enumerate(elements):
-        progress = (idx + 1) / len(elements)
-        progress_bar.progress(progress)
-        status_text.text(f"⚡ 처리 중: {idx + 1}/{len(elements)} ({int(progress * 100)}%)")
-        
-        try:
-            image_base64 = element.get('image_base64', '')
-            if not image_base64:
-                raise ValueError("이미지 데이터가 없습니다")
-            
-            ocr_text = element.get('ocr_text', '')
-            
-            # VLM 처리
-            vlm_result = await vlm_service.generate_caption(
-                image_base64=image_base64,
-                element_type='image',
-                extracted_text=ocr_text
-            )
-            
-            result = {
-                'page': element['page'],
-                'caption': vlm_result['caption'],
-                'confidence': vlm_result['confidence'],
-                'processing_time': vlm_result['processing_time'],
-                'model': vlm_result['model'],
-                'provider': vlm_result['provider'],
-                'cost_usd': vlm_result['cost_usd'],
-                'ocr_text': ocr_text,
-                'status': 'success'
-            }
-            
-            total_cost += vlm_result['cost_usd']
-            total_time += vlm_result['processing_time']
-            results.append(result)
-            
-        except Exception as e:
-            logger.error(f"페이지 {element.get('page', '?')} 처리 실패: {e}", exc_info=True)
-            results.append({
-                'page': element.get('page', 0),
-                'caption': None,
-                'error': str(e),
-                'status': 'failed'
-            })
-    
-    progress_bar.progress(1.0)
-    status_text.text("✅ 처리 완료!")
-    
-    return {
-        'session_id': session_id,
-        'total': len(elements),
-        'success': sum(1 for r in results if r['status'] == 'success'),
-        'failed': sum(1 for r in results if r['status'] == 'failed'),
-        'total_cost': total_cost,
-        'total_time': total_time,
-        'elements': results
-    }
-
-
-# ========== 메인 ==========
 def main():
-    # 헤더
-    st.markdown("""
-    <div class="main-header">
-        <h1>🔷 PRISM</h1>
-        <p>지능형 문서 이해 플랫폼</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
     # 사이드바
-    show_provider_selector()
+    with st.sidebar:
+        st.markdown('<div class="sidebar-title">PRISM</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sidebar-subtitle">Document Intelligence Platform</div>', unsafe_allow_html=True)
+        
+        st.markdown("### 모델 설정")
+        
+        if st.session_state.vlm_service is not None:
+            try:
+                vlm_service = st.session_state.vlm_service
+                
+                # 안전하게 현재 프로바이더 가져오기
+                current_provider = getattr(vlm_service, 'current_provider', None)
+                if current_provider is None:
+                    current_provider = os.getenv('DEFAULT_VLM_PROVIDER', 'claude')
+                
+                # 사용 가능한 프로바이더 목록
+                providers_status = vlm_service.get_available_providers()
+                
+                # 선택 옵션 생성
+                provider_options = []
+                provider_mapping = {}
+                
+                for key, info in providers_status.items():
+                    if isinstance(info, dict) and info.get('available', False):
+                        if key == 'claude':
+                            display_name = "Claude Sonnet 4"
+                        elif key == 'azure_openai':
+                            display_name = "Azure OpenAI GPT-4"
+                        elif key == 'local_sllm':
+                            display_name = "Ollama"
+                        else:
+                            display_name = key.replace('_', ' ').title()
+                        
+                        provider_options.append(display_name)
+                        provider_mapping[display_name] = key
+                
+                if provider_options:
+                    # 현재 선택 찾기
+                    current_display = None
+                    for display, key in provider_mapping.items():
+                        if key == current_provider:
+                            current_display = display
+                            break
+                    
+                    if current_display is None or current_display not in provider_options:
+                        current_display = provider_options[0]
+                    
+                    selected_display = st.selectbox(
+                        "VLM 모델 선택",
+                        options=provider_options,
+                        index=provider_options.index(current_display),
+                        label_visibility="collapsed"
+                    )
+                    
+                    selected_provider = provider_mapping[selected_display]
+                    
+                    if selected_provider != current_provider:
+                        vlm_service.set_provider(selected_provider)
+                    
+                    provider_info = providers_status.get(selected_provider, {})
+                    
+                    st.markdown(f"""
+                    **제공사:** {provider_info.get('provider', 'N/A')}  
+                    **모델:** {provider_info.get('model', 'N/A')}  
+                    **속도:** {provider_info.get('speed', 'N/A')}  
+                    **품질:** {provider_info.get('quality', 'N/A')}
+                    """)
+                else:
+                    st.warning("사용 가능한 모델이 없습니다.")
+                    
+                    # API 키 확인 도움말
+                    st.info("""
+                    **Claude Sonnet 4를 사용하려면:**
+                    
+                    1. `.env` 파일 생성
+                    2. 다음 내용 추가:
+                    ```
+                    ANTHROPIC_API_KEY=sk-ant-api03-your-key
+                    ```
+                    3. Streamlit 재시작
+                    
+                    **현재 상태:**
+                    - ANTHROPIC_API_KEY: {}
+                    """.format("✅ 설정됨" if os.getenv('ANTHROPIC_API_KEY') else "❌ 없음"))
+                    
+            except Exception as e:
+                st.error(f"모델 로드 오류: {str(e)}")
+        else:
+            st.error("VLM 서비스 초기화 실패")
+        
+        st.markdown("---")
+        st.markdown("### 처리 설정")
+        max_pages = st.slider(
+            "최대 페이지 수",
+            min_value=1,
+            max_value=20,
+            value=3
+        )
     
     # 메인 영역
-    col1, col2 = st.columns([2, 1])
+    if st.session_state.pdf_processor is None:
+        st.error("PDF 프로세서를 사용할 수 없습니다.")
+        return
     
-    with col1:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown("### 📁 문서 업로드")
-        
-        uploaded_file = st.file_uploader(
-            "PDF 파일을 선택하세요",
-            type=['pdf'],
-            help="분석할 PDF 문서를 업로드하세요"
-        )
-        
-        if uploaded_file:
-            st.info(f"📄 **{uploaded_file.name}** ({uploaded_file.size:,} bytes)")
-            
-            if st.button("🚀 분석 시작", type="primary"):
-                pdf_bytes = uploaded_file.read()
-                results = asyncio.run(process_pdf_async(pdf_bytes))
-                
-                if results:
-                    st.session_state.processing_results = results
-                    st.rerun()
-        
-        st.markdown('</div>', unsafe_allow_html=True)
+    uploaded_file = st.file_uploader(
+        "PDF 파일 선택",
+        type=['pdf'],
+        help="최대 200MB, PDF 형식"
+    )
     
-    with col2:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.markdown("### 💡 사용 가이드")
-        st.markdown("""
-        1. 좌측 사이드바에서 **VLM 모델** 선택
-        2. **PDF 파일** 업로드
-        3. **분석 시작** 버튼 클릭
-        4. 결과 확인 및 다운로드
+    if uploaded_file:
+        col1, col2, col3 = st.columns(3)
         
-        **권장 사항:**
-        - 파일 크기: 10MB 이하
-        - 페이지 수: 10페이지 이하
-        """)
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    # 결과 표시
-    if st.session_state.processing_results:
-        results = st.session_state.processing_results
-        
-        st.markdown("---")
-        st.markdown("## 📊 분석 결과")
-        
-        # 요약 메트릭
-        col1, col2, col3, col4, col5 = st.columns(5)
+        file_name_short = uploaded_file.name[:30] + "..." if len(uploaded_file.name) > 30 else uploaded_file.name
+        file_size_mb = uploaded_file.size / (1024 * 1024)
         
         with col1:
-            st.metric("총 페이지", results['total'])
+            st.markdown(f"""
+            <div class="stat-card">
+                <div class="stat-label">파일명</div>
+                <div style="font-size: 0.875rem; font-weight: 600; color: var(--text); margin-top: 0.5rem;">
+                    {file_name_short}
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
         
         with col2:
-            st.metric("성공", results['success'], delta=None)
+            st.markdown(f"""
+            <div class="stat-card">
+                <div class="stat-label">크기</div>
+                <div class="stat-value" style="font-size: 1.5rem;">{file_size_mb:.1f} MB</div>
+            </div>
+            """, unsafe_allow_html=True)
         
         with col3:
-            st.metric("실패", results['failed'], delta=None)
+            st.markdown(f"""
+            <div class="stat-card">
+                <div class="stat-label">최대 페이지</div>
+                <div class="stat-value" style="font-size: 1.5rem;">{max_pages}</div>
+            </div>
+            """, unsafe_allow_html=True)
         
-        with col4:
-            st.metric("처리 시간", f"{results['total_time']:.1f}초")
+        if st.button("처리 시작", use_container_width=True):
+            process_pdf(uploaded_file, max_pages)
         
-        with col5:
-            st.metric("비용", f"${results['total_cost']:.4f}")
+        if 'result_data' in st.session_state:
+            display_results(st.session_state['result_data'])
+
+def process_pdf(uploaded_file, max_pages):
+    try:
+        temp_dir = Path("temp")
+        temp_dir.mkdir(exist_ok=True)
         
-        # 상세 결과
-        st.markdown("### 📝 페이지별 결과")
+        temp_path = temp_dir / uploaded_file.name
+        with open(temp_path, 'wb') as f:
+            f.write(uploaded_file.getvalue())
         
-        for idx, elem in enumerate(results['elements']):
-            with st.expander(f"📄 페이지 {elem['page']}", expanded=(idx == 0)):
-                if elem['status'] == 'success':
-                    st.markdown(f"**🤖 AI 분석:**")
-                    st.write(elem['caption'])
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.caption(f"⭐ 신뢰도: {elem['confidence']:.2%}")
-                        st.caption(f"⏱️ 처리시간: {elem['processing_time']:.2f}초")
-                    
-                    with col2:
-                        st.caption(f"🤖 모델: {elem['provider']} - {elem['model']}")
-                        st.caption(f"💰 비용: ${elem['cost_usd']:.4f}")
-                    
-                    if elem.get('ocr_text'):
-                        with st.expander("📝 추출된 텍스트"):
-                            st.text(elem['ocr_text'][:500] + "..." if len(elem['ocr_text']) > 500 else elem['ocr_text'])
-                else:
-                    st.error(f"❌ 처리 실패: {elem.get('error', '알 수 없는 오류')}")
+        progress_bar = st.progress(0)
+        status = st.empty()
         
-        # 다운로드
-        st.markdown("---")
-        st.markdown("### 💾 결과 다운로드")
+        status.info("PDF 분석 중...")
+        progress_bar.progress(30)
         
-        import json
-        results_json = json.dumps({
-            'session_id': results['session_id'],
-            'provider': st.session_state.vlm_service.get_current_provider().get_name(),
-            'total': results['total'],
-            'success': results['success'],
-            'failed': results['failed'],
-            'total_time': results['total_time'],
-            'total_cost': results['total_cost'],
-            'elements': results['elements']
-        }, indent=2, ensure_ascii=False)
+        processor = st.session_state.pdf_processor
         
-        st.download_button(
-            label="📥 JSON 다운로드",
-            data=results_json,
-            file_name=f"prism_results_{results['session_id']}.json",
-            mime="application/json"
+        # max_pages 파라미터 안전 처리
+        import inspect
+        sig = inspect.signature(processor.process_pdf)
+        
+        if 'max_pages' in sig.parameters:
+            # max_pages를 지원하는 경우
+            result = processor.process_pdf(str(temp_path), max_pages=max_pages)
+        else:
+            # max_pages를 지원하지 않는 경우 (기본 처리)
+            st.warning(f"PDFProcessor가 max_pages를 지원하지 않습니다. 전체 페이지를 처리합니다.")
+            result = processor.process_pdf(str(temp_path))
+        
+        status.info("청킹 완료, 처리 중...")
+        progress_bar.progress(70)
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        result_dir = Path("results")
+        result_dir.mkdir(exist_ok=True)
+        
+        json_path = result_dir / f"result_{timestamp}.json"
+        md_path = result_dir / f"result_{timestamp}.md"
+        
+        save_json_utf8(result, json_path)
+        
+        md_content = convert_to_markdown(result)
+        with open(md_path, 'w', encoding='utf-8') as f:
+            f.write(md_content)
+        
+        progress_bar.progress(100)
+        status.success("처리 완료!")
+        
+        st.session_state['result_data'] = result
+        st.session_state['pdf_path'] = str(temp_path)
+        st.session_state['json_path'] = str(json_path)
+        st.session_state['md_path'] = str(md_path)
+        
+        st.rerun()
+        
+    except Exception as e:
+        st.error(f"처리 오류: {str(e)}")
+        import traceback
+        with st.expander("상세 오류 정보"):
+            st.code(traceback.format_exc())
+
+def display_results(data):
+    st.markdown("## 처리 결과")
+    
+    stats = data.get('statistics', {})
+    
+    cols = st.columns(6)
+    stats_data = [
+        ("페이지", stats.get('total_pages', 0)),
+        ("총 청크", stats.get('total_chunks', 0)),
+        ("텍스트", stats.get('text_chunks', 0)),
+        ("표", stats.get('table_chunks', 0)),
+        ("차트", stats.get('chart_chunks', 0)),
+        ("이미지", stats.get('image_chunks', 0))
+    ]
+    
+    for col, (label, value) in zip(cols, stats_data):
+        with col:
+            st.markdown(f"""
+            <div class="stat-card">
+                <div class="stat-label">{label}</div>
+                <div class="stat-value">{value}</div>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if 'json_path' in st.session_state:
+            with open(st.session_state['json_path'], 'r', encoding='utf-8') as f:
+                st.download_button(
+                    label="JSON 다운로드",
+                    data=f.read(),
+                    file_name=Path(st.session_state['json_path']).name,
+                    mime="application/json",
+                    use_container_width=True
+                )
+    
+    with col2:
+        if 'md_path' in st.session_state:
+            with open(st.session_state['md_path'], 'r', encoding='utf-8') as f:
+                st.download_button(
+                    label="Markdown 다운로드",
+                    data=f.read(),
+                    file_name=Path(st.session_state['md_path']).name,
+                    mime="text/markdown",
+                    use_container_width=True
+                )
+    
+    total_pages = stats.get('total_pages', 1)
+    
+    if 'current_page' not in st.session_state:
+        st.session_state['current_page'] = 1
+    
+    st.markdown("---")
+    st.markdown("## 상세 결과")
+    
+    col1, col2, col3 = st.columns([1, 3, 1])
+    
+    with col1:
+        if st.button("← 이전", disabled=st.session_state['current_page'] <= 1):
+            st.session_state['current_page'] -= 1
+            st.rerun()
+    
+    with col2:
+        page_num = st.select_slider(
+            "페이지",
+            options=list(range(1, total_pages + 1)),
+            value=st.session_state['current_page'],
+            label_visibility="collapsed"
         )
+        if page_num != st.session_state['current_page']:
+            st.session_state['current_page'] = page_num
+            st.rerun()
+    
+    with col3:
+        if st.button("다음 →", disabled=st.session_state['current_page'] >= total_pages):
+            st.session_state['current_page'] += 1
+            st.rerun()
+    
+    col_left, col_right = st.columns(2)
+    
+    with col_left:
+        st.markdown('<div class="panel"><div class="panel-header">원본 PDF</div></div>', unsafe_allow_html=True)
+        if 'pdf_path' in st.session_state:
+            render_pdf_page(st.session_state['pdf_path'], st.session_state['current_page'])
+    
+    with col_right:
+        st.markdown('<div class="panel"><div class="panel-header">추출 결과</div></div>', unsafe_allow_html=True)
+        display_chunks(data, st.session_state['current_page'])
 
+def render_pdf_page(pdf_path, page_num):
+    try:
+        from pdf2image import convert_from_path
+        from PIL import Image
+        
+        images = convert_from_path(pdf_path, first_page=page_num, last_page=page_num, dpi=150)
+        
+        if images:
+            img = images[0]
+            max_width = 700
+            if img.width > max_width:
+                ratio = max_width / img.width
+                new_height = int(img.height * ratio)
+                img = img.resize((max_width, new_height), Image.Resampling.LANCZOS)
+            st.image(img, use_column_width=True)
+        else:
+            st.warning("페이지를 표시할 수 없습니다.")
+    except Exception as e:
+        st.error(f"렌더링 오류: {str(e)}")
 
-# ========== 실행 ==========
+def display_chunks(data, page_num):
+    chunks = [c for c in data.get('chunks', []) if c.get('page_num') == page_num]
+    
+    if not chunks:
+        st.info("이 페이지에는 추출된 청크가 없습니다.")
+        return
+    
+    for chunk in chunks:
+        chunk_id = chunk.get('chunk_id', '')
+        chunk_type = chunk.get('type', 'text')
+        content = chunk.get('content', '')
+        type_class = f"type-{chunk_type}"
+        
+        st.markdown(f"""
+        <div class="chunk-item">
+            <div class="chunk-header">
+                <span class="chunk-id">{chunk_id}</span>
+                <span class="chunk-type {type_class}">{chunk_type}</span>
+            </div>
+            <div class="chunk-content">{content}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
 if __name__ == "__main__":
     main()
