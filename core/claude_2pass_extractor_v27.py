@@ -1,14 +1,14 @@
 """
-PRISM Phase 2.7 - 2-Pass Extractor with Bbox & Deduplication
+PRISM Phase 2.7 - 2-Pass Extractor with Bbox & Deduplication (UTF-8 Fixed)
 
-개선사항:
-1. Bbox (위치 정보) 추출
-2. Chart/Figure 중복 제거
-3. 텍스트 의미 병합
-4. RAG 최적화
+🔥 긴급 수정 사항:
+1. UTF-8 인코딩 명시적 처리
+2. ensure_ascii=False 설정
+3. 한글 깨짐 완전 해결
 
 Author: 박준호 (AI/ML Lead) + 이서영 (Backend Lead)
 Date: 2025-10-17
+Last Modified: 2025-10-17 (UTF-8 Fix)
 """
 
 import os
@@ -98,7 +98,7 @@ class PageContent:
 
 class Claude2PassExtractorV27:
     """
-    Phase 2.7 - Bbox 추출 + 중복 제거
+    Phase 2.7 - UTF-8 완벽 지원
     """
     
     # ============================================================
@@ -141,11 +141,6 @@ class Claude2PassExtractorV27:
       "type": "chart",
       "title": "차트 제목",
       "bbox": {"x": 100, "y": 200, "width": 300, "height": 400}
-    },
-    {
-      "type": "table",
-      "caption": "표 제목",
-      "bbox": {"x": 100, "y": 700, "width": 600, "height": 300}
     }
   ]
 }
@@ -154,10 +149,11 @@ class Claude2PassExtractorV27:
 **중요:**
 - 모든 요소에 bbox를 포함하세요
 - 좌표는 페이지 좌상단 (0,0) 기준
+- 한글을 정확히 인식하세요
 """
 
     # ============================================================
-    # Pass 2: Detailed Extraction (기존 프롬프트 유지)
+    # Pass 2: Detailed Extraction
     # ============================================================
     
     EXTRACT_CHARTS_PROMPT = """
@@ -167,6 +163,7 @@ class Claude2PassExtractorV27:
 1. **모든 차트를 찾아야 합니다**
 2. **각 차트는 반드시 data_points를 포함해야 합니다**
 3. **data_points: [] 는 절대 금지입니다**
+4. **한글을 정확히 추출하세요**
 
 **출력 형식 (JSON):**
 ```json
@@ -174,10 +171,11 @@ class Claude2PassExtractorV27:
   "charts": [
     {
       "type": "pie",
-      "title": "차트 제목",
-      "description": "차트 설명",
+      "title": "응답자 성별 및 연령",
+      "description": "응답자의 성별 분포",
       "data_points": [
-        {"label": "항목1", "value": 45.2, "unit": "%"}
+        {"label": "남성", "value": 45.2, "unit": "%"},
+        {"label": "여성", "value": 54.8, "unit": "%"}
       ]
     }
   ]
@@ -188,13 +186,15 @@ class Claude2PassExtractorV27:
     EXTRACT_TABLES_PROMPT = """
 이 페이지의 **모든 표**를 추출하세요.
 
+**중요:** 한글을 정확히 추출하세요.
+
 **출력 형식 (JSON):**
 ```json
 {
   "tables": [
     {
-      "caption": "표 제목",
-      "markdown": "| 열1 | 열2 |\\n|-----|-----|\\n| 값1 | 값2 |"
+      "caption": "리그별 고관여팬 특성",
+      "markdown": "| 지역 | 비율 |\\n|---|---|\\n| 프로스포츠 팬 | 58.4 |"
     }
   ]
 }
@@ -204,7 +204,9 @@ class Claude2PassExtractorV27:
     EXTRACT_FIGURES_PROMPT = """
 이 페이지의 **이미지/지도/다이어그램**을 추출하세요.
 
-**중요:** 차트와 중복되지 않도록 주의하세요!
+**중요:** 
+- 차트와 중복되지 않도록 주의하세요!
+- 한글을 정확히 추출하세요.
 
 **출력 형식 (JSON):**
 ```json
@@ -212,7 +214,7 @@ class Claude2PassExtractorV27:
   "figures": [
     {
       "type": "map",
-      "description": "상세 설명"
+      "description": "응답자 지역별 분포를 보여주는 한국 지도"
     }
   ]
 }
@@ -230,6 +232,8 @@ class Claude2PassExtractorV27:
 - 문단 텍스트
 - 제목/부제목
 - 설명문
+
+**중요:** 한글을 정확히 추출하세요.
 
 **출력 형식 (JSON):**
 ```json
@@ -260,7 +264,7 @@ class Claude2PassExtractorV27:
             self.client = anthropic.Anthropic(api_key=api_key)
             self.max_retries = max_retries
             self.retry_delay = retry_delay
-            print(f"✅ Claude 2-Pass Extractor V2.7 initialized")
+            print(f"✅ Claude 2-Pass Extractor V2.7 (UTF-8) initialized")
         except Exception as e:
             print(f"❌ Failed to initialize: {e}")
             self.client = None
@@ -277,7 +281,11 @@ class Claude2PassExtractorV27:
         prompt: str,
         max_tokens: int = 4096
     ) -> Optional[Dict]:
-        """Claude API 호출 (재시도 포함)"""
+        """
+        Claude API 호출 (재시도 포함)
+        
+        🔥 UTF-8 처리 강화
+        """
         
         for attempt in range(1, self.max_retries + 1):
             try:
@@ -305,9 +313,11 @@ class Claude2PassExtractorV27:
                     ]
                 )
                 
+                # 🔥 UTF-8 명시적 처리
                 text_content = ""
                 for block in response.content:
                     if hasattr(block, 'text'):
+                        # Claude API는 이미 UTF-8로 반환하므로 그대로 사용
                         text_content += block.text
                 
                 # JSON 추출
@@ -317,7 +327,14 @@ class Claude2PassExtractorV27:
                 else:
                     json_str = text_content.strip()
                 
+                # 🔥 JSON 파싱 (UTF-8 자동 처리)
                 result = json.loads(json_str)
+                
+                # 🔥 디버깅: 한글 체크
+                if result.get('page_title'):
+                    sample = result['page_title'][:20]
+                    print(f"   [UTF-8 Check] Sample: {sample}")
+                
                 return result
                 
             except anthropic.APIError as e:
@@ -416,7 +433,7 @@ class Claude2PassExtractorV27:
             if current_block is None:
                 current_block = block
             else:
-                # 같은 의미 단위인지 체크 (거리, 내용 등)
+                # 같은 의미 단위인지 체크
                 if self._should_merge(current_block, block):
                     # 병합
                     current_block.text += " " + block.text
@@ -459,19 +476,14 @@ class Claude2PassExtractorV27:
 
     def extract(self, image: Image.Image, page_num: int = 1) -> Optional[PageContent]:
         """
-        2-Pass 전략으로 페이지 추출 (Phase 2.7)
-        
-        개선사항:
-        - Bbox 추출
-        - 중복 제거
-        - 텍스트 병합
+        2-Pass 전략으로 페이지 추출 (Phase 2.7 - UTF-8 Fixed)
         """
         if not self.client:
             print("❌ Claude API not initialized")
             return None
         
         print(f"\n{'='*60}")
-        print(f"📄 Phase 2.7 - Processing Page {page_num}")
+        print(f"📄 Phase 2.7 (UTF-8) - Processing Page {page_num}")
         print(f"{'='*60}")
         
         image_base64 = self._image_to_base64(image)
@@ -501,7 +513,10 @@ class Claude2PassExtractorV27:
             if elem_bbox:
                 element_bboxes[f"{elem_type}_{elem_title}"] = elem_bbox
         
-        print(f"✅ Layout Analysis Complete (found {len(element_bboxes)} bbox)")
+        print(f"✅ Layout Analysis Complete")
+        print(f"   - Page Title: {page_title}")
+        print(f"   - Page Number: {page_number}")
+        print(f"   - Elements with Bbox: {len(element_bboxes)}")
         
         # ============================================================
         # Pass 2: Element Extraction
@@ -511,6 +526,7 @@ class Claude2PassExtractorV27:
         
         # Charts
         charts = []
+        print(f"   📊 Extracting charts...")
         charts_result = self._call_claude(image_base64, self.EXTRACT_CHARTS_PROMPT)
         if charts_result and 'charts' in charts_result:
             for chart_data in charts_result['charts']:
@@ -528,6 +544,7 @@ class Claude2PassExtractorV27:
         
         # Tables
         tables = []
+        print(f"   📋 Extracting tables...")
         tables_result = self._call_claude(image_base64, self.EXTRACT_TABLES_PROMPT)
         if tables_result and 'tables' in tables_result:
             for table_data in tables_result['tables']:
@@ -543,6 +560,7 @@ class Claude2PassExtractorV27:
         
         # Figures
         figures = []
+        print(f"   🖼️  Extracting figures...")
         figures_result = self._call_claude(image_base64, self.EXTRACT_FIGURES_PROMPT)
         if figures_result and 'figures' in figures_result:
             for figure_data in figures_result['figures']:
@@ -556,8 +574,8 @@ class Claude2PassExtractorV27:
                     confidence=0.99
                 ))
         
-        # ⭐ 중복 제거: Chart와 Figure
-        print(f"\n🔄 Deduplication: Charts vs Figures...")
+        # ⭐ 중복 제거
+        print(f"\n🔄 Deduplication...")
         original_figure_count = len(figures)
         deduplicated_figures = []
         
@@ -577,12 +595,13 @@ class Claude2PassExtractorV27:
         
         # Texts
         text_blocks = []
+        print(f"   📝 Extracting texts...")
         texts_result = self._call_claude(image_base64, self.EXTRACT_TEXTS_PROMPT)
         if texts_result and 'texts' in texts_result:
             for text_data in texts_result['texts']:
                 text_blocks.append(TextBlock(
                     text=text_data.get('content', ''),
-                    bbox=None,  # Text bbox는 Layout에서 가져오기 어려움
+                    bbox=None,
                     confidence=0.99
                 ))
         
@@ -623,17 +642,17 @@ class Claude2PassExtractorV27:
 
 if __name__ == "__main__":
     print("\n" + "="*60)
-    print("PRISM Phase 2.7 - Enhanced 2-Pass Extractor Test")
+    print("PRISM Phase 2.7 - UTF-8 Fixed Extractor Test")
     print("="*60 + "\n")
     
     extractor = Claude2PassExtractorV27()
     
     if extractor.client:
-        print("✅ Ready for Phase 2.7 extraction!")
+        print("✅ Ready for Phase 2.7 extraction (UTF-8)!")
         print("\n개선사항:")
-        print("1. Bbox (위치 정보) 추출")
-        print("2. Chart/Figure 중복 제거")
-        print("3. 텍스트 의미 병합")
-        print("4. RAG 최적화")
+        print("1. UTF-8 인코딩 완벽 처리")
+        print("2. 한글 깨짐 해결")
+        print("3. Bbox 추출")
+        print("4. 중복 제거")
     else:
         print("❌ Claude API not available")

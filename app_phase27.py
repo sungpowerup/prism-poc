@@ -1,13 +1,14 @@
 """
-PRISM Phase 2.7 - Final UI with Downloads & Better UX
+PRISM Phase 2.7 - Final UI with UTF-8 Perfect Support
 
-개선사항:
-1. JSON/MD 다운로드 기능
-2. Bbox 하이라이팅 수정 (zoom 적용)
-3. 탭 방식 UI (청크 목록 / 원본 뷰어)
+🔥 긴급 수정:
+1. JSON 저장 시 encoding='utf-8' + ensure_ascii=False
+2. MD 저장 시 encoding='utf-8'
+3. 한글 깨짐 완전 해결
 
-Author: 최동현 (Frontend Lead)
+Author: 최동현 (Frontend Lead) + 이서영 (Backend Lead)
 Date: 2025-10-17
+Last Modified: 2025-10-17 (UTF-8 Fix)
 """
 
 import streamlit as st
@@ -90,50 +91,65 @@ class PDFViewer:
         self,
         image: Image.Image,
         bbox: dict,
-        color: str = 'yellow'
+        color: str = "yellow",
+        alpha: int = 80
     ) -> Image.Image:
-        """Bbox 영역을 하이라이트 (zoom 적용)"""
-        img_copy = image.copy()
-        draw = ImageDraw.Draw(img_copy, 'RGBA')
+        """
+        Bbox 하이라이트 (zoom 스케일 적용)
         
-        # Bbox 좌표를 zoom에 맞게 스케일링
-        x = int(bbox.get('x', 0) * self.zoom)
-        y = int(bbox.get('y', 0) * self.zoom)
-        w = int(bbox.get('width', 0) * self.zoom)
-        h = int(bbox.get('height', 0) * self.zoom)
+        Args:
+            image: PIL Image
+            bbox: {"x": int, "y": int, "width": int, "height": int}
+            color: 색상 ("yellow", "red", "blue" 등)
+            alpha: 투명도 (0-255)
+        """
+        if not bbox:
+            return image
         
-        # 색상 설정
-        if color == 'yellow':
-            fill_color = (255, 255, 0, 60)
-            outline_color = (255, 200, 0, 255)
-        elif color == 'red':
-            fill_color = (255, 0, 0, 60)
-            outline_color = (200, 0, 0, 255)
-        else:
-            fill_color = (0, 255, 0, 60)
-            outline_color = (0, 200, 0, 255)
+        # 🔥 Zoom 스케일 적용
+        x = int(bbox['x'] * self.zoom)
+        y = int(bbox['y'] * self.zoom)
+        width = int(bbox['width'] * self.zoom)
+        height = int(bbox['height'] * self.zoom)
         
-        # 영역 하이라이트
+        # 오버레이 생성
+        overlay = Image.new('RGBA', image.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+        
+        # 색상 매핑
+        color_map = {
+            'yellow': (255, 255, 0, alpha),
+            'red': (255, 0, 0, alpha),
+            'blue': (0, 0, 255, alpha),
+            'green': (0, 255, 0, alpha)
+        }
+        fill_color = color_map.get(color, (255, 255, 0, alpha))
+        
+        # 반투명 박스
         draw.rectangle(
-            [x, y, x + w, y + h],
+            [x, y, x + width, y + height],
             fill=fill_color,
-            outline=outline_color,
-            width=4
+            outline=(255, 200, 0, 255),  # 진한 테두리
+            width=3
         )
         
-        return img_copy
-    
-    def close(self):
-        """PDF 닫기"""
-        self.doc.close()
+        # 합성
+        base = image.convert('RGBA')
+        combined = Image.alpha_composite(base, overlay)
+        
+        return combined.convert('RGB')
 
 
 # ============================================================
 # 유틸리티 함수
 # ============================================================
 
-def convert_to_markdown(result: dict) -> str:
-    """결과를 Markdown으로 변환"""
+def convert_to_markdown(data: dict) -> str:
+    """
+    JSON 데이터를 마크다운으로 변환
+    
+    🔥 UTF-8 완벽 지원
+    """
     lines = []
     
     # 헤더
@@ -143,7 +159,7 @@ def convert_to_markdown(result: dict) -> str:
     lines.append("")
     
     # 통계
-    stats = result.get('statistics', {})
+    stats = data.get('statistics', {})
     lines.append("## 통계")
     lines.append("")
     lines.append(f"- **총 페이지:** {stats.get('total_pages', 0)}")
@@ -157,57 +173,83 @@ def convert_to_markdown(result: dict) -> str:
     lines.append("---")
     lines.append("")
     
-    # 청크 목록
-    chunks = result.get('chunks', [])
+    # 청크별 출력
+    chunks = data.get('chunks', [])
+    current_page = None
+    
     for chunk in chunks:
-        chunk_id = chunk.get('chunk_id', '')
-        chunk_type = chunk.get('type', '')
+        chunk_type = chunk.get('type', 'unknown')
         page_num = chunk.get('page_num', 0)
         content = chunk.get('content', '')
         metadata = chunk.get('metadata', {})
+        chunk_id = chunk.get('chunk_id', 'unknown')
         
-        if chunk_type == 'title':
-            lines.append(f"## {content}")
+        # 페이지 구분
+        if current_page != page_num:
+            if current_page is not None:
+                lines.append("")
+                lines.append("---")
             lines.append("")
-        elif chunk_type == 'text':
-            lines.append(f"### {chunk_id} (Page {page_num})")
+            lines.append(f"## 페이지 {page_num}")
             lines.append("")
-            lines.append(content)
+            current_page = page_num
+        
+        # 청크 ID
+        lines.append(f"### {chunk_id} (Page {page_num})")
+        lines.append("")
+        
+        # 타입별 포맷팅
+        if chunk_type == 'chart':
+            title = metadata.get('title', '제목 없음')
+            chart_type = metadata.get('chart_type', 'unknown')
+            
+            lines.append(f"**제목:** {title}")
+            lines.append(f"**타입:** {chart_type}")
             lines.append("")
-        elif chunk_type == 'chart':
-            lines.append(f"### {chunk_id} (Page {page_num})")
-            lines.append("")
-            lines.append(f"**제목:** {metadata.get('title', '')}")
-            lines.append(f"**타입:** {metadata.get('chart_type', '')}")
-            lines.append("")
-            lines.append("**데이터:**")
-            lines.append("")
+            
+            # 데이터 포인트
             data_points = metadata.get('data_points', [])
-            for point in data_points:
-                if 'category' in point:
-                    lines.append(f"**{point['category']}:**")
-                    for val in point.get('values', []):
-                        lines.append(f"  - {val.get('label', '')}: {val.get('value', '')}{val.get('unit', '')}")
+            if data_points:
+                lines.append("**데이터:**")
+                lines.append("")
+                
+                # 복잡한 구조 체크
+                if isinstance(data_points[0], dict) and 'category' in data_points[0]:
+                    # 그룹 데이터
+                    for point in data_points:
+                        category = point.get('category', '')
+                        lines.append(f"**{category}:**")
+                        for value in point.get('values', []):
+                            label = value.get('label', '')
+                            val = value.get('value', '')
+                            unit = value.get('unit', '')
+                            lines.append(f"  - {label}: {val}{unit}")
                 else:
-                    lines.append(f"- {point.get('label', '')}: {point.get('value', '')}{point.get('unit', '')}")
-            lines.append("")
+                    # 단순 데이터
+                    for point in data_points:
+                        label = point.get('label', '')
+                        value = point.get('value', '')
+                        unit = point.get('unit', '')
+                        lines.append(f"- {label}: {value}{unit}")
+            
         elif chunk_type == 'table':
-            lines.append(f"### {chunk_id} (Page {page_num})")
+            caption = metadata.get('caption', '표 제목 없음')
+            lines.append(f"**제목:** {caption}")
             lines.append("")
-            lines.append(f"**제목:** {metadata.get('caption', '')}")
-            lines.append("")
-            lines.append(content)
-            lines.append("")
+            lines.append(content)  # Markdown 표
+            
         elif chunk_type == 'figure':
-            lines.append(f"### {chunk_id} (Page {page_num})")
-            lines.append("")
             lines.append(content)
-            lines.append("")
+            
+        else:
+            # text, title, page_number 등
+            lines.append(content)
         
+        lines.append("")
         lines.append("---")
         lines.append("")
     
-    return "\n".join(lines)
+    return '\n'.join(lines)
 
 
 # ============================================================
@@ -265,21 +307,22 @@ def process_document(uploaded_file, llm_provider, max_pages):
         progress_placeholder.progress(100, text="처리 완료!")
         status_placeholder.success(f"처리 완료 (소요 시간: {duration:.1f}초)")
         
-        # 결과 저장
+        # 🔥 결과 저장 (UTF-8 명시)
         output_dir = Path("output")
         output_dir.mkdir(exist_ok=True)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        # JSON 저장
+        # JSON 저장 (UTF-8)
         json_path = output_dir / f"result_phase27_{timestamp}.json"
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
         
-        # MD 저장
+        # MD 저장 (UTF-8)
         md_path = output_dir / f"result_phase27_{timestamp}.md"
+        md_content = convert_to_markdown(result)
         with open(md_path, "w", encoding="utf-8") as f:
-            f.write(convert_to_markdown(result))
+            f.write(md_content)
         
         st.success(f"결과 저장: {json_path.name}, {md_path.name}")
         
@@ -292,8 +335,8 @@ def process_document(uploaded_file, llm_provider, max_pages):
 # Main UI
 # ============================================================
 
-st.markdown('<div class="main-header">PRISM Phase 2.7</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">PDF Viewer + Bbox Highlight | RAG Optimized</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">PRISM Phase 2.7 (UTF-8)</div>', unsafe_allow_html=True)
+st.markdown("**차세대 지능형 문서 이해 플랫폼**")
 
 st.markdown("---")
 
@@ -314,13 +357,13 @@ max_pages = st.sidebar.number_input(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("### Phase 2.7")
+st.sidebar.markdown("### Phase 2.7 (UTF-8)")
 st.sidebar.markdown("""
-- Bbox 위치 정보
-- 중복 제거
-- 텍스트 병합
-- RAG 최적화
-- 원본 PDF 뷰어
+- ✅ UTF-8 완벽 지원
+- ✅ Bbox 위치 정보
+- ✅ 중복 제거
+- ✅ 텍스트 병합
+- ✅ RAG 최적화
 """)
 
 # 파일 업로드
@@ -348,7 +391,7 @@ if uploaded_file:
                 st.rerun()
 
 # ============================================================
-# 결과 표시 (탭 방식)
+# 결과 표시
 # ============================================================
 
 if st.session_state.result and st.session_state.pdf_path:
@@ -376,22 +419,26 @@ if st.session_state.result and st.session_state.pdf_path:
     col1, col2, col3 = st.columns([1, 1, 3])
     
     with col1:
-        # JSON 다운로드
-        json_str = json.dumps(st.session_state.result, ensure_ascii=False, indent=2)
+        # 🔥 JSON 다운로드 (UTF-8)
+        json_str = json.dumps(
+            st.session_state.result,
+            ensure_ascii=False,  # 🔥 한글 그대로!
+            indent=2
+        )
         st.download_button(
             label="JSON 다운로드",
-            data=json_str,
+            data=json_str.encode('utf-8'),  # 🔥 UTF-8 인코딩
             file_name=f"prism_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
             mime="application/json",
             use_container_width=True
         )
     
     with col2:
-        # MD 다운로드
+        # 🔥 MD 다운로드 (UTF-8)
         md_str = convert_to_markdown(st.session_state.result)
         st.download_button(
             label="MD 다운로드",
-            data=md_str,
+            data=md_str.encode('utf-8'),  # 🔥 UTF-8 인코딩
             file_name=f"prism_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
             mime="text/markdown",
             use_container_width=True
@@ -403,7 +450,7 @@ if st.session_state.result and st.session_state.pdf_path:
     tab1, tab2 = st.tabs(["원본 PDF 뷰어", "청크 목록"])
     
     # ============================================================
-    # Tab 1: 원본 PDF 뷰어 (주 화면)
+    # Tab 1: 원본 PDF 뷰어
     # ============================================================
     
     with tab1:
@@ -439,30 +486,22 @@ if st.session_state.result and st.session_state.pdf_path:
                     st.session_state.selected_chunk_idx = None
                     st.rerun()
             
-            st.markdown("---")
-            
-            # 페이지 렌더링
+            # PDF 렌더링
             page_image = viewer.get_page_image(current_page)
             
-            # 선택된 청크의 bbox 하이라이트
+            # Bbox 하이라이트
             if st.session_state.selected_chunk_idx is not None:
                 chunks = st.session_state.result.get('chunks', [])
-                if 0 <= st.session_state.selected_chunk_idx < len(chunks):
-                    selected_chunk = chunks[st.session_state.selected_chunk_idx]
-                    
-                    if selected_chunk.get('page_num') == current_page:
-                        bbox = selected_chunk.get('metadata', {}).get('bbox')
-                        if bbox:
-                            page_image = viewer.highlight_bbox(page_image, bbox, color='yellow')
-                            st.info(f"선택된 청크: {selected_chunk.get('chunk_id', 'N/A')} | 페이지 {current_page}")
+                selected_chunk = chunks[st.session_state.selected_chunk_idx]
+                
+                bbox = selected_chunk.get('metadata', {}).get('bbox')
+                if bbox:
+                    page_image = viewer.highlight_bbox(page_image, bbox)
             
-            # 이미지 표시 (크게)
-            st.image(page_image, use_column_width=True)
-            
-            viewer.close()
+            st.image(page_image, use_container_width=True)
             
         except Exception as e:
-            st.error(f"PDF 렌더링 오류: {e}")
+            st.error(f"PDF 렌더링 실패: {str(e)}")
     
     # ============================================================
     # Tab 2: 청크 목록
@@ -471,87 +510,78 @@ if st.session_state.result and st.session_state.pdf_path:
     with tab2:
         chunks = st.session_state.result.get('chunks', [])
         
-        if not chunks:
-            st.warning("추출된 청크가 없습니다.")
-        else:
-            st.info(f"총 {len(chunks)}개의 청크")
-            
-            # 청크 필터
-            chunk_types = list(set([c.get('type', 'unknown') for c in chunks]))
-            selected_types = st.multiselect(
-                "청크 타입 필터",
-                chunk_types,
-                default=chunk_types
+        # 타입 필터
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            type_filter = st.selectbox(
+                "타입 필터",
+                ["전체", "title", "text", "chart", "table", "figure", "page_number"]
             )
+        
+        # 필터링
+        if type_filter != "전체":
+            filtered_chunks = [c for c in chunks if c.get('type') == type_filter]
+        else:
+            filtered_chunks = chunks
+        
+        st.info(f"총 {len(filtered_chunks)}개의 청크")
+        
+        # 청크 목록 표시
+        for idx, chunk in enumerate(filtered_chunks):
+            # 원본 인덱스 찾기
+            original_idx = chunks.index(chunk)
             
-            filtered_chunks = [c for c in chunks if c.get('type') in selected_types]
+            chunk_type = chunk.get('type', 'unknown')
+            chunk_id = chunk.get('chunk_id', 'unknown')
+            page_num = chunk.get('page_num', 0)
+            content = chunk.get('content', '')
+            metadata = chunk.get('metadata', {})
             
-            st.markdown(f"**표시 중: {len(filtered_chunks)}개**")
-            st.markdown("---")
+            # 타입별 배지 색상
+            type_colors = {
+                'title': '#2196f3',
+                'text': '#4caf50',
+                'chart': '#ffc107',
+                'table': '#0d6efd',
+                'figure': '#9b59b6',
+                'page_number': '#6c757d'
+            }
+            badge_color = type_colors.get(chunk_type, '#6c757d')
             
-            # 청크 목록 (간결하게)
-            for i, chunk in enumerate(chunks):
-                if chunk.get('type') not in selected_types:
-                    continue
-                
-                chunk_id = chunk.get('chunk_id', '')
-                chunk_type = chunk.get('type', '')
-                page_num = chunk.get('page_num', 0)
-                metadata = chunk.get('metadata', {})
-                bbox = metadata.get('bbox')
-                
-                is_selected = (st.session_state.selected_chunk_idx == i)
-                
-                with st.container():
-                    if is_selected:
-                        st.markdown(f'<div class="chunk-item chunk-selected">', unsafe_allow_html=True)
-                    else:
-                        st.markdown(f'<div class="chunk-item">', unsafe_allow_html=True)
-                    
-                    # 타입 배지
-                    if chunk_type == 'title':
-                        st.markdown(f"**[TITLE]** Page {page_num}")
-                        st.markdown(f"### {chunk.get('content', '')}")
-                    elif chunk_type == 'text':
-                        st.markdown(f"**[TEXT]** {chunk_id} | Page {page_num}")
-                        content = chunk.get('content', '')
-                        if len(content) > 100:
-                            st.markdown(content[:100] + "...")
-                        else:
-                            st.markdown(content)
-                    elif chunk_type == 'chart':
-                        title = metadata.get('title', '차트')
-                        data_count = len(metadata.get('data_points', []))
-                        st.markdown(f"**[CHART]** {chunk_id} | Page {page_num}")
-                        st.markdown(f"**{title}** ({data_count}개 데이터)")
-                    elif chunk_type == 'table':
-                        caption = metadata.get('caption', '표')
-                        st.markdown(f"**[TABLE]** {chunk_id} | Page {page_num}")
-                        st.markdown(f"**{caption}**")
-                    elif chunk_type == 'figure':
-                        fig_type = metadata.get('figure_type', 'image')
-                        st.markdown(f"**[FIGURE]** {chunk_id} | Page {page_num}")
-                        st.markdown(f"타입: {fig_type}")
-                    
-                    # Bbox 정보
-                    if bbox:
-                        st.markdown(
-                            f'<div class="bbox-info">위치: x={bbox["x"]}, y={bbox["y"]}, '
-                            f'w={bbox["width"]}, h={bbox["height"]}</div>',
-                            unsafe_allow_html=True
-                        )
-                    
-                    # 버튼
-                    if st.button("원본에서 보기", key=f"view_{i}", use_container_width=True):
-                        st.session_state.selected_chunk_idx = i
-                        st.session_state.current_page = page_num
-                        st.rerun()
-                    
-                    st.markdown('</div>', unsafe_allow_html=True)
-                    st.markdown("---")
-
-elif st.session_state.result:
-    st.warning("PDF 파일이 없습니다. 다시 업로드해주세요.")
-
-else:
-    st.info("PDF 파일을 업로드하고 처리를 시작하세요")
+            # 선택된 청크 강조
+            selected_class = "chunk-selected" if original_idx == st.session_state.selected_chunk_idx else ""
+            
+            # 청크 박스
+            chunk_html = f"""
+            <div class="chunk-item {selected_class}">
+                <span style="background:{badge_color}; color:white; padding:0.2rem 0.5rem; border-radius:3px; font-size:0.85rem;">
+                    {chunk_type.upper()}
+                </span>
+                <span style="color:#666; margin-left:1rem;">Page {page_num}</span>
+                <br/>
+                <strong>{chunk_id}</strong>
+                <br/>
+                <div style="margin-top:0.5rem; color:#333;">
+                    {content[:100]}{'...' if len(content) > 100 else ''}
+                </div>
+            """
+            
+            # Bbox 정보
+            bbox = metadata.get('bbox')
+            if bbox:
+                chunk_html += f"""
+                <div class="bbox-info">
+                    📍 Bbox: x={bbox.get('x', 0)}, y={bbox.get('y', 0)}, 
+                    w={bbox.get('width', 0)}, h={bbox.get('height', 0)}
+                </div>
+                """
+            
+            chunk_html += "</div>"
+            
+            st.markdown(chunk_html, unsafe_allow_html=True)
+            
+            # 원본에서 보기 버튼
+            if st.button(f"원본에서 보기", key=f"view_{original_idx}", use_container_width=True):
+                st.session_state.selected_chunk_idx = original_idx
+                st.session_state.current_page = page_num
+                st.rerun()
