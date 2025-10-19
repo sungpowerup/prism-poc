@@ -1,58 +1,29 @@
-# ========================================
-# PRISM POC - 의존성 패키지
-# ========================================
+# PRISM POC - 필수 패키지
 
-# ========== Web Framework ==========
+# Web Framework
 streamlit==1.31.0
 
-# ========== PDF Processing ==========
-PyMuPDF==1.23.8  # fitz
+# PDF Processing
 pdf2image==1.16.3
+PyPDF2==3.0.1
 pdfplumber==0.10.3
+# poppler-utils는 conda로 설치: conda install -c conda-forge poppler
 
-# ========== OCR ==========
-paddlepaddle==3.0.0
-paddleocr==2.8.1
+# OCR (Python 3.12 호환 버전)
+paddlepaddle>=2.6.0
+paddleocr>=2.7.3
+Pillow>=10.2.0
 
-# ========== Image Processing ==========
-opencv-python-headless==4.9.0.80
-Pillow==10.2.0
+# VLM APIs
+anthropic>=0.18.1
+openai>=1.12.0
 
-# ========== VLM Providers ==========
-# Claude
-anthropic==0.18.1
+# Utilities
+python-dotenv>=1.0.0
+numpy>=1.26.0  # Python 3.12 호환
+requests>=2.31.0
 
-# Azure OpenAI (requests로 충분)
-requests==2.31.0
-
-# Ollama (requests 사용)
-
-# ========== Database ==========
-# SQLite는 Python 내장
-
-# ========== Utilities ==========
-python-dotenv==1.0.0
-
-# ========================================
-# 설치 가이드
-# ========================================
-#
-# 1. 가상환경 생성
-#    python -m venv venv
-#
-# 2. 활성화
-#    Windows: venv\Scripts\activate
-#    Mac/Linux: source venv/bin/activate
-#
-# 3. 패키지 설치
-#    pip install -r requirements.txt
-#
-# 4. Poppler 설치 (PDF → 이미지 변환용)
-#    Windows: conda install -c conda-forge poppler
-#    Mac: brew install poppler
-#    Linux: sudo apt install poppler-utils
-#
-# 5. Ollama 설치 (선택, 로컬 모델용)
-#    https://ollama.ai/download
-#    ollama pull llava:7b
-#
+# 선택적 패키지 (품질 평가용)
+# nltk>=3.8.1
+# rouge-score>=0.1.2
+# sentence-transformers>=2.3.1

@@ -1,252 +1,241 @@
 """
-PRISM - Final Version with Fixes
-- 모든 프로바이더를 드롭다운에 표시 (사용 가능 여부와 무관)
-- 사용 불가능한 프로바이더 선택 시 설정 안내
-- 원본 디자인 100% 유지
+PRISM POC - 하이브리드 청킹 지원
+VLM 이미지 분석 + OCR 원문 청킹
 """
 
 import streamlit as st
 import os
-from pathlib import Path
 import json
-from datetime import datetime
-from dotenv import load_dotenv
+import base64
 import logging
+from datetime import datetime
+from typing import Dict, List, Any
+from io import BytesIO
 
-# 로깅 설정
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# ========== 환경변수 강제 로드 (최우선) ==========
+from pathlib import Path
+from dotenv import load_dotenv
 
-# .env 파일 명시적 로드 (CRITICAL!)
-load_dotenv()
+# 현재 파일 위치 기준으로 .env 로드
+current_dir = Path(__file__).parent
+env_path = current_dir / '.env'
 
+if env_path.exists():
+    load_dotenv(dotenv_path=env_path, override=True)
+    print(f"✅ .env 파일 로드: {env_path}")
+else:
+    print(f"⚠️ .env 파일 없음: {env_path}")
+
+# API 키 확인
+api_key = os.getenv('ANTHROPIC_API_KEY')
+if api_key:
+    print(f"✅ Claude API 키 로드 성공: {api_key[:20]}...")
+else:
+    print("❌ Claude API 키 로드 실패!")
+# ==================================================
+
+# Core 모듈
 from core.pdf_processor import PDFProcessor
 from core.multi_vlm_service import MultiVLMService
 
-# ============================================================
-# 페이지 설정
-# ============================================================
+# 로깅 설정
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('logs/app.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# ========== Streamlit 설정 ==========
 st.set_page_config(
-    page_title="PRISM",
-    page_icon="📄",
-    layout="wide",  # 전체 너비 사용
+    page_title="PRISM - Document Intelligence Platform",
+    page_icon="🔷",
+    layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# ============================================================
-# 깔끔한 디자인
-# ============================================================
+# ========== CSS (전체 너비 사용) ==========
 st.markdown("""
 <style>
-    :root {
-        --primary: #1a56db;
-        --secondary: #6b7280;
-        --success: #059669;
-        --border: #e5e7eb;
-        --text: #111827;
-        --text-secondary: #6b7280;
-        --bg-secondary: #f9fafb;
-    }
-    
-    /* 메인 컨테이너 전체 너비 사용 */
+    /* 전체 컨테이너 너비 */
     .main .block-container {
         max-width: 100%;
         padding-left: 2rem;
         padding-right: 2rem;
     }
     
-    .main {
-        background-color: var(--bg-secondary);
-        padding-top: 2rem;
-    }
-    
-    .stat-card {
-        background: white;
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 1.25rem;
-        text-align: center;
-    }
-    
-    .stat-label {
-        font-size: 0.75rem;
-        color: var(--text-secondary);
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
+    /* 사이드바 스타일 */
+    .sidebar-title {
+        font-size: 1.8rem;
+        font-weight: bold;
+        color: #1E88E5;
         margin-bottom: 0.5rem;
     }
     
-    .stat-value {
-        font-size: 1.875rem;
-        font-weight: 700;
-        color: var(--text);
+    .sidebar-subtitle {
+        font-size: 0.9rem;
+        color: #666;
+        margin-bottom: 1.5rem;
     }
     
-    .panel {
-        background: white;
-        border: 1px solid var(--border);
+    /* 프로바이더 카드 */
+    .provider-card {
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin-bottom: 0.5rem;
+        border: 2px solid #e0e0e0;
+        background-color: #f9f9f9;
+    }
+    
+    .provider-available {
+        border-color: #4CAF50;
+        background-color: #E8F5E9;
+    }
+    
+    /* 청크 카드 */
+    .chunk-card {
+        border: 1px solid #ddd;
         border-radius: 8px;
-        padding: 1.5rem;
-    }
-    
-    .panel-header {
-        font-size: 0.875rem;
-        font-weight: 600;
-        color: var(--text);
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        margin-bottom: 1rem;
-        padding-bottom: 0.75rem;
-        border-bottom: 1px solid var(--border);
-    }
-    
-    .chunk-item {
-        background: white;
-        border: 1px solid var(--border);
-        border-radius: 6px;
         padding: 1rem;
         margin-bottom: 1rem;
+        background: white;
     }
     
     .chunk-header {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        margin-bottom: 0.75rem;
-        padding-bottom: 0.75rem;
-        border-bottom: 1px solid var(--border);
+        margin-bottom: 0.5rem;
     }
     
-    .chunk-id {
-        font-family: 'Monaco', 'Courier New', monospace;
-        font-size: 0.75rem;
-        color: var(--text-secondary);
+    .chunk-type-image {
+        background: #E3F2FD;
+        color: #1976D2;
+        padding: 4px 12px;
+        border-radius: 12px;
+        font-size: 0.85rem;
+        font-weight: bold;
     }
     
-    .chunk-type {
-        display: inline-block;
-        padding: 0.25rem 0.625rem;
-        border-radius: 4px;
-        font-size: 0.75rem;
-        font-weight: 600;
-        text-transform: uppercase;
+    .chunk-type-text {
+        background: #F3E5F5;
+        color: #7B1FA2;
+        padding: 4px 12px;
+        border-radius: 12px;
+        font-size: 0.85rem;
+        font-weight: bold;
     }
     
-    .type-text { background: #e0e7ff; color: #3730a3; }
-    .type-chart { background: #fef3c7; color: #92400e; }
-    .type-table { background: #dbeafe; color: #1e40af; }
-    .type-figure { background: #fce7f3; color: #9f1239; }
-    .type-title { background: #d1fae5; color: #065f46; }
-    
-    .chunk-content {
-        font-size: 0.875rem;
-        line-height: 1.6;
-        color: var(--text);
-        white-space: pre-wrap;
-        word-break: break-word;
-    }
-    
-    .stButton > button {
-        background: var(--primary);
-        color: white;
-        border: none;
-        border-radius: 6px;
-        padding: 0.625rem 1.25rem;
-        font-weight: 500;
-        font-size: 0.875rem;
-    }
-    
-    .stButton > button:hover {
-        background: #1e40af;
-    }
-    
-    .stDownloadButton > button {
-        background: white;
-        color: var(--primary);
-        border: 1px solid var(--border);
-        border-radius: 6px;
-        padding: 0.625rem 1.25rem;
-        font-weight: 500;
-        font-size: 0.875rem;
-    }
-    
-    [data-testid="stSidebar"] {
-        background: white;
-        border-right: 1px solid var(--border);
-    }
-    
-    .sidebar-title {
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: var(--text);
-        margin-bottom: 0.25rem;
-    }
-    
-    .sidebar-subtitle {
-        font-size: 0.75rem;
-        color: var(--text-secondary);
-        margin-bottom: 2rem;
+    /* 다운로드 버튼 영역 */
+    .download-section {
+        margin-top: 2rem;
+        padding: 1.5rem;
+        background: #f8f9fa;
+        border-radius: 8px;
+        border: 1px solid #dee2e6;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# ============================================================
-# Helper Functions
-# ============================================================
+# ========== 유틸리티 함수 ==========
 
-def save_json_utf8(data, filepath):
-    with open(filepath, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+def text_chunking(text: str, min_length: int = 100, max_length: int = 500, overlap: int = 50) -> List[str]:
+    """
+    텍스트를 의미 단위로 청킹
+    
+    Args:
+        text: 원본 텍스트
+        min_length: 최소 청크 길이
+        max_length: 최대 청크 길이
+        overlap: 청크 간 오버랩 길이
+    
+    Returns:
+        청크 리스트
+    """
+    if not text or len(text.strip()) == 0:
+        return []
+    
+    # 단락 분리
+    paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+    
+    chunks = []
+    current_chunk = ""
+    
+    for para in paragraphs:
+        # 현재 청크에 추가했을 때 max_length를 초과하면
+        if len(current_chunk) + len(para) > max_length:
+            if len(current_chunk) >= min_length:
+                chunks.append(current_chunk.strip())
+                # 오버랩 적용
+                current_chunk = current_chunk[-overlap:] + " " + para
+            else:
+                current_chunk += " " + para
+        else:
+            current_chunk += " " + para if current_chunk else para
+    
+    # 마지막 청크
+    if current_chunk.strip() and len(current_chunk.strip()) >= min_length:
+        chunks.append(current_chunk.strip())
+    
+    return chunks
 
-def convert_to_markdown(data):
+def convert_to_json(chunks: List[Dict]) -> Dict:
+    """JSON 형식으로 변환"""
+    data = {
+        'metadata': {
+            'processed_at': datetime.now().isoformat(),
+            'total_chunks': len(chunks),
+            'chunk_types': {
+                'image': len([c for c in chunks if c['type'] == 'image']),
+                'text': len([c for c in chunks if c['type'] == 'text'])
+            }
+        },
+        'chunks': chunks
+    }
+    return data
+
+def convert_to_markdown(chunks: List[Dict]) -> str:
+    """Markdown 형식으로 변환"""
     md_lines = []
     md_lines.append("# PRISM 문서 추출 결과\n")
     md_lines.append(f"**처리 일시:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
     
-    stats = data.get('statistics', {})
-    md_lines.append("## 통계\n")
-    md_lines.append(f"- 총 페이지: {stats.get('total_pages', 0)}")
-    md_lines.append(f"- 총 청크: {stats.get('total_chunks', 0)}")
-    md_lines.append(f"- 텍스트: {stats.get('text_chunks', 0)}")
-    md_lines.append(f"- 표: {stats.get('table_chunks', 0)}")
-    md_lines.append(f"- 차트: {stats.get('chart_chunks', 0)}")
-    md_lines.append(f"- 이미지: {stats.get('image_chunks', 0)}\n")
+    # 통계
+    md_lines.append("## 📊 통계\n")
+    md_lines.append(f"- 총 청크: {len(chunks)}")
+    md_lines.append(f"- 이미지 청크: {len([c for c in chunks if c['type'] == 'image'])}")
+    md_lines.append(f"- 텍스트 청크: {len([c for c in chunks if c['type'] == 'text'])}\n")
     
-    chunks = data.get('chunks', [])
+    # 청크별 내용
     current_page = None
     
     for chunk in chunks:
         page_num = chunk.get('page_num', 0)
+        
+        # 페이지 헤더
         if page_num != current_page:
             current_page = page_num
-            md_lines.append(f"\n## 페이지 {page_num}\n")
+            md_lines.append(f"\n## 📄 페이지 {page_num}\n")
         
         chunk_id = chunk.get('chunk_id', '')
+        chunk_type = chunk.get('type', 'unknown')
         content = chunk.get('content', '')
-        ocr_text = chunk.get('ocr_text', '')
         
-        md_lines.append(f"### {chunk_id}\n")
+        # 청크 헤더
+        if chunk_type == 'image':
+            md_lines.append(f"### 🖼️ {chunk_id} (VLM 분석)\n")
+        else:
+            md_lines.append(f"### 📝 {chunk_id} (원문)\n")
         
-        # VLM 분석
-        md_lines.append("#### 🤖 VLM 분석\n")
         md_lines.append(content)
-        md_lines.append("\n")
-        
-        # OCR 원문 (있는 경우)
-        if ocr_text and len(ocr_text.strip()) > 0:
-            md_lines.append("#### 📝 OCR 원문\n")
-            md_lines.append("```")
-            md_lines.append(ocr_text)
-            md_lines.append("```")
-            md_lines.append("\n")
-        
-        md_lines.append("---\n")
+        md_lines.append("\n---\n")
     
     return "\n".join(md_lines)
 
-# ============================================================
-# 세션 초기화
-# ============================================================
+# ========== 세션 초기화 ==========
 
 if 'vlm_service' not in st.session_state:
     try:
@@ -261,13 +250,10 @@ if 'pdf_processor' not in st.session_state:
     except Exception as e:
         st.session_state.pdf_processor = None
 
-# 처리 결과 세션 상태 추가
 if 'processing_results' not in st.session_state:
     st.session_state.processing_results = None
 
-# ============================================================
-# 메인 UI
-# ============================================================
+# ========== 메인 UI ==========
 
 def main():
     # 사이드바
@@ -275,176 +261,88 @@ def main():
         st.markdown('<div class="sidebar-title">PRISM</div>', unsafe_allow_html=True)
         st.markdown('<div class="sidebar-subtitle">Document Intelligence Platform</div>', unsafe_allow_html=True)
         
-        st.markdown("### 모델 설정")
+        st.markdown("### 🤖 모델 설정")
         
         if st.session_state.vlm_service is not None:
-            try:
-                vlm_service = st.session_state.vlm_service
+            vlm_service = st.session_state.vlm_service
+            
+            current_provider = getattr(vlm_service, 'current_provider_key', None)
+            if current_provider is None:
+                current_provider = os.getenv('DEFAULT_VLM_PROVIDER', 'claude')
+            
+            providers_status = vlm_service.get_available_providers()
+            
+            provider_display_names = {
+                'claude': '🟣 Claude Sonnet 4',
+                'azure_openai': '🔵 Azure OpenAI GPT-4',
+                'ollama': '🟢 Ollama'
+            }
+            
+            provider_options = []
+            provider_mapping = {}
+            
+            for key in ['claude', 'azure_openai', 'ollama']:
+                if key in providers_status:
+                    info = providers_status[key]
+                    is_available = info.get('available', False)
+                    
+                    display_name = provider_display_names.get(key, key)
+                    if not is_available:
+                        display_name += " (설정 필요)"
+                    
+                    provider_options.append(display_name)
+                    provider_mapping[display_name] = {
+                        'key': key,
+                        'available': is_available
+                    }
+            
+            selected_display = st.selectbox(
+                "VLM 프로바이더",
+                options=provider_options,
+                index=[i for i, opt in enumerate(provider_options) 
+                      if provider_mapping[opt]['key'] == current_provider][0] if provider_options else 0
+            )
+            
+            if selected_display and selected_display in provider_mapping:
+                selected_key = provider_mapping[selected_display]['key']
+                is_available = provider_mapping[selected_display]['available']
                 
-                # 안전하게 현재 프로바이더 가져오기
-                current_provider = getattr(vlm_service, 'current_provider_key', None)
-                if current_provider is None:
-                    current_provider = os.getenv('DEFAULT_VLM_PROVIDER', 'claude')
-                
-                # 모든 프로바이더 상태 가져오기
-                providers_status = vlm_service.get_available_providers()
-                
-                # ===== 수정: 모든 프로바이더를 드롭다운에 표시 =====
-                # 프로바이더 이름 매핑
-                provider_display_names = {
-                    'claude': '🟣 Claude Sonnet 4',
-                    'azure_openai': '🔵 Azure OpenAI GPT-4',
-                    'ollama': '🟢 Ollama'
-                }
-                
-                # 드롭다운 옵션 생성 (모든 프로바이더)
-                provider_options = []
-                provider_mapping = {}
-                
-                for key in ['claude', 'azure_openai', 'ollama']:
-                    if key in providers_status:
-                        info = providers_status[key]
-                        is_available = info.get('available', False)
-                        
-                        # 표시 이름 생성
-                        display_name = provider_display_names.get(key, key)
-                        if not is_available:
-                            display_name += " (설정 필요)"
-                        
-                        provider_options.append(display_name)
-                        provider_mapping[display_name] = {
-                            'key': key,
-                            'available': is_available,
-                            'info': info
-                        }
-                
-                # 현재 선택 찾기
-                current_display = None
-                for display, data in provider_mapping.items():
-                    if data['key'] == current_provider:
-                        current_display = display
-                        break
-                
-                if current_display is None or current_display not in provider_options:
-                    current_display = provider_options[0]
-                
-                # 드롭다운
-                selected_display = st.selectbox(
-                    "VLM 모델 선택",
-                    options=provider_options,
-                    index=provider_options.index(current_display),
-                    label_visibility="collapsed"
-                )
-                
-                selected_data = provider_mapping[selected_display]
-                selected_key = selected_data['key']
-                selected_available = selected_data['available']
-                selected_info = selected_data['info']
-                
-                # 프로바이더 변경
-                if selected_key != current_provider:
+                if is_available and selected_key != current_provider:
                     vlm_service.set_provider(selected_key)
+                    st.rerun()
                 
-                # 상태 표시
-                if selected_available:
-                    st.success(f"✅ **{selected_info.get('name', 'Unknown')}** 사용 가능")
-                    
-                    # 상세 정보
-                    st.markdown(f"""
-                    **제공사:** {selected_info.get('provider', 'N/A')}  
-                    **모델:** {selected_info.get('model', 'N/A')}  
-                    **속도:** {selected_info.get('speed', 'N/A')}  
-                    **품질:** {selected_info.get('quality', 'N/A')}
-                    """)
+                if is_available:
+                    st.success(f"✅ {selected_display.split('(')[0].strip()} 사용 가능")
                 else:
-                    st.error(f"❌ **{selected_info.get('name', 'Unknown')}** 설정 필요")
-                    
-                    # 설정 가이드
-                    if selected_key == 'claude':
-                        st.info("""
-                        **Claude 설정 방법:**
-                        
-                        1. `.env` 파일 열기
-                        2. 다음 추가:
-                        ```
-                        ANTHROPIC_API_KEY=sk-ant-api03-your-key
-                        ```
-                        3. Streamlit 재시작
-                        
-                        **현재 상태:**
-                        - ANTHROPIC_API_KEY: {}
-                        """.format("✅ 있음 (확인 필요)" if os.getenv('ANTHROPIC_API_KEY') else "❌ 없음"))
-                    
-                    elif selected_key == 'azure_openai':
-                        st.info("""
-                        **Azure OpenAI 설정 방법:**
-                        
-                        1. `.env` 파일 열기
-                        2. 다음 추가:
-                        ```
-                        AZURE_OPENAI_API_KEY=your-key
-                        AZURE_OPENAI_ENDPOINT=https://xxx.openai.azure.com
-                        AZURE_OPENAI_DEPLOYMENT=gpt-4o
-                        AZURE_OPENAI_API_VERSION=2024-12-01-preview
-                        ```
-                        3. Streamlit 재시작
-                        
-                        **현재 상태:**
-                        - API_KEY: {}
-                        - ENDPOINT: {}
-                        """.format(
-                            "✅ 있음" if os.getenv('AZURE_OPENAI_API_KEY') else "❌ 없음",
-                            "✅ 있음" if os.getenv('AZURE_OPENAI_ENDPOINT') else "❌ 없음"
-                        ))
-                    
-                    elif selected_key == 'ollama':
-                        st.info("""
-                        **Ollama 설정 방법:**
-                        
-                        1. Ollama 설치
-                        2. 모델 다운로드:
-                        ```bash
-                        ollama pull llava:7b
-                        ```
-                        3. 서버 시작:
-                        ```bash
-                        ollama serve
-                        ```
-                        4. `.env` 파일에 추가:
-                        ```
-                        OLLAMA_BASE_URL=http://localhost:11434
-                        OLLAMA_MODEL=llava:7b
-                        ```
-                        
-                        **현재 상태:**
-                        - Ollama 서버: 연결 실패
-                        """)
-                    
-            except Exception as e:
-                st.error(f"모델 로드 오류: {str(e)}")
-                import traceback
-                st.code(traceback.format_exc())
-        else:
-            st.error("VLM 서비스 초기화 실패")
-        
-        st.markdown("---")
-        st.markdown("### 처리 설정")
-        max_pages = st.slider(
-            "최대 페이지 수",
-            min_value=1,
-            max_value=20,
-            value=3
-        )
+                    st.error(f"⚠️ 설정이 필요합니다")
+            
+            st.divider()
+            
+            # 처리 설정
+            st.markdown("### ⚙️ 처리 설정")
+            
+            max_pages = st.slider(
+                "최대 페이지 수",
+                min_value=1,
+                max_value=20,
+                value=3,
+                help="처리할 최대 페이지 수"
+            )
+            
+            use_text_chunking = st.checkbox(
+                "원문 청킹 활성화",
+                value=True,
+                help="OCR 텍스트를 의미 단위로 분할"
+            )
+            
+            if use_text_chunking:
+                st.caption("📝 원문을 100-500자 단위로 분할하여 RAG에 최적화")
     
     # 메인 영역
-    if st.session_state.pdf_processor is None:
-        st.error("PDF 프로세서를 사용할 수 없습니다.")
-        return
-    
     st.title("📄 PRISM")
     st.caption("지능형 문서 이해 플랫폼")
     
-    # 저장된 처리 결과가 있으면 표시
+    # 이전 처리 결과 표시
     if st.session_state.processing_results is not None:
         st.success("✅ 이전 처리 결과가 있습니다. 새 문서를 업로드하면 기존 결과가 대체됩니다.")
         display_results(st.session_state.processing_results)
@@ -466,27 +364,27 @@ def main():
         with col2:
             use_ocr = st.checkbox("OCR 사용", value=True)
         with col3:
-            # 선택된 프로바이더가 사용 가능한지 확인
             vlm_service = st.session_state.vlm_service
             if vlm_service:
                 current_provider_key = getattr(vlm_service, 'current_provider_key', None)
-                providers_status = vlm_service.get_available_providers()
                 
-                if current_provider_key and current_provider_key in providers_status:
-                    is_available = providers_status[current_provider_key].get('available', False)
+                # 현재 선택된 프로바이더가 사용 가능한지 확인
+                if current_provider_key:
+                    providers_status = vlm_service.get_available_providers()
+                    is_available = providers_status.get(current_provider_key, {}).get('available', False)
                     
                     if is_available:
                         if st.button("🚀 처리 시작", type="primary", use_container_width=True):
-                            process_file(uploaded_file, max_pages, use_ocr)
+                            process_file(uploaded_file, max_pages, use_ocr, use_text_chunking)
                     else:
                         st.button("⚠️ 모델 설정 필요", disabled=True, use_container_width=True)
                         st.caption("왼쪽 사이드바에서 모델을 설정하세요")
                 else:
-                    st.button("⚠️ 모델 선택 필요", disabled=True, use_container_width=True)
+                    st.button("⚠️ 프로바이더 선택 필요", disabled=True, use_container_width=True)
             else:
-                st.button("⚠️ 서비스 오류", disabled=True, use_container_width=True)
+                st.button("⚠️ 서비스 초기화 실패", disabled=True, use_container_width=True)
 
-def process_file(uploaded_file, max_pages, use_ocr):
+def process_file(uploaded_file, max_pages, use_ocr, use_text_chunking):
     """파일 처리"""
     pdf_processor = st.session_state.pdf_processor
     vlm_service = st.session_state.vlm_service
@@ -495,16 +393,14 @@ def process_file(uploaded_file, max_pages, use_ocr):
         st.error("VLM 서비스를 사용할 수 없습니다.")
         return
     
-    # 진행 표시
     progress_bar = st.progress(0)
     status = st.empty()
     
     try:
-        # 1. PDF 처리 (로드 + Element 추출)
+        # PDF 처리
         status.text("📄 PDF 처리 중...")
         file_bytes = uploaded_file.read()
         
-        # PDFProcessor.process_pdf(pdf_data) 사용
         elements = pdf_processor.process_pdf(pdf_data=file_bytes)
         
         logger.info(f"추출된 Elements 수: {len(elements)}")
@@ -513,158 +409,123 @@ def process_file(uploaded_file, max_pages, use_ocr):
             st.warning("추출된 Element가 없습니다.")
             return
         
-        # 디버깅: 첫 번째 element 구조 출력
-        if len(elements) > 0:
-            logger.info(f"첫 번째 Element 키: {list(elements[0].keys())}")
-            logger.info(f"image_base64 존재: {'image_base64' in elements[0]}")
-            if 'image_base64' in elements[0]:
-                logger.info(f"image_base64 길이: {len(elements[0]['image_base64']) if elements[0]['image_base64'] else 0}")
+        # 최대 페이지 제한
+        elements = [e for e in elements if e['page_num'] <= max_pages]
         
-        # max_pages 제한 적용
-        elements = [e for e in elements if e.get('page', 1) <= max_pages]
+        if not elements:
+            st.warning(f"페이지 {max_pages} 이하에 Element가 없습니다.")
+            return
         
-        logger.info(f"max_pages={max_pages} 적용 후: {len(elements)} elements")
+        total_elements = len(elements)
+        st.info(f"총 {total_elements}개 Element 처리 예정 (최대 {max_pages}페이지)")
         
-        progress_bar.progress(20)
+        # 하이브리드 청킹 처리
+        all_chunks = []
+        chunk_counter = 1
         
-        progress_bar.progress(50)
-        
-        # 2. VLM 처리
-        status.text(f"🤖 VLM 처리 중... (0/{len(elements)})")
-        
-        import asyncio
-        
-        chunks = []
-        for idx, elem in enumerate(elements):
+        for idx, element in enumerate(elements):
+            progress = (idx + 1) / total_elements
+            progress_bar.progress(progress)
+            status.text(f"처리 중... ({idx + 1}/{total_elements})")
+            
+            page_num = element['page_num']
+            ocr_text = element.get('ocr_text', '')
+            image_base64 = element.get('image_base64', '')
+            
+            # 1. IMAGE 청크 (VLM 분석)
+            status.text(f"🤖 페이지 {page_num} VLM 분석 중...")
+            
             try:
-                # Element에서 이미지 데이터 가져오기
-                # PDFProcessor는 'image_base64' 필드 사용
-                image_base64 = elem.get('image_base64')
-                
-                if not image_base64:
-                    logger.warning(f"Element {idx+1}: image_base64 없음, 건너뜀")
-                    continue
-                
-                # 비동기 호출
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                
-                result = loop.run_until_complete(
-                    vlm_service.generate_caption(
+                if image_base64:
+                    vlm_response = vlm_service.analyze_image(
                         image_base64=image_base64,
-                        element_type=elem.get('type', 'image'),
-                        extracted_text=elem.get('ocr_text', '')
+                        prompt=f"이 문서 페이지의 내용을 한국어로 상세히 설명해주세요. OCR 텍스트: {ocr_text[:200] if ocr_text else '없음'}"
                     )
-                )
-                
-                loop.close()
-                
-                chunks.append({
-                    'chunk_id': f"chunk_{idx+1:03d}",
-                    'page_num': elem.get('page', 0),
-                    'type': elem.get('type', 'unknown'),
-                    'content': result.get('caption', ''),
-                    'ocr_text': elem.get('ocr_text', ''),  # OCR 원문 추가
-                    'confidence': result.get('confidence', 0.0),
-                    'provider': result.get('provider', 'unknown')
-                })
-                
-                status.text(f"🤖 VLM 처리 중... ({idx+1}/{len(elements)})")
-                progress_bar.progress(50 + int((idx + 1) / len(elements) * 40))
-                
+                    
+                    image_chunk = {
+                        'chunk_id': f"chunk_{chunk_counter:03d}",
+                        'type': 'image',
+                        'page_num': page_num,
+                        'content': vlm_response,
+                        'provider': vlm_service.current_provider_key,
+                        'ocr_text_preview': ocr_text[:100] if ocr_text else None
+                    }
+                    all_chunks.append(image_chunk)
+                    chunk_counter += 1
+            
             except Exception as e:
-                st.error(f"Element {idx+1} 처리 오류: {str(e)}")
+                logger.error(f"VLM 처리 오류: {e}")
+                st.warning(f"⚠️ 페이지 {page_num} VLM 처리 실패")
+            
+            # 2. TEXT 청크 (OCR 원문 청킹)
+            if use_text_chunking and use_ocr and ocr_text:
+                status.text(f"📝 페이지 {page_num} 원문 청킹 중...")
+                
+                text_chunks = text_chunking(ocr_text)
+                
+                for sub_idx, text_chunk in enumerate(text_chunks, 1):
+                    text_chunk_obj = {
+                        'chunk_id': f"chunk_{chunk_counter:03d}",
+                        'type': 'text',
+                        'page_num': page_num,
+                        'sub_index': sub_idx,
+                        'content': text_chunk,
+                        'length': len(text_chunk)
+                    }
+                    all_chunks.append(text_chunk_obj)
+                    chunk_counter += 1
         
-        progress_bar.progress(100)
+        # 처리 완료
+        progress_bar.progress(1.0)
         status.text("✅ 처리 완료!")
         
-        # 세션 상태에 결과 저장 (다운로드 후에도 유지)
-        st.session_state.processing_results = chunks
+        st.session_state.processing_results = all_chunks
         
-        # 4. 결과 표시
-        display_results(chunks)
+        st.success(f"✨ 총 {len(all_chunks)}개 청크 생성 완료!")
+        
+        # 결과 표시
+        display_results(all_chunks)
         
     except Exception as e:
-        st.error(f"처리 중 오류 발생: {str(e)}")
-        import traceback
-        st.code(traceback.format_exc())
+        logger.error(f"처리 오류: {e}", exc_info=True)
+        st.error(f"❌ 처리 실패: {str(e)}")
 
-def display_results(chunks):
-    """결과 표시"""
+def display_results(chunks: List[Dict]):
+    """처리 결과 표시"""
+    
     st.markdown("---")
     st.markdown("## 📊 처리 결과")
     
     # 통계
-    stats = {
-        'total_chunks': len(chunks),
-        'text_chunks': sum(1 for c in chunks if c['type'] == 'text'),
-        'chart_chunks': sum(1 for c in chunks if c['type'] == 'chart'),
-        'table_chunks': sum(1 for c in chunks if c['type'] == 'table'),
-        'image_chunks': sum(1 for c in chunks if c['type'] == 'image'),
-        'total_pages': max((c['page_num'] for c in chunks), default=0)
-    }
-    
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.markdown(f"""
-        <div class="stat-card">
-            <div class="stat-label">총 청크</div>
-            <div class="stat-value">{stats['total_chunks']}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.metric("총 청크", len(chunks))
     
     with col2:
-        st.markdown(f"""
-        <div class="stat-card">
-            <div class="stat-label">텍스트</div>
-            <div class="stat-value">{stats['text_chunks']}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        image_chunks = len([c for c in chunks if c['type'] == 'image'])
+        st.metric("이미지 청크", image_chunks)
     
     with col3:
-        st.markdown(f"""
-        <div class="stat-card">
-            <div class="stat-label">차트</div>
-            <div class="stat-value">{stats['chart_chunks']}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        text_chunks = len([c for c in chunks if c['type'] == 'text'])
+        st.metric("텍스트 청크", text_chunks)
     
     with col4:
-        st.markdown(f"""
-        <div class="stat-card">
-            <div class="stat-label">표</div>
-            <div class="stat-value">{stats['table_chunks']}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        pages = len(set(c['page_num'] for c in chunks))
+        st.metric("페이지 수", pages)
     
-    with col5:
-        st.markdown(f"""
-        <div class="stat-card">
-            <div class="stat-label">이미지</div>
-            <div class="stat-value">{stats['image_chunks']}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # 다운로드 버튼 먼저 배치 (상단)
-    st.markdown("---")
+    # 다운로드 버튼
+    st.markdown('<div class="download-section">', unsafe_allow_html=True)
     st.markdown("### 💾 결과 다운로드")
     
     col1, col2 = st.columns(2)
     
-    result_data = {
-        'metadata': {
-            'processed_at': datetime.now().isoformat(),
-            'total_chunks': len(chunks)
-        },
-        'statistics': stats,
-        'chunks': chunks
-    }
-    
     with col1:
-        json_str = json.dumps(result_data, ensure_ascii=False, indent=2)
+        json_data = convert_to_json(chunks)
+        json_str = json.dumps(json_data, ensure_ascii=False, indent=2)
+        
         st.download_button(
-            "📥 JSON 다운로드",
+            label="📥 JSON 다운로드",
             data=json_str,
             file_name=f"prism_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
             mime="application/json",
@@ -672,65 +533,78 @@ def display_results(chunks):
         )
     
     with col2:
-        md_str = convert_to_markdown(result_data)
+        md_str = convert_to_markdown(chunks)
+        
         st.download_button(
-            "📥 Markdown 다운로드",
+            label="📥 Markdown 다운로드",
             data=md_str,
             file_name=f"prism_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
             mime="text/markdown",
             use_container_width=True
         )
     
-    # 청크 목록 (전체 너비 사용)
-    st.markdown("---")
-    st.markdown("### 📄 청크 목록")
+    st.markdown('</div>', unsafe_allow_html=True)
     
-    for chunk in chunks:
-        chunk_type = chunk['type']
+    # 청크 상세 표시
+    st.markdown("---")
+    st.markdown("### 📋 청크 목록")
+    
+    # 필터
+    col1, col2 = st.columns([1, 3])
+    
+    with col1:
+        filter_type = st.selectbox(
+            "청크 타입",
+            options=['전체', '이미지', '텍스트'],
+            index=0
+        )
+    
+    # 필터링
+    filtered_chunks = chunks
+    if filter_type == '이미지':
+        filtered_chunks = [c for c in chunks if c['type'] == 'image']
+    elif filter_type == '텍스트':
+        filtered_chunks = [c for c in chunks if c['type'] == 'text']
+    
+    st.info(f"📋 {len(filtered_chunks)}개 청크 표시 중")
+    
+    # 청크 카드 표시
+    for chunk in filtered_chunks:
         chunk_id = chunk['chunk_id']
+        chunk_type = chunk['type']
+        page_num = chunk['page_num']
         content = chunk['content']
-        ocr_text = chunk.get('ocr_text', '')
-        confidence = chunk['confidence']
         
-        # 전체 너비로 표시
-        with st.container():
-            st.markdown(f"""
-            <div class="chunk-item">
-                <div class="chunk-header">
-                    <span class="chunk-id">{chunk_id}</span>
-                    <span class="chunk-type type-{chunk_type}">{chunk_type}</span>
-                </div>
-                <div style="margin-top: 0.5rem; margin-bottom: 0.75rem; font-size: 0.75rem; color: var(--text-secondary);">
-                    📄 페이지: {chunk['page_num']} | 🤖 프로바이더: {chunk['provider']} | 📊 신뢰도: {confidence:.2f}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+        # 청크 카드
+        with st.expander(
+            f"{'🖼️' if chunk_type == 'image' else '📝'} {chunk_id} | 페이지 {page_num} | {chunk_type.upper()}",
+            expanded=False
+        ):
+            # 메타데이터
+            st.markdown(f"**페이지:** {page_num}")
+            st.markdown(f"**타입:** {chunk_type}")
             
-            # 탭으로 VLM 분석과 OCR 텍스트 구분
-            if ocr_text and len(ocr_text.strip()) > 0:
-                tab1, tab2 = st.tabs(["🤖 VLM 분석", "📝 OCR 원문"])
-                
-                with tab1:
-                    st.markdown(f"""
-                    <div class="chunk-content">
-                        {content}
-                    </div>
-                    """, unsafe_allow_html=True)
-                
-                with tab2:
-                    st.text_area(
-                        "OCR 추출 텍스트",
-                        value=ocr_text,
-                        height=200,
-                        key=f"ocr_{chunk_id}",
-                        label_visibility="collapsed"
-                    )
-            else:
-                st.markdown(f"""
-                <div class="chunk-content">
-                    {content}
-                </div>
-                """, unsafe_allow_html=True)
+            if chunk_type == 'image':
+                provider = chunk.get('provider', 'unknown')
+                st.markdown(f"**프로바이더:** {provider}")
+            elif chunk_type == 'text':
+                sub_index = chunk.get('sub_index', 1)
+                length = chunk.get('length', 0)
+                st.markdown(f"**서브 인덱스:** {sub_index}")
+                st.markdown(f"**길이:** {length}자")
+            
+            st.markdown("---")
+            
+            # 내용
+            st.markdown("**내용:**")
+            st.text_area(
+                label="",
+                value=content,
+                height=200,
+                key=f"content_{chunk_id}",
+                label_visibility="collapsed"
+            )
 
+# 실행
 if __name__ == "__main__":
     main()
