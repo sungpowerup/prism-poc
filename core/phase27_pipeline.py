@@ -8,6 +8,7 @@ Stage 3: Intelligent Chunking
 
 Author: 이서영 (Backend Lead)
 Date: 2025-10-20
+Fixed: bbox tuple access issue + Anthropic initialization
 """
 
 import time
@@ -192,12 +193,16 @@ class Phase27Pipeline:
         for i, region in enumerate(regions, 1):
             print(f"   Region {i}/{len(regions)}: {region.type} - {region.description}")
             
+            # ✅ 수정: bbox는 튜플 (x, y, width, height)
+            # 튜플 언팩으로 각 값 추출
+            x, y, width, height = region.bbox
+            
             # 영역 이미지 추출
             region_img = img.crop((
-                region.bbox['x'],
-                region.bbox['y'],
-                region.bbox['x'] + region.bbox['width'],
-                region.bbox['y'] + region.bbox['height']
+                x,
+                y,
+                x + width,
+                y + height
             ))
             
             # 컨텐츠 추출
@@ -211,7 +216,7 @@ class Phase27Pipeline:
             
             # 추출 결과 출력
             char_count = len(content.content)
-            confidence = content.metadata.get('confidence', 0)
+            confidence = content.confidence
             print(f"      ✓ Extracted {char_count} characters (confidence: {confidence:.2f})")
         
         # Stage 4: Intelligent Chunking

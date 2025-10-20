@@ -1,163 +1,76 @@
 """
-PRISM Phase 2.5 - Enhanced Claude Full Page Extractor
+PRISM Phase 2.7 - Claude Full Page Extractor
+전체 페이지 한번에 추출 (개선된 프롬프트)
 
-개선 사항:
-1. 빈 data_points 절대 금지
-2. 복잡한 차트 페이지 대응 강화
-3. 차트별 데이터 완전성 검증
-4. 529 에러 재시도 전략 개선
-
-Author: 박준호 (AI/ML Lead) + 이서영 (Backend Lead)
-Date: 2025-10-17
+Author: 박준호 (AI/ML Lead)
+Date: 2025-10-20
+Fixed: Anthropic client initialization (proxies 파라미터 제거)
 """
 
 import os
 import base64
-import time
-from typing import List, Optional, Dict, Any
-from dataclasses import dataclass
-from PIL import Image
-import io
 import json
 import re
+from io import BytesIO
+from typing import Optional, Dict, List
+from PIL import Image
+from dataclasses import dataclass, asdict
+
 
 try:
-    from dotenv import load_dotenv
-    load_dotenv()
-    print("✅ .env file loaded")
+    import anthropic
 except ImportError:
-    print("⚠️  python-dotenv not installed. Using system environment variables.")
-
-import anthropic
-
-
-@dataclass
-class TextBlock:
-    """텍스트 블록"""
-    text: str
-    confidence: float = 0.95
-
-
-@dataclass
-class Table:
-    """표"""
-    caption: str
-    markdown: str
-    confidence: float = 0.95
-
-
-@dataclass
-class Chart:
-    """차트/그래프"""
-    type: str
-    title: str
-    description: str
-    data_points: List[Dict[str, Any]]
-    confidence: float = 0.95
-
-
-@dataclass
-class Figure:
-    """이미지/다이어그램"""
-    type: str
-    description: str
-    confidence: float = 0.95
-
-
-@dataclass
-class Section:
-    """문서 섹션"""
-    title: str
-    text: str
-    type: str
-    confidence: float = 0.95
+    anthropic = None
 
 
 @dataclass
 class PageContent:
-    """페이지 전체 내용"""
-    page_num: int
-    text_blocks: List[TextBlock]
-    tables: List[Table]
-    charts: List[Chart]
-    figures: List[Figure]
-    sections: List[Section]
+    """페이지 콘텐츠 추출 결과"""
+    texts: List[Dict]      # 텍스트 영역들
+    tables: List[Dict]     # 표들
+    charts: List[Dict]     # 차트들
+    figures: List[Dict]    # 이미지/다이어그램들
+    raw_response: str      # 원본 응답
 
 
 class ClaudeFullPageExtractor:
     """
-    Claude Vision API를 사용한 전체 페이지 추출기 (Phase 2.5)
+    Claude를 사용한 전체 페이지 추출기
+    
+    특징:
+    - 한 번의 API 호출로 전체 페이지 분석
+    - 차트 데이터 완벽 추출 강제
+    - 구조화된 JSON 출력
     """
     
-    # ⭐ CRITICAL: 개선된 프롬프트 (빈 data_points 절대 금지!)
-    ANALYSIS_PROMPT = """
-당신은 문서 분석 전문가입니다. 이 페이지의 모든 내용을 **완벽하게** 추출해야 합니다.
+    # 강화된 프롬프트 (차트 데이터 추출 강제)
+    SYSTEM_PROMPT = """당신은 문서 페이지를 완벽하게 분석하는 전문가입니다.
 
-**🚨 절대 규칙 (CRITICAL):**
-1. **모든 차트는 반드시 data_points를 포함해야 합니다**
-2. **data_points: [] 는 절대 금지입니다**
-3. **차트가 보이면 모든 데이터를 추출하세요**
-4. **여러 차트가 있으면 각각 개별 분석하세요**
+**핵심 원칙:**
+1. **차트를 발견하면 반드시 모든 데이터를 추출하세요!**
+2. **data_points: [] 는 절대 금지입니다!**
+3. **누락 없이 완벽하게 추출하세요!**
 
-**추출 대상:**
+**추출 대상 (우선순위):**
 
-1. **텍스트 (texts)**
-   - 모든 본문, 제목, 캡션
-   - 섹션 구분
-
+1. **차트 (charts) - 최우선!**
+   - type: "bar", "line", "pie", "area", "scatter", "mixed"
+   - title: 차트 제목
+   - description: 차트가 보여주는 내용
+   - **data_points: [반드시 모든 데이터 포함!]**
+     - label: 레이블/카테고리
+     - value: 정확한 수치
+     - unit: 단위 (%, 명, 원, 개 등)
+   
 2. **표 (tables)**
-   - Caption 추출
-   - Markdown 형식으로 변환
-   - 모든 행과 열 포함
-
-3. **차트 (charts)** ⭐⭐⭐ 가장 중요!
-   - **type**: "pie", "bar", "line", "area", "scatter", "combo" 등
-   - **title**: 차트 제목 (정확히)
-   - **description**: 차트 설명
-   - **data_points**: 🚨 **반드시 추출!**
+   - caption: 표 제목/번호
+   - markdown: 마크다운 표 형식
+   - rows/columns: 행/열 수
    
-   **차트 데이터 추출 방법:**
+3. **텍스트 (texts)**
+   - content: 본문 텍스트
+   - type: "heading", "paragraph", "list", "quote"
    
-   a) **원형 차트 (Pie Chart)**:
-   ```json
-   "data_points": [
-     {"label": "남성", "value": 45.2, "unit": "%"},
-     {"label": "여성", "value": 54.8, "unit": "%"}
-   ]
-   ```
-   
-   b) **막대 차트 (Bar Chart)**:
-   ```json
-   "data_points": [
-     {"label": "14-19세", "value": 11.2, "unit": "%"},
-     {"label": "20대", "value": 25.9, "unit": "%"},
-     {"label": "30대", "value": 22.3, "unit": "%"}
-   ]
-   ```
-   
-   c) **그룹 막대 차트**:
-   ```json
-   "data_points": [
-     {
-       "category": "입장료",
-       "values": [
-         {"label": "전체", "value": 21618, "unit": "원"},
-         {"label": "프로스포츠팬", "value": 22726, "unit": "원"}
-       ]
-     },
-     {
-       "category": "교통비",
-       "values": [
-         {"label": "전체", "value": 12491, "unit": "원"}
-       ]
-     }
-   ]
-   ```
-   
-   d) **복합 차트 (여러 차트가 한 영역에)**:
-   - 각 차트를 개별 항목으로 분리
-   - 각각 완전한 data_points 포함
-
 4. **이미지/다이어그램 (figures)**
    - type: "map", "diagram", "photo", "illustration"
    - 상세 설명 (지도의 경우 모든 지역 + 수치)
@@ -265,206 +178,152 @@ class ClaudeFullPageExtractor:
             return
         
         try:
+            # ✅ 수정: proxies 파라미터 제거
             self.client = anthropic.Anthropic(api_key=api_key)
             print(f"✅ Claude API initialized successfully")
         except Exception as e:
-            print(f"❌ Failed to initialize Claude API: {e}")
+            print(f"❌ Claude API initialization failed: {e}")
             self.client = None
-
-    def _image_to_base64(self, image: Image.Image) -> str:
-        """PIL Image를 base64로 변환"""
-        buffered = io.BytesIO()
-        image.save(buffered, format="PNG")
-        return base64.b64encode(buffered.getvalue()).decode('utf-8')
-
-    def _call_claude_with_retry(
-        self,
-        image_base64: str,
-        page_num: int
-    ) -> Optional[Dict]:
+    
+    def extract_page(self, page_image: Image.Image) -> PageContent:
         """
-        Claude API 호출 (529 에러 자동 재시도)
-        
-        개선된 재시도 전략:
-        - 1차 실패: 2초 대기 후 재시도
-        - 2차 실패: 5초 대기 후 재시도
-        - 3차 실패: 10초 대기 후 재시도
-        """
-        for attempt in range(1, self.max_retries + 1):
-            try:
-                print(f"🔄 Page {page_num} - Attempt {attempt}/{self.max_retries}")
-                
-                response = self.client.messages.create(
-                    model="claude-sonnet-4-20250514",
-                    max_tokens=4096,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "image",
-                                    "source": {
-                                        "type": "base64",
-                                        "media_type": "image/png",
-                                        "data": image_base64
-                                    }
-                                },
-                                {
-                                    "type": "text",
-                                    "text": self.ANALYSIS_PROMPT
-                                }
-                            ]
-                        }
-                    ]
-                )
-                
-                text_content = ""
-                for block in response.content:
-                    if hasattr(block, 'text'):
-                        text_content += block.text
-                
-                # JSON 추출
-                json_match = re.search(r'```json\s*(\{.*?\})\s*```', text_content, re.DOTALL)
-                if json_match:
-                    json_str = json_match.group(1)
-                else:
-                    json_str = text_content.strip()
-                
-                result = json.loads(json_str)
-                print(f"✅ Page {page_num} - Success on attempt {attempt}")
-                
-                # ⭐ 후처리 검증: 빈 data_points 체크
-                if 'charts' in result:
-                    for chart in result['charts']:
-                        if not chart.get('data_points'):
-                            print(f"⚠️  Chart '{chart.get('title', 'Unknown')}' has empty data_points!")
-                            print(f"⚠️  This violates the CRITICAL rule. Marking as incomplete.")
-                
-                return result
-                
-            except anthropic.APIError as e:
-                error_code = getattr(e, 'status_code', None)
-                
-                if error_code == 529:  # Overloaded
-                    wait_time = self.retry_delay * (2 ** (attempt - 1))  # Exponential backoff
-                    print(f"⚠️  Page {page_num} - 529 Overloaded on attempt {attempt}")
-                    
-                    if attempt < self.max_retries:
-                        print(f"⏳ Waiting {wait_time:.1f}s before retry...")
-                        time.sleep(wait_time)
-                        continue
-                    else:
-                        print(f"❌ Page {page_num} - Failed after {self.max_retries} attempts")
-                        return None
-                else:
-                    print(f"❌ Page {page_num} - API Error: {e}")
-                    return None
-                    
-            except json.JSONDecodeError as e:
-                print(f"❌ Page {page_num} - JSON Parse Error: {e}")
-                print(f"Raw response: {text_content[:500]}")
-                return None
-                
-            except Exception as e:
-                print(f"❌ Page {page_num} - Unexpected Error: {e}")
-                return None
-        
-        return None
-
-    def extract(self, image: Image.Image, page_num: int = 1) -> Optional[PageContent]:
-        """
-        전체 페이지를 Claude Vision으로 분석
+        페이지 전체 추출
         
         Args:
-            image: PIL Image 객체
-            page_num: 페이지 번호
+            page_image: PIL Image 객체
             
         Returns:
-            PageContent 또는 None
+            PageContent 객체
         """
         if not self.client:
-            print("❌ Claude API not initialized")
-            return None
+            print("⚠️  Claude API not available")
+            return PageContent(
+                texts=[{"content": "API not available", "type": "error"}],
+                tables=[],
+                charts=[],
+                figures=[],
+                raw_response=""
+            )
         
-        print(f"\n{'='*60}")
-        print(f"📄 Processing Page {page_num} with Claude Vision (Phase 2.5)")
-        print(f"{'='*60}")
-        
-        # 1. 이미지를 base64로 변환
-        image_base64 = self._image_to_base64(image)
-        
-        # 2. Claude API 호출 (자동 재시도)
-        result = self._call_claude_with_retry(image_base64, page_num)
-        
-        if not result:
-            print(f"❌ Failed to extract Page {page_num}")
-            return None
-        
-        # 3. 결과 파싱
-        text_blocks = []
-        for text_data in result.get('texts', []):
-            text_blocks.append(TextBlock(
-                text=text_data.get('content', ''),
-                confidence=0.99
-            ))
-        
-        tables = []
-        for table_data in result.get('tables', []):
-            tables.append(Table(
-                caption=table_data.get('caption', ''),
-                markdown=table_data.get('markdown', ''),
-                confidence=0.99
-            ))
-        
-        charts = []
-        for chart_data in result.get('charts', []):
-            data_points = chart_data.get('data_points', [])
+        try:
+            # 이미지를 base64로 인코딩
+            buffered = BytesIO()
+            page_image.save(buffered, format="PNG")
+            img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
             
-            # ⭐ 빈 data_points 경고
-            if not data_points:
-                print(f"⚠️  WARNING: Chart '{chart_data.get('title', 'Unknown')}' has NO data_points!")
+            # API 호출
+            response_text = self._call_api(img_base64)
             
-            charts.append(Chart(
-                type=chart_data.get('type', 'unknown'),
-                title=chart_data.get('title', ''),
-                description=chart_data.get('description', ''),
-                data_points=data_points,
-                confidence=0.95 if data_points else 0.50  # 데이터 없으면 신뢰도 낮춤
-            ))
+            # 응답 파싱
+            content = self._parse_response(response_text)
+            
+            return content
+            
+        except Exception as e:
+            print(f"❌ Extraction error: {str(e)}")
+            return PageContent(
+                texts=[{"content": f"Error: {str(e)}", "type": "error"}],
+                tables=[],
+                charts=[],
+                figures=[],
+                raw_response=""
+            )
+    
+    def _call_api(self, img_base64: str) -> str:
+        """
+        Claude API 호출
         
-        figures = []
-        for figure_data in result.get('figures', []):
-            figures.append(Figure(
-                type=figure_data.get('type', 'image'),
-                description=figure_data.get('description', ''),
-                confidence=0.99
-            ))
-        
-        sections = []
-        
-        # 4. 통계 출력
-        print(f"\n📊 Page {page_num} Extraction Results:")
-        print(f"   ✅ Text blocks: {len(text_blocks)}")
-        print(f"   ✅ Tables: {len(tables)}")
-        print(f"   ✅ Charts: {len(charts)}")
-        print(f"   ✅ Figures: {len(figures)}")
-        
-        # 차트별 데이터 포인트 체크
-        for i, chart in enumerate(charts, 1):
-            point_count = len(chart.data_points)
-            if point_count == 0:
-                print(f"   ⚠️  Chart {i} '{chart.title}': NO DATA POINTS! ❌")
+        Args:
+            img_base64: base64 인코딩된 이미지
+            
+        Returns:
+            응답 텍스트
+        """
+        try:
+            response = self.client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=4096,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": img_base64
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "text": self.SYSTEM_PROMPT
+                        }
+                    ]
+                }]
+            )
+            
+            # 응답 텍스트 추출
+            if response.content and len(response.content) > 0:
+                return response.content[0].text
             else:
-                print(f"   ✅ Chart {i} '{chart.title}': {point_count} data points")
+                return ""
+                
+        except Exception as e:
+            print(f"❌ API call failed: {str(e)}")
+            raise
+    
+    def _parse_response(self, response_text: str) -> PageContent:
+        """
+        응답 파싱
         
-        return PageContent(
-            page_num=page_num,
-            text_blocks=text_blocks,
-            tables=tables,
-            charts=charts,
-            figures=figures,
-            sections=sections
-        )
+        Args:
+            response_text: API 응답 텍스트
+            
+        Returns:
+            PageContent 객체
+        """
+        try:
+            # JSON 추출 (마크다운 코드 블록 제거)
+            json_match = re.search(r'```json\s*(\{.*?\})\s*```', response_text, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1)
+            else:
+                # JSON 마커 없이 직접 파싱 시도
+                json_str = response_text
+            
+            # JSON 파싱
+            data = json.loads(json_str)
+            
+            return PageContent(
+                texts=data.get('texts', []),
+                tables=data.get('tables', []),
+                charts=data.get('charts', []),
+                figures=data.get('figures', []),
+                raw_response=response_text
+            )
+            
+        except json.JSONDecodeError as e:
+            print(f"⚠️  JSON parsing failed: {str(e)}")
+            print(f"Response preview: {response_text[:300]}...")
+            
+            # 파싱 실패 시 텍스트로 반환
+            return PageContent(
+                texts=[{"content": response_text, "type": "raw"}],
+                tables=[],
+                charts=[],
+                figures=[],
+                raw_response=response_text
+            )
+        
+        except Exception as e:
+            print(f"❌ Response parsing error: {str(e)}")
+            return PageContent(
+                texts=[{"content": f"Parsing error: {str(e)}", "type": "error"}],
+                tables=[],
+                charts=[],
+                figures=[],
+                raw_response=response_text
+            )
 
 
 # ============================================================
@@ -473,17 +332,12 @@ class ClaudeFullPageExtractor:
 
 if __name__ == "__main__":
     print("\n" + "="*60)
-    print("PRISM Phase 2.5 - Claude Full Page Extractor Test")
+    print("PRISM Phase 2.7 - Claude Full Page Extractor Test")
     print("="*60 + "\n")
     
     extractor = ClaudeFullPageExtractor()
     
     if extractor.client:
-        print("✅ Ready to extract pages with enhanced prompt!")
-        print("\n개선 사항:")
-        print("1. 빈 data_points 절대 금지")
-        print("2. 복잡한 차트 대응 강화")
-        print("3. 529 에러 Exponential Backoff 재시도")
-        print("4. 차트별 데이터 완전성 검증")
+        print("✅ Ready to extract pages!")
     else:
         print("❌ Claude API not available")

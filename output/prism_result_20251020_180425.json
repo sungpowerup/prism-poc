@@ -1,0 +1,124 @@
+{
+  "metadata": {
+    "processed_at": "2025-10-20T18:04:25",
+    "total_pages": 3,
+    "total_chunks": 10,
+    "processing_time_seconds": 289.95,
+    "chunk_types": {
+      "text": 10
+    },
+    "vlm_provider": "claude"
+  },
+  "chunks": [
+    {
+      "chunk_id": "chunk_001_001",
+      "page_num": 1,
+      "content": "06\n응답자특성\n전체응답자\n2023년\n조사에\n전체\n응답자는\n총35000명이며이중\n프로스포츠\n팬은\n25000명\n긍금논ㅎ릉\n10000명으로\n응답자\n주요\n특성은\n해러o\n같음\n응답자성별및연령\n[%:어\n259\n223\n452\n548\n11\n19\n남성\n207\n여성\n14~19세\n20대\n30대\n10다\n50대이상\n0\n응답자\n525\n[%:어\n사무직\n328\n학상\n212\n전문직\n112\n강원/제주\n수도권\n무직/은퇴\n103\n판매/서비스직\n14\n전업주부\n경북군\nB허Y\n6]\n78\n곤묵은\"\n46\n전라권\n기타\n27\n평소\n선호하는\n문화예술체육활동및스포트\n토토프로토\n경험여부\n[%:어\n스포츠경기관람\n554\n물균는記\n382\n231\n경험있음\n산책및\n걷기활동\n230\n개인운동\n45\n162\n음악회콘서트관람\n143\n축제/페스티벌/나들이\n905\n몽평무운\n박물관전시회관림\n6:\n훌류후우울\n기타\n01\n조사개요\n|",
+      "type": "text",
+      "metadata": {
+        "section_path": "Full page content > Full page content",
+        "token_count": 336,
+        "source": "ocr"
+      }
+    },
+    {
+      "chunk_id": "chunk_002_001",
+      "page_num": 2,
+      "content": "전체응답자\nㅇ해외스포츠리그시청\n여부및\n시청리그\n[%:어\n551\n457\n543\n326\n퍼우워Y\n90\n몽덩\n시청하고\n|\n몽콩\n해외축구\n해외야구\n해외농구\n이종격투기등\n해외골프\n해외배구\n해외풋볼\n기타스포*\n투어\n최근5년이내국내프로스포츠\n경기관람및시청여부\n[%\n생중계시청경험\n시청하지\n몽콩\n26]\n151\n경험없음\n733\n849\n경험있음\n시청하고\n몽콩\n특성\n최근5년이내직관\n경험이있는\n응답자\nN=25646 단위: %\n191\n고객유형\n정의\n16\n신규유입고객\n올해최초로홈경기장직관\n경험이있는만14세이상남녀\n593\n극놀붐 loR운균노 외lz운물H우룽帝 l어Y 코zzoz~8toz\n지속관람고객\n지속관람고객\n만14세이상\n2018~2022년사이홈경기장\n직관\n|야무운\nI있지만\n올해직관\n경험이없는만14세이상남녀\n경기장\n곰유\nY\n혹은\n적정하다고\n생각하는\n1인기준지출\nB:고\n프로스포츠팬\n논\n109161\n84043\n22126\n21618\n18849\n18680\n21248\n18169\n13919\n16892\n12491\n8922\n|물면\n식음료비\nMD상품\n}:\n|\n2023\n프로스포츠\n관람객\n성향조사",
+      "type": "text",
+      "metadata": {
+        "section_path": "Full page content > Full page content",
+        "token_count": 438,
+        "source": "ocr"
+      }
+    },
+    {
+      "chunk_id": "chunk_003_001",
+      "page_num": 3,
+      "content": "1569\n659\n184%\nKE\n30\n163",
+      "type": "text",
+      "metadata": {
+        "section_path": "Full page content > KBO",
+        "token_count": 3,
+        "source": "ocr"
+      }
+    },
+    {
+      "chunk_id": "chunk_003_002",
+      "page_num": 3,
+      "content": "",
+      "type": "text",
+      "metadata": {
+        "section_path": "Full page content > KDZ",
+        "token_count": 0,
+        "source": "ocr"
+      }
+    },
+    {
+      "chunk_id": "chunk_003_003",
+      "page_num": 3,
+      "content": "210\n3\n316%\n582%\n102%",
+      "type": "text",
+      "metadata": {
+        "section_path": "Full page content > KBL",
+        "token_count": 2,
+        "source": "ocr"
+      }
+    },
+    {
+      "chunk_id": "chunk_003_004",
+      "page_num": 3,
+      "content": "",
+      "type": "text",
+      "metadata": {
+        "section_path": "Full page content > AKBL",
+        "token_count": 0,
+        "source": "ocr"
+      }
+    },
+    {
+      "chunk_id": "chunk_003_005",
+      "page_num": 3,
+      "content": "283%\n561%\n156%\n214\nKOvO남자\n]49\n267%\n626%\n107%",
+      "type": "text",
+      "metadata": {
+        "section_path": "Full page content > WKBL",
+        "token_count": 7,
+        "source": "ocr"
+      }
+    },
+    {
+      "chunk_id": "chunk_003_006",
+      "page_num": 3,
+      "content": "65\n284\n200",
+      "type": "text",
+      "metadata": {
+        "section_path": "Full page content > KOVO",
+        "token_count": 1,
+        "source": "ocr"
+      }
+    },
+    {
+      "chunk_id": "chunk_003_007",
+      "page_num": 3,
+      "content": "2270\n553\n120%",
+      "type": "text",
+      "metadata": {
+        "section_path": "Full page content > KOVO",
+        "token_count": 1,
+        "source": "ocr"
+      }
+    },
+    {
+      "chunk_id": "chunk_003_008",
+      "page_num": 3,
+      "content": "20\n2023\n프로스포츠\n관람객\n성향조사",
+      "type": "text",
+      "metadata": {
+        "section_path": "Full page content > KOVC",
+        "token_count": 19,
+        "source": "ocr"
+      }
+    }
+  ]
+}

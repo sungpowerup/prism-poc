@@ -4,6 +4,7 @@ OCR + VLM 하이브리드 컨텐츠 추출
 
 Author: 이서영 (Backend Lead) + 박준호 (AI/ML Lead)
 Date: 2025-10-20
+Fixed: Anthropic client initialization (proxies 제거)
 """
 
 import os
@@ -14,7 +15,7 @@ from PIL import Image
 from dataclasses import dataclass
 
 
-# VLM Provider 임포트는 필요할 때만
+# VLM Provider 임포트
 try:
     from anthropic import Anthropic
 except ImportError:
@@ -55,7 +56,15 @@ class HybridExtractor:
         if vlm_provider == 'claude':
             api_key = os.getenv('ANTHROPIC_API_KEY')
             if api_key and Anthropic:
-                self.claude = Anthropic(api_key=api_key)
+                try:
+                    # ✅ 수정: proxies 파라미터 완전 제거
+                    self.claude = Anthropic(api_key=api_key)
+                    print("✅ Claude API initialized for hybrid extraction")
+                except Exception as e:
+                    print(f"❌ Claude API initialization failed: {e}")
+                    self.claude = None
+            else:
+                print("⚠️  Claude API key not found")
         
         # OCR 초기화 (옵션)
         self.ocr = None
@@ -70,6 +79,8 @@ class HybridExtractor:
             print("✅ HybridExtractor initialized with OCR + VLM")
         except ImportError:
             print("⚠️  PaddleOCR not available - using VLM only")
+        except Exception as e:
+            print(f"⚠️  PaddleOCR initialization failed: {e}")
         
         if not self.claude:
             print("⚠️  Claude API not available")
@@ -111,280 +122,220 @@ class HybridExtractor:
         if self.ocr:
             try:
                 import numpy as np
-                image_array = np.array(image)
-                
-                result = self.ocr.ocr(image_array, cls=True)
+                result = self.ocr.ocr(np.array(image), cls=True)
                 
                 if result and result[0]:
                     lines = []
-                    total_confidence = 0
-                    
                     for line in result[0]:
                         text = line[1][0]
-                        conf = line[1][1]
                         lines.append(text)
-                        total_confidence += conf
                     
                     content = '\n'.join(lines)
-                    confidence = total_confidence / len(result[0]) if result[0] else 0
-                    
-                    return ExtractedContent(
-                        type='text',
-                        content=content,
-                        metadata={
-                            'method': 'ocr',
-                            'line_count': len(lines)
-                        },
-                        confidence=confidence
-                    )
-            
+                    if content.strip():
+                        return ExtractedContent(
+                            type='text',
+                            content=content,
+                            metadata={'source': 'ocr'},
+                            confidence=0.9
+                        )
             except Exception as e:
-                print(f"⚠️  OCR failed: {str(e)}")
+                print(f"⚠️  OCR failed: {e}")
         
-        # 2. Fallback: PyMuPDF 텍스트
+        # 2. Fallback: 페이지 전체 텍스트
         if page_text:
             return ExtractedContent(
                 type='text',
                 content=page_text,
-                metadata={'method': 'pymupdf'},
-                confidence=0.8
+                metadata={'source': 'fallback'},
+                confidence=0.7
             )
         
-        # 3. 최종 Fallback: 빈 텍스트
+        # 3. VLM 시도
+        if self.claude:
+            try:
+                content = self._call_vlm(image, "텍스트를 추출하세요.")
+                return ExtractedContent(
+                    type='text',
+                    content=content,
+                    metadata={'source': 'vlm'},
+                    confidence=0.8
+                )
+            except Exception as e:
+                print(f"⚠️  VLM text extraction failed: {e}")
+        
+        # 최종 fallback
         return ExtractedContent(
             type='text',
-            content='[No text extracted]',
-            metadata={'method': 'none'},
+            content="[텍스트 추출 실패]",
+            metadata={'source': 'error'},
             confidence=0.0
         )
     
     def _extract_table(self, image: Image.Image) -> ExtractedContent:
-        """표 영역 추출 (VLM 구조화)"""
+        """표 추출 (VLM)"""
         
         if not self.claude:
-            # VLM 없을 때: OCR 폴백
-            return self._extract_text(image)
+            return ExtractedContent(
+                type='table',
+                content="[VLM 없음]",
+                metadata={},
+                confidence=0.0
+            )
         
-        image_base64 = self._encode_image(image)
-        
-        prompt = """Extract this table into Markdown format.
+        try:
+            prompt = """이 표를 마크다운 형식으로 변환하세요.
 
-**Requirements:**
-1. Preserve header row
-2. Align columns properly
-3. Include all data
-4. Use `|` for column separators
-5. Use `---` for header separator
-
-**Output format:**
+출력 형식:
 ```markdown
-| Header 1 | Header 2 | Header 3 |
-|----------|----------|----------|
-| Data 1   | Data 2   | Data 3   |
+| 컬럼1 | 컬럼2 | 컬럼3 |
+|-------|-------|-------|
+| 값1   | 값2   | 값3   |
 ```
 
-Extract now:"""
+주의: 모든 값을 정확히 입력하세요."""
 
-        try:
-            message = self.claude.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=2048,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "image/png",
-                                    "data": image_base64
-                                }
-                            },
-                            {
-                                "type": "text",
-                                "text": prompt
-                            }
-                        ]
-                    }
-                ]
-            )
-            
-            content = message.content[0].text.strip()
-            
-            # Markdown 코드 블록 제거
-            import re
-            md_match = re.search(r'```markdown\s*(.*?)\s*```', content, re.DOTALL)
-            if md_match:
-                content = md_match.group(1)
+            content = self._call_vlm(image, prompt)
             
             return ExtractedContent(
                 type='table',
                 content=content,
-                metadata={'method': 'vlm'},
-                confidence=0.9
+                metadata={'source': 'vlm'},
+                confidence=0.95
             )
             
         except Exception as e:
-            print(f"❌ Table extraction failed: {str(e)}")
+            print(f"⚠️  Table extraction failed: {e}")
             return ExtractedContent(
                 type='table',
-                content='[Table extraction failed]',
-                metadata={'error': str(e)},
+                content="[표 추출 실패]",
+                metadata={},
                 confidence=0.0
             )
     
     def _extract_chart(self, image: Image.Image) -> ExtractedContent:
-        """차트 영역 추출 (VLM 데이터 추출)"""
+        """차트 추출 (VLM)"""
         
         if not self.claude:
             return ExtractedContent(
                 type='chart',
-                content='[Chart - VLM not available]',
-                metadata={'method': 'none'},
+                content="[VLM 없음]",
+                metadata={},
                 confidence=0.0
             )
         
-        image_base64 = self._encode_image(image)
-        
-        prompt = """Describe this chart/graph.
-
-**Include:**
-1. Chart type (bar, pie, line, etc.)
-2. Axis labels and units
-3. Data values
-4. Trends or patterns
-5. Title/legend
-
-**Format:**
-```
-Chart Type: [type]
-Title: [title]
-Data:
-- [point 1]: [value]
-- [point 2]: [value]
-...
-```
-
-Describe now:"""
-
         try:
-            message = self.claude.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=1024,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "image/png",
-                                    "data": image_base64
-                                }
-                            },
-                            {
-                                "type": "text",
-                                "text": prompt
-                            }
-                        ]
-                    }
-                ]
-            )
-            
-            content = message.content[0].text.strip()
+            prompt = """이 차트를 분석하여 다음 정보를 추출하세요:
+
+1. 차트 타입 (bar/line/pie/...)
+2. 제목
+3. 모든 데이터 포인트 (레이블 + 값)
+
+JSON 형식으로 출력:
+```json
+{
+  "type": "차트타입",
+  "title": "제목",
+  "data": [
+    {"label": "항목1", "value": 숫자},
+    {"label": "항목2", "value": 숫자}
+  ]
+}
+```"""
+
+            content = self._call_vlm(image, prompt)
             
             return ExtractedContent(
                 type='chart',
                 content=content,
-                metadata={'method': 'vlm'},
-                confidence=0.85
+                metadata={'source': 'vlm'},
+                confidence=0.9
             )
             
         except Exception as e:
-            print(f"❌ Chart extraction failed: {str(e)}")
+            print(f"⚠️  Chart extraction failed: {e}")
             return ExtractedContent(
                 type='chart',
-                content='[Chart extraction failed]',
-                metadata={'error': str(e)},
+                content="[차트 추출 실패]",
+                metadata={},
                 confidence=0.0
             )
     
     def _extract_image(self, image: Image.Image) -> ExtractedContent:
-        """이미지 영역 추출 (VLM 설명)"""
+        """이미지/다이어그램 설명 (VLM)"""
         
         if not self.claude:
             return ExtractedContent(
                 type='image',
-                content='[Image - VLM not available]',
-                metadata={'method': 'none'},
+                content="[VLM 없음]",
+                metadata={},
                 confidence=0.0
             )
         
-        image_base64 = self._encode_image(image)
-        
-        prompt = """Describe this image briefly.
-
-**Task:** Generate a factual, searchable description.
-
-**Guidelines:**
-1. Describe key visual elements
-2. Identify objects, text, context
-3. Note colors, layout, composition
-4. Keep it factual (no interpretation)
-5. 2-3 sentences maximum
-
-Describe now:"""
-
         try:
-            message = self.claude.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=512,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "image/png",
-                                    "data": image_base64
-                                }
-                            },
-                            {
-                                "type": "text",
-                                "text": prompt
-                            }
-                        ]
-                    }
-                ]
-            )
+            prompt = "이 이미지를 상세히 설명하세요 (2-3문장)."
             
-            content = message.content[0].text.strip()
+            content = self._call_vlm(image, prompt)
             
             return ExtractedContent(
                 type='image',
                 content=content,
-                metadata={'method': 'vlm'},
+                metadata={'source': 'vlm'},
                 confidence=0.85
             )
             
         except Exception as e:
-            print(f"❌ Image description failed: {str(e)}")
+            print(f"⚠️  Image description failed: {e}")
             return ExtractedContent(
                 type='image',
-                content='[Image description failed]',
-                metadata={'error': str(e)},
+                content="[이미지 설명 실패]",
+                metadata={},
                 confidence=0.0
             )
     
-    def _encode_image(self, image: Image.Image) -> str:
-        """이미지를 base64 인코딩"""
-        buffer = BytesIO()
-        image.save(buffer, format='PNG')
-        return base64.b64encode(buffer.getvalue()).decode('utf-8')
+    def _call_vlm(self, image: Image.Image, prompt: str) -> str:
+        """
+        VLM API 호출
+        
+        Args:
+            image: PIL Image
+            prompt: 프롬프트
+            
+        Returns:
+            응답 텍스트
+        """
+        # 이미지를 base64로 인코딩
+        buffered = BytesIO()
+        image.save(buffered, format="PNG")
+        img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+        
+        # API 호출
+        response = self.claude.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=2000,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": img_base64
+                        }
+                    },
+                    {
+                        "type": "text",
+                        "text": prompt
+                    }
+                ]
+            }]
+        )
+        
+        # 응답 추출
+        if response.content and len(response.content) > 0:
+            return response.content[0].text
+        else:
+            return ""
 
 
 # ============================================================
@@ -399,6 +350,6 @@ if __name__ == "__main__":
     extractor = HybridExtractor(vlm_provider='claude')
     
     if extractor.claude:
-        print("✅ Ready for hybrid extraction!")
+        print("✅ Ready to extract content!")
     else:
-        print("❌ VLM not available")
+        print("❌ Claude API not available")

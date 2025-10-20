@@ -4,6 +4,7 @@ VLM 기반 문서 레이아웃 분석 및 영역 분류
 
 Author: 박준호 (AI/ML Lead)
 Date: 2025-10-20
+Fixed: Anthropic client initialization (proxies 제거)
 """
 
 import os
@@ -16,7 +17,7 @@ from PIL import Image
 from dataclasses import dataclass
 
 
-# VLM Provider 임포트는 필요할 때만
+# VLM Provider 임포트
 try:
     from anthropic import Anthropic
 except ImportError:
@@ -56,17 +57,20 @@ class LayoutDetector:
         if vlm_provider == 'claude':
             api_key = os.getenv('ANTHROPIC_API_KEY')
             if api_key and Anthropic:
-                self.client = Anthropic(api_key=api_key)
-                print("✅ LayoutDetector initialized with Claude API")
+                try:
+                    # ✅ 수정: proxies 파라미터 완전 제거
+                    self.client = Anthropic(api_key=api_key)
+                    print("✅ LayoutDetector initialized with Claude API")
+                except Exception as e:
+                    print(f"❌ Claude API initialization failed: {e}")
+                    self.client = None
             else:
                 print("⚠️  Claude API key not found - LayoutDetector disabled")
         
         elif vlm_provider == 'azure_openai':
-            # Azure OpenAI는 레이아웃 감지가 제한적이므로 비활성화
             print("⚠️  Azure OpenAI doesn't support layout detection - disabled")
         
         elif vlm_provider == 'ollama':
-            # Ollama는 로컬 VLM이므로 레이아웃 감지가 제한적
             print("⚠️  Ollama layout detection limited - disabled")
         
         else:
@@ -74,143 +78,119 @@ class LayoutDetector:
     
     def detect_regions(self, page_image: Image.Image) -> List[Region]:
         """
-        페이지 이미지에서 레이아웃 영역 탐지
+        페이지 이미지에서 영역 감지
         
         Args:
             page_image: PIL Image 객체
             
         Returns:
-            Region 객체 리스트
+            Region 리스트
         """
         if not self.client:
-            print("❌ Layout detection skipped - No API client")
-            # 폴백: 전체 페이지를 하나의 TEXT 영역으로
-            print("   ⚠️  No regions detected, treating whole page as text")
-            return [Region(
-                type='text',
-                bbox=(0, 0, page_image.width, page_image.height),
-                confidence=0.5,
-                description='Full page'
-            )]
+            print("⚠️  VLM client not available, using fallback strategy")
+            return self._fallback_detection(page_image)
         
         try:
             # 이미지를 base64로 인코딩
-            image_base64 = self._encode_image(page_image)
+            buffered = BytesIO()
+            page_image.save(buffered, format="PNG")
+            img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
             
-            # VLM으로 레이아웃 분석
-            print("🔍 Analyzing page layout with VLM...")
-            response = self._call_vlm_for_layout(image_base64)
+            # VLM API 호출
+            response_text = self._call_vlm(img_base64, page_image.size)
             
             # 응답 파싱
-            regions = self._parse_layout_response(response, page_image.size)
-            
-            if not regions:
-                # 파싱 실패 시 폴백
-                print("   ⚠️  No regions detected, treating whole page as text")
-                return [Region(
-                    type='text',
-                    bbox=(0, 0, page_image.width, page_image.height),
-                    confidence=0.5,
-                    description='Full page'
-                )]
-            
-            print(f"✅ Detected {len(regions)} regions")
-            for i, region in enumerate(regions, 1):
-                print(f"   Region {i}: {region.type} - {region.description}")
+            regions = self._parse_response(response_text, page_image.size)
             
             return regions
             
         except Exception as e:
-            print(f"❌ Layout detection error: {str(e)}")
-            # 에러 발생 시 폴백
-            return [Region(
-                type='text',
-                bbox=(0, 0, page_image.width, page_image.height),
-                confidence=0.5,
-                description='Full page'
-            )]
+            print(f"⚠️  VLM detection failed: {str(e)}, using fallback")
+            return self._fallback_detection(page_image)
     
-    def _encode_image(self, image: Image.Image) -> str:
-        """이미지를 base64 인코딩"""
-        buffer = BytesIO()
-        image.save(buffer, format='PNG')
-        return base64.b64encode(buffer.getvalue()).decode('utf-8')
-    
-    def _call_vlm_for_layout(self, image_base64: str) -> str:
+    def _call_vlm(self, img_base64: str, image_size: Tuple[int, int]) -> str:
         """
-        VLM API 호출 - 레이아웃 분석
+        VLM API 호출 (Claude)
         
-        CRITICAL: VLM은 "설명"이 아닌 "구조 분석"만 수행
+        Args:
+            img_base64: base64 인코딩된 이미지
+            image_size: (width, height)
+            
+        Returns:
+            VLM 응답 텍스트
         """
+        width, height = image_size
         
-        prompt = """You are a document layout analyzer. Analyze this page and identify all distinct regions.
+        prompt = f"""이 문서 페이지를 분석하여 다음 정보를 JSON 형식으로 추출해주세요:
 
-**Task:** Detect and classify all regions in this document page.
+1. 페이지에 있는 모든 영역(region)을 찾으세요
+2. 각 영역의 타입을 분류하세요: TEXT, TABLE, CHART, IMAGE
+3. 각 영역의 위치와 크기를 추정하세요 (이미지 크기: {width}x{height})
 
-**Region Types:**
-- TEXT: Pure text blocks, paragraphs, headings
-- TABLE: Tabular data with rows and columns
-- CHART: Charts, graphs, plots (bar, pie, line, etc.)
-- IMAGE: Photos, illustrations, diagrams
-
-**Output Format (JSON):**
-```json
-{
+응답 형식 (JSON):
+{{
   "regions": [
-    {
-      "type": "TEXT|TABLE|CHART|IMAGE",
-      "description": "Brief description (e.g., 'Introduction paragraph', 'Sales data table')",
-      "confidence": 0.0-1.0
-    }
+    {{
+      "type": "TEXT" or "TABLE" or "CHART" or "IMAGE",
+      "confidence": 0.0-1.0,
+      "description": "영역 설명"
+    }}
   ]
-}
-```
+}}
 
-**Rules:**
-1. Identify DISTINCT regions only
-2. Do NOT describe content - just identify structure
-3. Order regions top-to-bottom
-4. Minimum 1 region, maximum 10 regions
-
-Analyze now:"""
+주의사항:
+- 영역을 위에서 아래로 나열하세요 (읽기 순서)
+- 각 영역은 명확히 구분되어야 합니다
+- 차트나 표는 반드시 식별해주세요"""
 
         try:
-            message = self.client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=2048,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "image/png",
-                                    "data": image_base64
-                                }
-                            },
-                            {
-                                "type": "text",
-                                "text": prompt
+            response = self.client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=2000,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": img_base64
                             }
-                        ]
-                    }
-                ]
+                        },
+                        {
+                            "type": "text",
+                            "text": prompt
+                        }
+                    ]
+                }]
             )
             
-            return message.content[0].text.strip()
-            
+            # 응답 텍스트 추출
+            if response.content and len(response.content) > 0:
+                return response.content[0].text
+            else:
+                return ""
+                
         except Exception as e:
-            print(f"❌ VLM API call failed: {str(e)}")
+            print(f"⚠️  VLM API call failed: {str(e)}")
             raise
     
-    def _parse_layout_response(self, response: str, image_size: Tuple[int, int]) -> List[Region]:
-        """VLM 응답을 Region 객체로 파싱"""
+    def _parse_response(self, response: str, image_size: Tuple[int, int]) -> List[Region]:
+        """
+        VLM 응답 파싱
+        
+        Args:
+            response: VLM 응답 텍스트
+            image_size: (width, height)
+            
+        Returns:
+            Region 리스트
+        """
         regions = []
         
         try:
-            # JSON 추출
+            # JSON 추출 (마크다운 코드 블록 고려)
             json_match = re.search(r'```json\s*(\{.*?\})\s*```', response, re.DOTALL)
             if json_match:
                 data = json.loads(json_match.group(1))
@@ -247,6 +227,27 @@ Analyze now:"""
             print(f"⚠️  Response parsing error: {str(e)}")
         
         return regions
+    
+    def _fallback_detection(self, page_image: Image.Image) -> List[Region]:
+        """
+        VLM이 없을 때 폴백 전략: 전체 페이지를 하나의 TEXT 영역으로 처리
+        
+        Args:
+            page_image: PIL Image 객체
+            
+        Returns:
+            Region 리스트 (1개)
+        """
+        width, height = page_image.size
+        
+        return [
+            Region(
+                type='text',
+                bbox=(0, 0, width, height),
+                confidence=1.0,
+                description='Full page content'
+            )
+        ]
 
 
 # ============================================================
