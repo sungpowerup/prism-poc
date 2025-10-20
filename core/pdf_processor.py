@@ -63,7 +63,7 @@ class PDFProcessor:
                 tmp_path = tmp.name
             
             try:
-                # OCR 실행 (cls 파라미터 제거)
+                # OCR 실행
                 result = self.ocr_engine.ocr(tmp_path)
                 
                 # 결과 파싱 - PaddleOCR 반환 구조 처리
@@ -197,28 +197,49 @@ class PDFProcessor:
             }
 
     def _build_vlm_prompt(self, page_num: int, ocr_text: Optional[str] = None) -> str:
-        """VLM 분석용 프롬프트 생성"""
+        """VLM 분석용 프롬프트 생성 (개선된 버전)"""
         
         prompt_parts = []
         
         prompt_parts.append(f"이 문서 이미지(페이지 {page_num})를 분석해주세요.")
         prompt_parts.append("")
+        prompt_parts.append("=" * 80)
+        prompt_parts.append("**중요: 정확도 최우선 원칙**")
+        prompt_parts.append("=" * 80)
+        prompt_parts.append("- 이미지에서 보이는 **정확한 숫자와 텍스트**만 사용하세요")
+        prompt_parts.append("- 절대 추측하거나 일반화하지 마세요")
+        prompt_parts.append("- 차트의 레이블과 값을 매우 신중하게 읽으세요")
+        prompt_parts.append("- 숫자가 명확하지 않으면 OCR 텍스트를 참고하세요")
+        prompt_parts.append("")
+        prompt_parts.append("**검증 체크리스트:**")
+        prompt_parts.append("[ ] 모든 숫자가 이미지의 값과 정확히 일치하는가?")
+        prompt_parts.append("[ ] 차트 레이블이 이미지의 텍스트와 정확히 일치하는가?")
+        prompt_parts.append("[ ] 퍼센트의 합계가 100%인가? (해당되는 경우)")
+        prompt_parts.append("[ ] 남성/여성 비율이 올바른가? (성별 데이터의 경우)")
+        prompt_parts.append("")
+        
         prompt_parts.append("**분석 요구사항:**")
         prompt_parts.append("")
         prompt_parts.append("1. **문서 구조 파악**")
         prompt_parts.append("   - 제목, 섹션, 단락 구조 식별")
         prompt_parts.append("   - 표, 차트, 이미지 등 비텍스트 요소 위치 파악")
         prompt_parts.append("")
-        prompt_parts.append("2. **내용 이해 및 설명**")
-        prompt_parts.append("   - 핵심 내용을 명확하고 구조화된 형태로 설명")
-        prompt_parts.append("   - 표나 차트의 데이터를 정확히 해석")
-        prompt_parts.append("   - 중요한 숫자, 통계, 날짜 등은 빠짐없이 포함")
+        prompt_parts.append("2. **정확한 데이터 추출 (최우선)**")
+        prompt_parts.append("   - **숫자는 이미지에 표시된 그대로 정확히 기록**")
+        prompt_parts.append("   - **차트 레이블은 이미지의 텍스트 그대로 사용 (추론 금지)**")
+        prompt_parts.append("   - 표나 차트의 모든 데이터를 빠짐없이 추출")
+        prompt_parts.append("   - 날짜, 통계, 비율은 특히 주의하여 정확히 기록")
         prompt_parts.append("")
-        prompt_parts.append("3. **맥락 및 의미 분석**")
+        prompt_parts.append("3. **교차 검증 (필수)**")
+        prompt_parts.append("   - 이미지와 OCR 텍스트를 교차 검증")
+        prompt_parts.append("   - 불일치가 있으면 이미지를 우선하되, 숫자는 OCR도 참고")
+        prompt_parts.append("   - 합계/비율 검증 (예: 퍼센트 합 = 100%)")
+        prompt_parts.append("")
+        prompt_parts.append("4. **맥락 및 의미 분석**")
         prompt_parts.append("   - 문서의 목적과 주요 메시지 파악")
         prompt_parts.append("   - 데이터 간의 관계와 인사이트 도출")
         prompt_parts.append("")
-        prompt_parts.append("4. **마크다운 형식으로 출력**")
+        prompt_parts.append("5. **마크다운 형식으로 출력**")
         prompt_parts.append("   - 계층적 헤딩 구조 사용 (##, ###)")
         prompt_parts.append("   - 표는 마크다운 테이블 형식으로")
         prompt_parts.append("   - 리스트는 불릿(-)이나 번호(1.) 사용")
@@ -228,22 +249,34 @@ class PDFProcessor:
         prompt_parts.append("## [페이지 주제/제목]")
         prompt_parts.append("")
         prompt_parts.append("### 주요 내용")
-        prompt_parts.append("- 핵심 포인트 1")
+        prompt_parts.append("- 핵심 포인트 1 (정확한 숫자 포함)")
         prompt_parts.append("- 핵심 포인트 2")
         prompt_parts.append("")
-        prompt_parts.append("### 상세 분석")
-        prompt_parts.append("[구체적인 설명...]")
+        prompt_parts.append("### 데이터 분석")
+        prompt_parts.append("| 항목 | 값 |")
+        prompt_parts.append("|------|-----|")
+        prompt_parts.append("| 항목1 | XX.X% |")
         prompt_parts.append("")
-        prompt_parts.append("### 데이터/표 정보")
-        prompt_parts.append("[표나 차트 내용...]")
+        prompt_parts.append("### 인사이트")
+        prompt_parts.append("- 데이터 기반 인사이트...")
         
-        # OCR 텍스트가 있으면 참고용으로 추가
+        # OCR 텍스트가 있으면 적극 활용
         if ocr_text:
             prompt_parts.append("")
-            prompt_parts.append("**참고: OCR로 추출한 텍스트**")
-            prompt_parts.append("(이미지 분석 시 참고용으로만 사용하고, 이미지의 실제 내용을 우선하여 분석하세요)")
+            prompt_parts.append("=" * 80)
+            prompt_parts.append("**OCR로 추출한 텍스트 (숫자/레이블 검증용 - 매우 중요)**")
+            prompt_parts.append("=" * 80)
+            prompt_parts.append("아래 OCR 텍스트를 반드시 참고하여 이미지의 숫자와 레이블을 정확히 확인하세요.")
+            prompt_parts.append("특히 숫자가 작거나 불명확한 경우 OCR 텍스트를 우선 참고하세요.")
             prompt_parts.append("")
-            prompt_parts.append(ocr_text[:2000])
+            prompt_parts.append(ocr_text[:3000])  # 더 많은 텍스트 제공
+            prompt_parts.append("")
+            prompt_parts.append("=" * 80)
+            prompt_parts.append("**중요 알림:**")
+            prompt_parts.append("- 이미지와 OCR 텍스트를 함께 보고 가장 정확한 값을 선택하세요")
+            prompt_parts.append("- 숫자나 퍼센트는 OCR 텍스트를 적극 활용하세요")
+            prompt_parts.append("- 레이블/항목명은 이미지를 우선하되 OCR로 검증하세요")
+            prompt_parts.append("=" * 80)
         
         return '\n'.join(prompt_parts)
 
