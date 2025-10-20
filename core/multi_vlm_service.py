@@ -42,6 +42,7 @@ class MultiVLMService:
             if not api_key:
                 raise ValueError("ANTHROPIC_API_KEY가 설정되지 않았습니다")
             
+            # ✅ 수정: 기본 초기화만 사용 (proxies 제거)
             self.providers['claude'] = anthropic.Anthropic(api_key=api_key)
             self.provider_status['claude'] = {'available': True}
             logger.info("[OK] Claude 초기화 완료")
@@ -73,7 +74,7 @@ class MultiVLMService:
                 'deployment': deployment
             }
             self.provider_status['azure_openai'] = {'available': True}
-            logger.info("Azure OpenAI 초기화 완료")
+            logger.info("[OK] Azure OpenAI 초기화 완료")
             
         except Exception as e:
             logger.error(f"Azure OpenAI 초기화 실패: {e}")
@@ -88,187 +89,145 @@ class MultiVLMService:
             base_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
             model = os.getenv('OLLAMA_MODEL', 'llava:7b')
             
-            # Ollama 서버 연결 테스트
-            response = requests.get(f"{base_url}/api/tags", timeout=5)
-            response.raise_for_status()
+            # Health check
+            response = requests.get(f"{base_url}/api/tags", timeout=2)
+            if response.status_code != 200:
+                raise ConnectionError("Ollama 서버 연결 실패")
             
             self.providers['ollama'] = {
                 'base_url': base_url,
                 'model': model
             }
             self.provider_status['ollama'] = {'available': True}
-            logger.info(f"Ollama 초기화 완료: {model}")
+            logger.info("[OK] Ollama 초기화 완료")
             
         except Exception as e:
-            logger.error(f"Ollama 초기화 실패: {e}")
+            logger.warning(f"Ollama 초기화 실패 (선택사항): {e}")
             self.provider_status['ollama'] = {
                 'available': False,
                 'error': str(e)
             }
     
     def set_provider(self, provider: str):
-        """프로바이더 변경"""
+        """프로바이더 전환"""
         if provider not in self.providers:
-            raise ValueError(f"지원하지 않는 프로바이더: {provider}")
+            raise ValueError(f"프로바이더를 찾을 수 없음: {provider}")
         
-        if not self.provider_status.get(provider, {}).get('available', False):
-            raise ValueError(f"사용할 수 없는 프로바이더: {provider}")
+        if not self.provider_status[provider]['available']:
+            raise RuntimeError(f"{provider}가 사용 불가능합니다")
         
         self.current_provider = provider
-        logger.info(f"프로바이더 변경: {provider}")
+        logger.info(f"프로바이더 전환: {provider}")
     
-    def get_current_provider(self) -> str:
-        """현재 프로바이더 반환"""
-        return self.current_provider
+    def get_status(self) -> Dict[str, Any]:
+        """모든 프로바이더 상태 조회"""
+        return {
+            'current': self.current_provider,
+            'providers': self.provider_status
+        }
     
-    def analyze_image(
-        self,
-        image_base64: str,
-        prompt: str,
-        max_tokens: int = 4096
-    ) -> Dict[str, Any]:
+    def analyze_image(self, image_data: bytes, prompt: str, max_tokens: int = 2000) -> str:
         """
-        이미지 분석
+        이미지 분석 (현재 프로바이더 사용)
         
         Args:
-            image_base64: base64 인코딩된 이미지
+            image_data: 이미지 바이트
             prompt: 분석 프롬프트
             max_tokens: 최대 토큰 수
             
         Returns:
-            분석 결과 딕셔너리
+            분석 결과 텍스트
         """
-        logger.info(f"프로바이더 선택: {self.current_provider}")
-        
         if self.current_provider == 'claude':
-            return self._analyze_with_claude(image_base64, prompt, max_tokens)
+            return self._analyze_claude(image_data, prompt, max_tokens)
         elif self.current_provider == 'azure_openai':
-            return self._analyze_with_azure(image_base64, prompt, max_tokens)
+            return self._analyze_azure(image_data, prompt, max_tokens)
         elif self.current_provider == 'ollama':
-            return self._analyze_with_ollama(image_base64, prompt, max_tokens)
+            return self._analyze_ollama(image_data, prompt, max_tokens)
         else:
-            raise ValueError(f"알 수 없는 프로바이더: {self.current_provider}")
+            raise ValueError(f"지원하지 않는 프로바이더: {self.current_provider}")
     
-    def _analyze_with_claude(
-        self,
-        image_base64: str,
-        prompt: str,
-        max_tokens: int
-    ) -> Dict[str, Any]:
+    def _analyze_claude(self, image_data: bytes, prompt: str, max_tokens: int) -> str:
         """Claude로 이미지 분석"""
-        try:
-            client = self.providers['claude']
-            
-            message = client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=max_tokens,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "image/png",
-                                    "data": image_base64,
-                                },
-                            },
-                            {
-                                "type": "text",
-                                "text": prompt
+        client = self.providers['claude']
+        image_base64 = base64.b64encode(image_data).decode('utf-8')
+        
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=max_tokens,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": image_base64
                             }
-                        ],
-                    }
-                ],
-            )
-            
-            return {
-                "content": message.content[0].text,
-                "provider": "claude",
-                "model": "claude-sonnet-4-20250514"
-            }
-            
-        except Exception as e:
-            logger.error(f"Claude 분석 오류: {e}")
-            raise
+                        },
+                        {
+                            "type": "text",
+                            "text": prompt
+                        }
+                    ]
+                }
+            ]
+        )
+        
+        return message.content[0].text
     
-    def _analyze_with_azure(
-        self,
-        image_base64: str,
-        prompt: str,
-        max_tokens: int
-    ) -> Dict[str, Any]:
+    def _analyze_azure(self, image_data: bytes, prompt: str, max_tokens: int) -> str:
         """Azure OpenAI로 이미지 분석"""
-        try:
-            provider_info = self.providers['azure_openai']
-            client = provider_info['client']
-            deployment = provider_info['deployment']
-            
-            response = client.chat.completions.create(
-                model=deployment,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": prompt
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/png;base64,{image_base64}"
-                                }
+        config = self.providers['azure_openai']
+        client = config['client']
+        deployment = config['deployment']
+        
+        image_base64 = base64.b64encode(image_data).decode('utf-8')
+        
+        response = client.chat.completions.create(
+            model=deployment,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": prompt
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{image_base64}"
                             }
-                        ]
-                    }
-                ],
-                max_tokens=max_tokens
-            )
-            
-            return {
-                "content": response.choices[0].message.content,
-                "provider": "azure_openai",
-                "model": deployment
-            }
-            
-        except Exception as e:
-            logger.error(f"Azure OpenAI 분석 오류: {e}")
-            raise
+                        }
+                    ]
+                }
+            ],
+            max_tokens=max_tokens
+        )
+        
+        return response.choices[0].message.content
     
-    def _analyze_with_ollama(
-        self,
-        image_base64: str,
-        prompt: str,
-        max_tokens: int
-    ) -> Dict[str, Any]:
+    def _analyze_ollama(self, image_data: bytes, prompt: str, max_tokens: int) -> str:
         """Ollama로 이미지 분석"""
-        try:
-            provider_info = self.providers['ollama']
-            base_url = provider_info['base_url']
-            model = provider_info['model']
-            
-            response = requests.post(
-                f"{base_url}/api/generate",
-                json={
-                    "model": model,
-                    "prompt": prompt,
-                    "images": [image_base64],
-                    "stream": False
-                },
-                timeout=120
-            )
-            response.raise_for_status()
-            
-            result = response.json()
-            
-            return {
-                "content": result.get('response', ''),
-                "provider": "ollama",
-                "model": model
-            }
-            
-        except Exception as e:
-            logger.error(f"Ollama 분석 오류: {e}")
-            raise
+        config = self.providers['ollama']
+        base_url = config['base_url']
+        model = config['model']
+        
+        image_base64 = base64.b64encode(image_data).decode('utf-8')
+        
+        response = requests.post(
+            f"{base_url}/api/generate",
+            json={
+                "model": model,
+                "prompt": prompt,
+                "images": [image_base64],
+                "stream": False
+            },
+            timeout=60
+        )
+        
+        response.raise_for_status()
+        return response.json()['response']

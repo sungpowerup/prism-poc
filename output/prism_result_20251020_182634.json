@@ -1,0 +1,225 @@
+{
+  "metadata": {
+    "processed_at": "2025-10-20T18:26:34",
+    "total_pages": 3,
+    "total_chunks": 19,
+    "processing_time_seconds": 210.2,
+    "chunk_types": {
+      "text": 10,
+      "chart": 8,
+      "table": 1
+    },
+    "vlm_provider": "claude"
+  },
+  "chunks": [
+    {
+      "chunk_id": "chunk_001_001",
+      "page_num": 1,
+      "content": "06\n응답자특성",
+      "type": "text",
+      "metadata": {
+        "section_path": "06 응답자 특성 (제목) > 06 응답자 특성 (제목)",
+        "token_count": 8,
+        "source": "ocr"
+      }
+    },
+    {
+      "chunk_id": "chunk_001_001",
+      "page_num": 1,
+      "content": "전체\n응답자\n2023년\n조사에\n전체\n응답자는\n35000명이며\n이중\n프로스포츠\n팬은\n25000명\n긍금논ㅎ릉\n10000명으로\n응답자\n주요\n특성은\n로해러o\n응답자성별\n단위:%\n259\n223",
+      "type": "text",
+      "metadata": {
+        "section_path": "전체 응답자 수 설명 텍스트 > 전체 응답자 수 설명 텍스트",
+        "token_count": 82,
+        "source": "ocr"
+      }
+    },
+    {
+      "chunk_id": "chunk_001_chart_001",
+      "page_num": 1,
+      "content": "```json\n{\n  \"type\": \"mixed (pie chart + bar charts)\",\n  \"title\": \"응답자 직업 및 권역\",\n  \"data\": {\n    \"gender_pie\": [\n      {\"label\": \"남성\", \"value\": 45.2},\n      {\"label\": \"여성\", \"value\": 54.8}\n    ],\n    \"age_bar\": [\n      {\"label\": \"14-19세\", \"value\": 11.2},\n      {\"label\": \"20대\", \"value\": 27.5},\n      {\"label\": \"30대\", \"value\": 19.9}, \n      {\"label\": \"40대\", \"value\": 20.7},\n      {\"label\": \"50대이상\", \"value\": 20.7}\n    ],\n    \"occupation_bar\": [\n      {\"label\": \"사무직\", \"value\": 32.8},\n      {\"label\": \"학생\", \"value\": 21.2},\n      {\"label\": \"시간제\", \"value\": 11.3}\n    ],\n    \"region_chart\": [\n      {\"label\": \"서울/경기/인천\", \"value\": 52.5},\n      {\"label\": \"호남권\", \"value\": 4.7}\n    ]\n  }\n}\n```",
+      "type": "chart",
+      "metadata": {
+        "section_path": "응답자 성별 및 연령 파이/막대 차트 (성별 비율과 연령대별 분포) > Chart",
+        "token_count": 111,
+        "source": "vlm"
+      }
+    },
+    {
+      "chunk_id": "chunk_001_chart_001",
+      "page_num": 1,
+      "content": "```json\n{\n  \"type\": \"bar\",\n  \"title\": \"산업별 취업자 수 증감\",\n  \"data\": [\n    {\"label\": \"전문직\", \"value\": 11.2},\n    {\"label\": \"무직/은퇴\", \"value\": 7.1},\n    {\"label\": \"판매/서비스직\", \"value\": 6.9},\n    {\"label\": \"전업주부\", \"value\": 6.9},\n    {\"label\": \"자영업\", \"value\": 6.7},\n    {\"label\": \"생산직\", \"value\": 4.6},\n    {\"label\": \"기타\", \"value\": 2.7}\n  ]\n}\n```",
+      "type": "chart",
+      "metadata": {
+        "section_path": "응답자 직업 및 지역 막대 그래프와 지도 > Chart",
+        "token_count": 82,
+        "source": "vlm"
+      }
+    },
+    {
+      "chunk_id": "chunk_001_chart_001",
+      "page_num": 1,
+      "content": "```json\n{\n  \"type\": \"bar chart + pie chart\",\n  \"title\": \"평소 선호하는 문화·예술·체육활동 및 스포츠 토토(프로토) 경험 여부\",\n  \"data\": [\n    {\"label\": \"스포츠 경기 관람\", \"value\": 55.4},\n    {\"label\": \"영화·연극 관람\", \"value\": 38.2},\n    {\"label\": \"여행 및 관광\", \"value\": 23.1},\n    {\"label\": \"산책 및 걷기활동\", \"value\": 23.0},\n    {\"label\": \"개인 운동\", \"value\": 16.2},\n    {\"label\": \"음악회·콘서트 관람\", \"value\": 14.3},\n    {\"label\": \"경험있음\", \"value\": 9.5},\n    {\"label\": \"경험없음\", \"value\": 90.5}\n  ]\n}\n```",
+      "type": "chart",
+      "metadata": {
+        "section_path": "평소 선호하는 문화/예술/체육활동 및 스포트 토토 경험 여부 막대 그래프와 파이 차트 > Chart",
+        "token_count": 147,
+        "source": "vlm"
+      }
+    },
+    {
+      "chunk_id": "chunk_001_001",
+      "page_num": 1,
+      "content": "건세페스티\n벌나들다\n년0\n몽평부운\n박물관전시회\n몰러균\n68\n후후울\n54\n기타\n09\n01\n조사개요\n1]",
+      "type": "text",
+      "metadata": {
+        "section_path": "페이지 번호 (01 조사 개요 | 17) > 페이지 번호 (01 조사 개요 | 17)",
+        "token_count": 51,
+        "source": "ocr"
+      }
+    },
+    {
+      "chunk_id": "chunk_002_chart_001",
+      "page_num": 2,
+      "content": "```json\n{\n  \"type\": \"mixed_pie_and_bar\",\n  \"title\": \"해외 스포츠 리그 시청 여부 및 시청 리그\",\n  \"data\": {\n    \"pie_chart\": [\n      {\"label\": \"시청하고 있음\", \"value\": 54.3},\n      {\"label\": \"시청하지 않음\", \"value\": 45.7}\n    ],\n    \"bar_chart\": [\n      {\"label\": \"해외축구\", \"value\": 65.1},\n      {\"label\": \"해외야구\", \"value\": 32.6}, \n      {\"label\": \"해외농구\", \"value\": 19.0},\n      {\"label\": \"이종격투기/UFC\", \"value\": 11.2},\n      {\"label\": \"해외골프\", \"value\": 9.0},\n      {\"label\": \"해외배구\", \"value\": 4.8},\n      {\"label\": \"해외풋볼\", \"value\": 3.2}\n    ]\n  }\n}\n```",
+      "type": "chart",
+      "metadata": {
+        "section_path": "해외 스포츠 리그 시청 여부 및 시청 리그를 보여주는 원형 차트와 막대 그래프 > Chart",
+        "token_count": 124,
+        "source": "vlm"
+      }
+    },
+    {
+      "chunk_id": "chunk_002_chart_001",
+      "page_num": 2,
+      "content": "```json\n{\n  \"type\": \"pie\",\n  \"title\": \"최근 5년 이내 국내 프로스포츠 경기 관람 및 시청 여부\",\n  \"data\": [\n    {\n      \"label\": \"직관 경험 있음\",\n      \"value\": 73.3\n    },\n    {\n      \"label\": \"직관 없음\", \n      \"value\": 26.7\n    },\n    {\n      \"label\": \"시청하고 있음\",\n      \"value\": 84.9\n    },\n    {\n      \"label\": \"시청하지 않음\",\n      \"value\": 15.1\n    }\n  ]\n}\n```",
+      "type": "chart",
+      "metadata": {
+        "section_path": "최근 5년 이내 국내 프로스포츠 경기 관람 및 시청 여부를 보여주는 두 개의 원형 차트 > Chart",
+        "token_count": 85,
+        "source": "vlm"
+      }
+    },
+    {
+      "chunk_id": "chunk_002_chart_001",
+      "page_num": 2,
+      "content": "```json\n{\n  \"type\": \"pie\",\n  \"title\": \"관람행태별 특성\",\n  \"data\": [\n    {\"label\": \"이달취업 과거\", \"value\": 19.1},\n    {\"label\": \"신규유입 과거\", \"value\": 21.6},\n    {\"label\": \"관람지속\", \"value\": 59.3}\n  ]\n}\n```",
+      "type": "chart",
+      "metadata": {
+        "section_path": "관람경태별 특성을 보여주는 원형 차트와 설명 테이블 > Chart",
+        "token_count": 51,
+        "source": "vlm"
+      }
+    },
+    {
+      "chunk_id": "chunk_002_chart_001",
+      "page_num": 2,
+      "content": "```json\n{\n  \"type\": \"stacked bar\",\n  \"title\": \"경기장 방문 시 혹은 직장하다고 생각하는 1인 가구 지출 평균 비용\",\n  \"data\": [\n    {\"label\": \"전체\", \"value\": 109161},\n    {\"label\": \"프로스포츠팬\", \"value\": 84043},\n    {\"label\": \"일반 국민\", \"value\": 49641}\n  ]\n}\n```\n\n이 데이터는 세로 막대 차트로 표시되어 있으며, 전체, 프로스포츠팬, 일반 국민 세 그룹의 지출 평균 비용을 보여줍니다. 단위는 원화(₩)입니다.",
+      "type": "chart",
+      "metadata": {
+        "section_path": "경기장 방문 시 좋은 접점하다고 생각하는 1인 기준 지출 평균 비용을 보여주는 막대 그래프 > Chart",
+        "token_count": 157,
+        "source": "vlm"
+      }
+    },
+    {
+      "chunk_id": "chunk_002_001",
+      "page_num": 2,
+      "content": "22726\n21618\n18849\n18169\n18680\n21248\n13919\n16892\n12491\n8922\n식음료비\nMD상품\n|매는\n18\n|\n2023\n프로스포츠\n관람객\n성향조사",
+      "type": "text",
+      "metadata": {
+        "section_path": "페이지 번호 '18'과 문서 제목 '2023 프로스포츠 관람객 성향조사' > 페이지 번호 '18'과 문서 제목 '2023 프로스포츠 관람객 성향조사'",
+        "token_count": 36,
+        "source": "ocr"
+      }
+    },
+    {
+      "chunk_id": "chunk_003_001",
+      "page_num": 3,
+      "content": "리그별\n고관여팬\n유늘\n고관여팬으로\n굴팔곰\n프로스포츠\n팬n=14599\n단위:%\n고관여팬\nD\n:而오\n명\n비율\n사례수\n1~19거\n0다\n30대\n40대\n50대이상\n프로스포츠팬\n전체\n584\n14599\n37\n52[\n35\n258\n168\n-\n프로축구\n579\n3087]\n620\n380\n165\n322\n295\n161\n5",
+      "type": "text",
+      "metadata": {
+        "section_path": "페이지 제목: '리그별 고려여건 특성' > 페이지 제목: '리그별 고려여건 특성'",
+        "token_count": 96,
+        "source": "ocr"
+      }
+    },
+    {
+      "chunk_id": "chunk_003_table_001",
+      "page_num": 3,
+      "content": "```markdown\n| 구분 | 비율 | (샘플수) | 확정적 | 잠재적 | 매우높음 | 높음 | 보통 | 낮음 | 매우낮음 |\n|------|------|----------|---------|---------|-----------|-------|-------|-------|----------|\n| 프로야구 | 68.3 | (6,316) | 36.2 | 63.8 | 14.9 | 37.7 | 22.9 | 15.6 | 9.0 |\n| 남자 프로농구 | 56.5 | (2,396) | 21.6 | 78.4 | 13.6 | 36.4 | 27.2 | 19.0 | 3.8 |\n| 여자 프로농구 | 51.6 | (785) | 32.4 | 67.6 | 11.3 | 27.3 | 30.8 | 24.1 | 6.5 |\n| 남자 프로배구 | 48.1 | (1,037) | 19.0 | 81.0 | 17.4 | 36.4 | 20.8 | 16.8 | 8.7 |\n| 여자 프로배구 | 38.9 | (978) | 29.7 | 70.3 | 12.6 | 32.5 | 31.5 | 15.1 | 8.3 |\n```",
+      "type": "table",
+      "metadata": {
+        "section_path": "프로스포츠 관련 통계 데이터 표 (성별, 연령별 분포 등) > ```markdown",
+        "token_count": 127,
+        "source": "vlm"
+      }
+    },
+    {
+      "chunk_id": "chunk_003_001",
+      "page_num": 3,
+      "content": "302\n6",
+      "type": "text",
+      "metadata": {
+        "section_path": "중간 제목: '리그별 응답자 특성 요약' > KLEAGUE",
+        "token_count": 1,
+        "source": "ocr"
+      }
+    },
+    {
+      "chunk_id": "chunk_003_002",
+      "page_num": 3,
+      "content": "450\n216\n550\n190\n117\n175\n156%\n659%\n184%",
+      "type": "text",
+      "metadata": {
+        "section_path": "중간 제목: '리그별 응답자 특성 요약' > KBO",
+        "token_count": 4,
+        "source": "ocr"
+      }
+    },
+    {
+      "chunk_id": "chunk_003_003",
+      "page_num": 3,
+      "content": "330",
+      "type": "text",
+      "metadata": {
+        "section_path": "중간 제목: '리그별 응답자 특성 요약' > KEO",
+        "token_count": 0,
+        "source": "ocr"
+      }
+    },
+    {
+      "chunk_id": "chunk_003_chart_001",
+      "page_num": 3,
+      "content": "```json\n{\n  \"type\": \"multiple (pie charts, bar charts)\",\n  \"title\": \"KBL, WKBL, KOVO 통계 비교\",\n  \"data\": {\n    \"KBL\": {\n      \"pie_ratio\": [\n        {\"label\": \"국내선수\", \"value\": 28.9},\n        {\"label\": \"외국선수\", \"value\": 71.1}\n      ],\n      \"bar_stats\": [\n        {\"label\": \"어시스트\", \"value\": 13.9},\n        {\"label\": \"리바운드\", \"value\": 26.3},\n        {\"label\": \"득점\", \"value\": 21.0},\n        {\"label\": \"블록\", \"value\": 5.8}\n      ],\n      \"circle_stats\": [\n        {\"label\": \"공격성공률\", \"value\": 31.6},\n        {\"label\": \"수비성공률\", \"value\": 58.2},\n        {\"label\": \"블록성공률\", \"value\": 10.2}\n      ]\n    },\n    \"WKBL\": {\n      \"pie_ratio\": [\n        {\"label\": \"국내선수\", \"value\": 38.4},\n        {\"label\": \"외국선수\", \"value\": 61.6}\n      ],\n      \"bar_stats\": [\n        {\"label\": \"어시스트\", \"value\": 11.4},\n        {\"label\": \"리바운드\", \"value\": 26.6},\n        {\"label\": \"득점\", \"value\": 28.7},\n        {\"label\": \"블록\", \"value\": 8.4}\n      ],\n      \"circle_stats\": [\n        {\"label\": \"공격성공률\", \"value\": 28.3},\n        {\"label\": \"수비성공률\", \"value\": 56.1},\n        {\"label\": \"블록성공률\", \"value\": 15.6}\n      ]\n    },\n    \"KOVO\": {\n      \"pie_ratio\": [\n        {\"label\": \"국내선수\", \"value\": 25.1},\n        {\"label\": \"외국선수\", \"value\": 74.9}\n      ],\n      \"bar_stats\": [\n        {\"label\": \"어시스트\", \"value\": 16.8},\n        {\"label\": \"리바운드\", \"value\": 33.8},\n        {\"label\": \"득점\", \"value\": 21.4},\n        {\"label\": \"블록\", \"value\": 9.5}\n      ],\n      \"circle_stats\": [\n        {\"label\": \"공격성공률\", \"value\": 26.7},\n        {\"label\": \"수비성공률\", \"value\": 62.6},\n        {\"label\": \"블록성공률\", \"value\": 10.7}\n      ]\n    }\n  }\n}\n```",
+      "type": "chart",
+      "metadata": {
+        "section_path": "6개 스포츠 리그의 응답자 특성을 보여주는 인포그래픽 차트들 (K리그1, KBO, KBL, WKBL, KOVO 남자, KOVO 여자) > Chart",
+        "token_count": 280,
+        "source": "vlm"
+      }
+    },
+    {
+      "chunk_id": "chunk_003_001",
+      "page_num": 3,
+      "content": "여자\n405\n156\n595\n227%\n653%\n120%",
+      "type": "text",
+      "metadata": {
+        "section_path": "페이지 번호와 문서 제목: '20 | 2023 프로스포츠 관람객 성향조사' > KOVO",
+        "token_count": 6,
+        "source": "ocr"
+      }
+    },
+    {
+      "chunk_id": "chunk_003_002",
+      "page_num": 3,
+      "content": "20\n2023\n프로스포츠\n관람객\n성향조사",
+      "type": "text",
+      "metadata": {
+        "section_path": "페이지 번호와 문서 제목: '20 | 2023 프로스포츠 관람객 성향조사' > KOVO",
+        "token_count": 19,
+        "source": "ocr"
+      }
+    }
+  ]
+}

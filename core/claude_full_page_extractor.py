@@ -1,10 +1,10 @@
 """
-PRISM Phase 2.7 - Claude Full Page Extractor
-전체 페이지 한번에 추출 (개선된 프롬프트)
+PRISM Phase 2.7 - Claude Full Page Extractor v2
+전체 페이지 추출 (개선된 프롬프트 - 라벨 정확도 향상)
 
 Author: 박준호 (AI/ML Lead)
 Date: 2025-10-20
-Fixed: Anthropic client initialization (proxies 파라미터 제거)
+Update: 인포그래픽 라벨 정확도 개선
 """
 
 import os
@@ -35,60 +35,29 @@ class PageContent:
 
 class ClaudeFullPageExtractor:
     """
-    Claude를 사용한 전체 페이지 추출기
+    Claude를 사용한 전체 페이지 추출기 v2
     
-    특징:
-    - 한 번의 API 호출로 전체 페이지 분석
-    - 차트 데이터 완벽 추출 강제
-    - 구조화된 JSON 출력
+    개선사항:
+    - 차트 라벨 정확도 향상
+    - 복합 인포그래픽 해석 개선
+    - 시각적 위치 고려
     """
     
-    # 강화된 프롬프트 (차트 데이터 추출 강제)
+    # 강화된 프롬프트 v2 (라벨 정확도 개선)
     SYSTEM_PROMPT = """당신은 문서 페이지를 완벽하게 분석하는 전문가입니다.
 
-**핵심 원칙:**
-1. **차트를 발견하면 반드시 모든 데이터를 추출하세요!**
-2. **data_points: [] 는 절대 금지입니다!**
-3. **누락 없이 완벽하게 추출하세요!**
+**🎯 최우선 원칙: 라벨 정확성**
 
-**추출 대상 (우선순위):**
+**절대 규칙:**
+1. **차트의 라벨은 이미지에 표시된 원본 텍스트를 그대로 추출**
+2. **추측하거나 의미를 해석하지 말 것**
+3. **보이는 그대로 정확히 복사**
 
-1. **차트 (charts) - 최우선!**
-   - type: "bar", "line", "pie", "area", "scatter", "mixed"
-   - title: 차트 제목
-   - description: 차트가 보여주는 내용
-   - **data_points: [반드시 모든 데이터 포함!]**
-     - label: 레이블/카테고리
-     - value: 정확한 수치
-     - unit: 단위 (%, 명, 원, 개 등)
-   
-2. **표 (tables)**
-   - caption: 표 제목/번호
-   - markdown: 마크다운 표 형식
-   - rows/columns: 행/열 수
-   
-3. **텍스트 (texts)**
-   - content: 본문 텍스트
-   - type: "heading", "paragraph", "list", "quote"
-   
-4. **이미지/다이어그램 (figures)**
-   - type: "map", "diagram", "photo", "illustration"
-   - 상세 설명 (지도의 경우 모든 지역 + 수치)
-
-**🔍 검증 단계 (자가 검사):**
-1. 모든 차트를 찾았는가?
-2. 각 차트에 data_points가 있는가?
-3. data_points가 비어있는 것은 없는가?
-4. 수치가 정확한가?
-
-**잘못된 예시 (절대 금지!):**
+**잘못된 예시 (절대 금지):**
 ```json
 {
-  "charts": [
-    {
-      "title": "성별 분포",
-      "data_points": []  // ❌❌❌ 금지!
-    }
+  "data": [
+    {"label": "어시스트", "value": 13.9}  // ❌ 차트에 "14~19세"라고 쓰여있는데 추측함
   ]
 }
 ```
@@ -96,94 +65,201 @@ class ClaudeFullPageExtractor:
 **올바른 예시:**
 ```json
 {
-  "charts": [
+  "data": [
+    {"label": "14~19세", "value": 13.9}  // ✅ 원본 그대로
+  ]
+}
+```
+
+---
+
+**📋 추출 대상 (우선순위)**
+
+### 1. **차트 (charts) - 최우선!**
+
+**필수 필드:**
+```json
+{
+  "type": "차트 타입",  // bar, pie, line, area, scatter, mixed
+  "title": "차트 제목 (원본 그대로)",
+  "description": "차트가 보여주는 내용 (1-2문장)",
+  "data": [
     {
-      "type": "pie",
-      "title": "성별 분포",
-      "description": "응답자의 성별 비율을 보여주는 원형 차트",
-      "data_points": [
-        {"label": "남성", "value": 45.2, "unit": "%"},
-        {"label": "여성", "value": 54.8, "unit": "%"}
-      ]
+      "label": "라벨 (원본 텍스트 그대로!)",
+      "value": 숫자,
+      "unit": "단위"  // %, 명, 원, 개 등
     }
   ]
 }
 ```
 
-**출력 형식 (엄격한 JSON):**
+**복합 차트 (인포그래픽) 처리:**
+- 여러 차트가 그룹으로 표시되면 **각각 별도 객체로 분리**
+- 예: "KBL 통계" 인포그래픽에 파이차트 + 막대차트 + 원형차트가 있으면:
+  ```json
+  {
+    "type": "infographic_group",
+    "title": "KBL 통계",
+    "charts": [
+      {
+        "type": "pie",
+        "title": "성별 분포",
+        "data": [...]
+      },
+      {
+        "type": "bar",
+        "title": "연령 분포",
+        "data": [
+          {"label": "14~19세", "value": 13.9},  // ← 원본 그대로!
+          {"label": "20대", "value": 26.3}
+        ]
+      },
+      {
+        "type": "donut",
+        "title": "관람행태",
+        "data": [...]
+      }
+    ]
+  }
+  ```
+
+**검증 단계 (자가 검사):**
+1. 이미지를 다시 보고 라벨 확인
+2. "어시스트", "리바운드" 같은 일반 명사가 라벨이면 의심
+3. 숫자 옆에 표시된 실제 텍스트 재확인
+4. 추측한 부분이 있으면 원본 확인
+
+---
+
+### 2. **표 (tables)**
+
+```json
+{
+  "caption": "표 제목/번호",
+  "markdown": "마크다운 표 형식",
+  "rows": 행 수,
+  "columns": 열 수
+}
+```
+
+**마크다운 예시:**
+```markdown
+| 리그 | 비율 | 사례수 | 남 | 여 |
+|------|------|--------|-----|-----|
+| 프로야구 | 68.3 | 6,316 | 36.2 | 63.8 |
+```
+
+---
+
+### 3. **텍스트 (texts)**
+
+```json
+{
+  "content": "본문 텍스트 (원문 그대로)",
+  "type": "heading/paragraph/list/quote"
+}
+```
+
+---
+
+### 4. **이미지/다이어그램 (figures)**
+
+```json
+{
+  "type": "map/diagram/photo/illustration",
+  "description": "이미지 설명",
+  "elements": ["구성 요소 목록"]  // 지도의 경우 지역명 + 수치
+}
+```
+
+**지도 예시:**
+```json
+{
+  "type": "map",
+  "description": "대한민국 권역별 응답자 분포",
+  "elements": [
+    "수도권: 52.5%",
+    "경남권: 14.9%",
+    "충청권: 10.3%"
+  ]
+}
+```
+
+---
+
+**🔍 최종 검증 (출력 전 필수)**
+
+1. **모든 차트 라벨이 원본과 일치하는가?**
+   - ❌ "어시스트" → ✅ "사무직" (예시)
+   - ❌ "득점" → ✅ "30대" (예시)
+
+2. **data_points가 비어있지 않은가?**
+   - ❌ `"data": []`
+   - ✅ `"data": [{"label": "...", "value": ...}, ...]`
+
+3. **수치가 정확한가?**
+   - 차트의 눈금/레이블 재확인
+
+4. **복합 차트를 제대로 분리했는가?**
+   - 여러 차트가 있으면 각각 별도 객체
+
+---
+
+**📤 출력 형식 (엄격한 JSON)**
+
 ```json
 {
   "texts": [
     {
-      "content": "전체 텍스트 내용...",
+      "content": "...",
       "type": "paragraph"
     }
   ],
   "tables": [
     {
-      "caption": "표 제목",
-      "markdown": "| 컬럼1 | 컬럼2 |\\n|-------|-------|\\n| 값1 | 값2 |"
+      "caption": "...",
+      "markdown": "..."
     }
   ],
   "charts": [
     {
-      "type": "차트타입",
-      "title": "차트 제목",
-      "description": "차트 설명",
-      "data_points": [반드시 포함!]
+      "type": "...",
+      "title": "...",
+      "data": [
+        {"label": "원본 텍스트 그대로!", "value": 123, "unit": "%"}
+      ]
     }
   ],
   "figures": [
     {
-      "type": "이미지타입",
-      "description": "이미지 설명"
+      "type": "...",
+      "description": "..."
     }
   ]
 }
 ```
 
-**다시 한번 강조:**
+---
+
+**🚨 다시 한번 강조**
+
+- **라벨은 절대 추측하지 마세요!**
+- **이미지에 표시된 원본 텍스트를 정확히 복사하세요!**
+- **"어시스트", "리바운드" 같은 일반 명사가 라벨이면 다시 확인하세요!**
 - **data_points: [] 는 절대 금지!**
-- **차트를 발견하면 모든 데이터를 반드시 추출하세요!**
-- **이미지를 다시 한번 확인하여 놓친 차트가 없는지 검사하세요!**
 
-이제 페이지를 분석하세요.
+이제 페이지를 분석하세요. 라벨 정확성이 가장 중요합니다!
 """
-
-    def __init__(
-        self,
-        azure_endpoint: Optional[str] = None,
-        azure_api_key: Optional[str] = None,
-        max_retries: int = 3,
-        retry_delay: float = 2.0
-    ):
-        """
-        Args:
-            azure_endpoint: Azure OpenAI 엔드포인트 (사용 안 함)
-            azure_api_key: Azure OpenAI API 키 (사용 안 함)
-            max_retries: 최대 재시도 횟수
-            retry_delay: 재시도 간격 (초)
-        """
-        self.azure_endpoint = azure_endpoint
-        self.azure_api_key = azure_api_key
-        self.max_retries = max_retries
-        self.retry_delay = retry_delay
-        
-        # Anthropic API 키 읽기
+    
+    def __init__(self):
+        """초기화"""
         api_key = os.getenv('ANTHROPIC_API_KEY')
         
-        if not api_key:
-            print("⚠️  ANTHROPIC_API_KEY not found in environment variables")
-            self.client = None
-            return
+        if not api_key or not anthropic:
+            raise ValueError("ANTHROPIC_API_KEY가 필요합니다")
         
-        try:
-            # ✅ 수정: proxies 파라미터 제거
-            self.client = anthropic.Anthropic(api_key=api_key)
-            print(f"✅ Claude API initialized successfully")
-        except Exception as e:
-            print(f"❌ Claude API initialization failed: {e}")
-            self.client = None
+        self.client = anthropic.Anthropic(api_key=api_key)
+        self.model = "claude-sonnet-4-20250514"
     
     def extract_page(self, page_image: Image.Image) -> PageContent:
         """
@@ -195,55 +271,20 @@ class ClaudeFullPageExtractor:
         Returns:
             PageContent 객체
         """
-        if not self.client:
-            print("⚠️  Claude API not available")
-            return PageContent(
-                texts=[{"content": "API not available", "type": "error"}],
-                tables=[],
-                charts=[],
-                figures=[],
-                raw_response=""
-            )
         
-        try:
-            # 이미지를 base64로 인코딩
-            buffered = BytesIO()
-            page_image.save(buffered, format="PNG")
-            img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
-            
-            # API 호출
-            response_text = self._call_api(img_base64)
-            
-            # 응답 파싱
-            content = self._parse_response(response_text)
-            
-            return content
-            
-        except Exception as e:
-            print(f"❌ Extraction error: {str(e)}")
-            return PageContent(
-                texts=[{"content": f"Error: {str(e)}", "type": "error"}],
-                tables=[],
-                charts=[],
-                figures=[],
-                raw_response=""
-            )
-    
-    def _call_api(self, img_base64: str) -> str:
-        """
-        Claude API 호출
+        # 이미지 → base64
+        buffered = BytesIO()
+        page_image.save(buffered, format="PNG")
+        img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
         
-        Args:
-            img_base64: base64 인코딩된 이미지
-            
-        Returns:
-            응답 텍스트
-        """
-        try:
-            response = self.client.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=4096,
-                messages=[{
+        # API 호출
+        message = self.client.messages.create(
+            model=self.model,
+            max_tokens=4000,  # 복잡한 페이지를 위해 증가
+            temperature=0,     # 정확성 우선
+            system=self.SYSTEM_PROMPT,
+            messages=[
+                {
                     "role": "user",
                     "content": [
                         {
@@ -256,88 +297,71 @@ class ClaudeFullPageExtractor:
                         },
                         {
                             "type": "text",
-                            "text": self.SYSTEM_PROMPT
+                            "text": "위 이미지의 모든 콘텐츠를 JSON 형식으로 추출하세요. 특히 차트 라벨은 원본 텍스트를 정확히 복사하세요!"
                         }
                     ]
-                }]
-            )
-            
-            # 응답 텍스트 추출
-            if response.content and len(response.content) > 0:
-                return response.content[0].text
-            else:
-                return ""
-                
-        except Exception as e:
-            print(f"❌ API call failed: {str(e)}")
-            raise
-    
-    def _parse_response(self, response_text: str) -> PageContent:
-        """
-        응답 파싱
+                }
+            ]
+        )
         
-        Args:
-            response_text: API 응답 텍스트
-            
-        Returns:
-            PageContent 객체
-        """
+        response_text = message.content[0].text
+        
+        # JSON 파싱
+        parsed = self._parse_response(response_text)
+        
+        return PageContent(
+            texts=parsed.get('texts', []),
+            tables=parsed.get('tables', []),
+            charts=parsed.get('charts', []),
+            figures=parsed.get('figures', []),
+            raw_response=response_text
+        )
+    
+    def _parse_response(self, response_text: str) -> Dict:
+        """응답 파싱"""
+        
         try:
-            # JSON 추출 (마크다운 코드 블록 제거)
+            # JSON 블록 추출
             json_match = re.search(r'```json\s*(\{.*?\})\s*```', response_text, re.DOTALL)
+            
             if json_match:
                 json_str = json_match.group(1)
             else:
-                # JSON 마커 없이 직접 파싱 시도
-                json_str = response_text
+                # 마크다운 없이 바로 JSON인 경우
+                json_str = response_text.strip()
             
-            # JSON 파싱
-            data = json.loads(json_str)
+            # 파싱
+            parsed = json.loads(json_str)
             
-            return PageContent(
-                texts=data.get('texts', []),
-                tables=data.get('tables', []),
-                charts=data.get('charts', []),
-                figures=data.get('figures', []),
-                raw_response=response_text
-            )
+            return parsed
             
-        except json.JSONDecodeError as e:
-            print(f"⚠️  JSON parsing failed: {str(e)}")
-            print(f"Response preview: {response_text[:300]}...")
-            
-            # 파싱 실패 시 텍스트로 반환
-            return PageContent(
-                texts=[{"content": response_text, "type": "raw"}],
-                tables=[],
-                charts=[],
-                figures=[],
-                raw_response=response_text
-            )
-        
         except Exception as e:
-            print(f"❌ Response parsing error: {str(e)}")
-            return PageContent(
-                texts=[{"content": f"Parsing error: {str(e)}", "type": "error"}],
-                tables=[],
-                charts=[],
-                figures=[],
-                raw_response=response_text
-            )
+            print(f"⚠️  JSON 파싱 실패: {e}")
+            return {
+                'texts': [],
+                'tables': [],
+                'charts': [],
+                'figures': []
+            }
 
 
-# ============================================================
-# 테스트 코드
-# ============================================================
-
-if __name__ == "__main__":
-    print("\n" + "="*60)
-    print("PRISM Phase 2.7 - Claude Full Page Extractor Test")
-    print("="*60 + "\n")
-    
+# 사용 예시
+if __name__ == '__main__':
     extractor = ClaudeFullPageExtractor()
     
-    if extractor.client:
-        print("✅ Ready to extract pages!")
-    else:
-        print("❌ Claude API not available")
+    # 테스트 이미지
+    test_image = Image.open('test.png')
+    
+    # 추출
+    result = extractor.extract_page(test_image)
+    
+    print(f"📝 텍스트: {len(result.texts)}개")
+    print(f"📊 차트: {len(result.charts)}개")
+    print(f"📋 표: {len(result.tables)}개")
+    print(f"🖼️  이미지: {len(result.figures)}개")
+    
+    # 차트 라벨 검증
+    for chart in result.charts:
+        print(f"\n차트: {chart.get('title')}")
+        for dp in chart.get('data', []):
+            print(f"  - {dp.get('label')}: {dp.get('value')}")
