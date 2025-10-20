@@ -1,35 +1,31 @@
 """
-PRISM Phase 2.7 - Hybrid Content Extractor
-OCR + VLM 하이브리드 컨텐츠 추출 (Tesseract 추가)
+PRISM Phase 2.7 - Hybrid Content Extractor (2-Pass 전략)
+Pass 1: OCR로 정확한 텍스트 추출
+Pass 2: VLM으로 구조화 및 해석
 
-Author: 이서영 (Backend Lead) + 박준호 (AI/ML Lead)
+Author: 박준호 (AI/ML Lead) + 이서영 (Backend Lead)
 Date: 2025-10-20
-Update: Tesseract OCR 추가 (한글 품질 개선)
+Fix: 2-Pass 전략으로 정확도 + 구조화 동시 달성
 """
 
 import os
 import base64
+import logging
 from io import BytesIO
-from typing import Dict, Optional, Literal
+from typing import Dict
 from PIL import Image
 from dataclasses import dataclass
-import logging
 
 logger = logging.getLogger(__name__)
 
 # VLM Provider 임포트
 try:
     from anthropic import Anthropic
+    ANTHROPIC_AVAILABLE = True
 except ImportError:
-    Anthropic = None
+    ANTHROPIC_AVAILABLE = False
 
 # OCR 엔진 임포트
-try:
-    from paddleocr import PaddleOCR
-    PADDLEOCR_AVAILABLE = True
-except ImportError:
-    PADDLEOCR_AVAILABLE = False
-
 try:
     import pytesseract
     TESSERACT_AVAILABLE = True
@@ -40,319 +36,259 @@ except ImportError:
 @dataclass
 class ExtractedContent:
     """추출된 컨텐츠"""
-    type: str  # 'text', 'table', 'chart', 'image'
-    content: str  # 추출된 내용
+    type: str
+    content: str
     metadata: Dict
     confidence: float = 0.0
 
 
 class HybridExtractor:
     """
-    하이브리드 컨텐츠 추출기
+    2-Pass 하이브리드 추출기
     
     전략:
-    - TEXT 영역: Tesseract OCR 우선 (한글 품질 개선)
-    - TABLE 영역: VLM 구조화
-    - CHART 영역: VLM 데이터 추출
-    - IMAGE 영역: VLM 설명
+    Pass 1: OCR로 모든 텍스트 정확하게 추출
+    Pass 2: VLM이 OCR 결과를 참고하여 구조화
+    
+    장점:
+    - OCR의 정확도 + VLM의 구조화 능력
+    - 오인식 최소화
     """
     
-    def __init__(
-        self, 
-        vlm_provider: str = 'claude',
-        ocr_engine: Literal['tesseract', 'paddle', 'both'] = 'tesseract'
-    ):
-        """
-        초기화
-        
-        Args:
-            vlm_provider: VLM 프로바이더 ('claude', 'azure_openai', 'ollama')
-            ocr_engine: OCR 엔진 선택
-                - 'tesseract': Tesseract만 (권장, 한글 품질 우수)
-                - 'paddle': PaddleOCR만
-                - 'both': 두 엔진 모두 (앙상블)
-        """
+    def __init__(self, vlm_provider: str = 'claude', ocr_engine: str = 'tesseract'):
+        """초기화"""
         self.vlm_provider = vlm_provider
         self.ocr_engine = ocr_engine
         self.claude = None
-        self.paddle_ocr = None
         self.tesseract_available = TESSERACT_AVAILABLE
         
-        # VLM Provider 초기화
+        # Claude API 초기화
         if vlm_provider == 'claude':
             api_key = os.getenv('ANTHROPIC_API_KEY')
-            if api_key and Anthropic:
+            if api_key and ANTHROPIC_AVAILABLE:
                 try:
                     self.claude = Anthropic(api_key=api_key)
-                    logger.info("✅ Claude API initialized for hybrid extraction")
+                    logger.info("✅ Claude Vision API initialized (2-Pass mode)")
+                    print("✅ 2-Pass Extraction enabled (OCR → VLM)")
                 except Exception as e:
-                    logger.error(f"❌ Claude API initialization failed: {e}")
-                    self.claude = None
-            else:
-                logger.warning("⚠️  Claude API key not found")
+                    logger.warning(f"Claude API initialization failed: {e}")
         
-        # OCR 초기화
-        self._init_ocr(ocr_engine)
+        # Tesseract 설정
+        if TESSERACT_AVAILABLE:
+            self.tesseract_config = '--psm 6 --oem 3'
+            logger.info("✅ Tesseract OCR initialized")
+        
+        print(f"✅ HybridExtractor initialized (2-Pass: OCR + VLM)")
     
-    def _init_ocr(self, ocr_engine: str):
-        """OCR 엔진 초기화"""
-        
-        # Tesseract 초기화
-        if ocr_engine in ['tesseract', 'both']:
-            if TESSERACT_AVAILABLE:
-                try:
-                    # Tesseract 설정 최적화
-                    self.tesseract_config = '--oem 3 --psm 6 -l kor+eng'
-                    # 테스트 호출
-                    test_img = Image.new('RGB', (100, 100), color='white')
-                    pytesseract.image_to_string(test_img, lang='kor+eng')
-                    logger.info("✅ Tesseract OCR initialized (Korean + English)")
-                except Exception as e:
-                    logger.error(f"❌ Tesseract initialization failed: {e}")
-                    self.tesseract_available = False
-            else:
-                logger.warning("⚠️  Tesseract not installed. Install: pip install pytesseract")
-                self.tesseract_available = False
-        
-        # PaddleOCR 초기화
-        if ocr_engine in ['paddle', 'both']:
-            if PADDLEOCR_AVAILABLE:
-                try:
-                    self.paddle_ocr = PaddleOCR(
-                        use_angle_cls=True,
-                        lang='korean',
-                        use_gpu=False,
-                        show_log=False,
-                        use_space_char=True  # 띄어쓰기 유지
-                    )
-                    logger.info("✅ PaddleOCR initialized")
-                except Exception as e:
-                    logger.warning(f"⚠️  PaddleOCR initialization failed: {e}")
-                    self.paddle_ocr = None
-            else:
-                logger.warning("⚠️  PaddleOCR not available")
-        
-        # 최종 확인
-        ocr_status = []
-        if self.tesseract_available:
-            ocr_status.append("Tesseract")
-        if self.paddle_ocr:
-            ocr_status.append("PaddleOCR")
-        
-        if ocr_status:
-            logger.info(f"✅ HybridExtractor initialized with OCR ({', '.join(ocr_status)}) + VLM")
-        else:
-            logger.warning("⚠️  No OCR engine available - using VLM only")
-    
-    def extract(self, image: Image.Image, region_type: str, description: str) -> ExtractedContent:
+    def extract(
+        self, 
+        image: Image.Image, 
+        region_type: str, 
+        description: str
+    ) -> ExtractedContent:
         """
-        영역별 컨텐츠 추출
+        2-Pass 추출
         
         Args:
             image: PIL Image 객체
-            region_type: 'text', 'table', 'chart', 'image'
+            region_type: 영역 타입
             description: 영역 설명
             
         Returns:
-            ExtractedContent 객체
+            추출된 컨텐츠
         """
         
-        if region_type == 'text':
-            return self._extract_text(image, description)
-        elif region_type == 'table':
-            return self._extract_table(image, description)
-        elif region_type == 'chart':
-            return self._extract_chart(image, description)
-        elif region_type == 'image':
-            return self._extract_image(image, description)
-        else:
-            # 알 수 없는 타입은 VLM으로 처리
-            return self._extract_with_vlm(image, description, region_type)
-    
-    def _extract_text(self, image: Image.Image, description: str) -> ExtractedContent:
-        """텍스트 추출 (OCR 우선)"""
+        # Pass 1: OCR로 정확한 텍스트 추출
+        ocr_text = self._extract_with_ocr(image)
         
-        # Tesseract 시도
-        if self.tesseract_available and self.ocr_engine in ['tesseract', 'both']:
+        # Pass 2: VLM으로 구조화 (OCR 결과 참고)
+        if self.claude and ocr_text:
             try:
-                text = pytesseract.image_to_string(
-                    image, 
-                    lang='kor+eng',
-                    config=self.tesseract_config
-                ).strip()
-                
-                if text:
-                    return ExtractedContent(
-                        type='text',
-                        content=text,
-                        metadata={'source': 'tesseract', 'description': description},
-                        confidence=0.95  # Tesseract 신뢰도
-                    )
+                result = self._extract_with_vlm_guided(image, region_type, ocr_text)
+                if result and result.content:
+                    return result
             except Exception as e:
-                logger.warning(f"Tesseract 추출 실패: {e}")
+                logger.warning(f"VLM extraction failed: {e}, using OCR result")
         
-        # PaddleOCR 시도 (폴백)
-        if self.paddle_ocr and self.ocr_engine in ['paddle', 'both']:
-            try:
-                result = self.paddle_ocr.ocr(np.array(image), cls=True)
-                if result and result[0]:
-                    lines = [line[1][0] for line in result[0]]
-                    text = '\n'.join(lines)
-                    
-                    if text:
-                        return ExtractedContent(
-                            type='text',
-                            content=text,
-                            metadata={'source': 'paddle', 'description': description},
-                            confidence=0.90
-                        )
-            except Exception as e:
-                logger.warning(f"PaddleOCR 추출 실패: {e}")
+        # VLM 실패 시 OCR 결과 반환
+        return ExtractedContent(
+            type='text',
+            content=ocr_text if ocr_text else "",
+            metadata={'source': 'ocr_only', 'description': description},
+            confidence=0.80 if ocr_text else 0.0
+        )
+    
+    def _extract_with_ocr(self, image: Image.Image) -> str:
+        """Pass 1: OCR로 정확한 텍스트 추출"""
         
-        # VLM 폴백
-        return self._extract_with_vlm(image, description, 'text')
-    
-    def _extract_table(self, image: Image.Image, description: str) -> ExtractedContent:
-        """표 추출 (VLM)"""
-        return self._extract_with_vlm(image, description, 'table')
-    
-    def _extract_chart(self, image: Image.Image, description: str) -> ExtractedContent:
-        """차트 추출 (VLM)"""
-        return self._extract_with_vlm(image, description, 'chart')
-    
-    def _extract_image(self, image: Image.Image, description: str) -> ExtractedContent:
-        """이미지 설명 (VLM)"""
-        return self._extract_with_vlm(image, description, 'image')
-    
-    def _extract_with_vlm(
-        self, 
-        image: Image.Image, 
-        description: str, 
-        region_type: str
-    ) -> ExtractedContent:
-        """VLM을 사용한 추출"""
-        
-        if not self.claude:
-            # VLM 없으면 빈 결과
-            return ExtractedContent(
-                type=region_type,
-                content='',
-                metadata={'source': 'none', 'description': description},
-                confidence=0.0
-            )
+        if not self.tesseract_available:
+            return ""
         
         try:
-            # 이미지 → base64
-            buffered = BytesIO()
-            image.save(buffered, format="PNG")
-            img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+            text = pytesseract.image_to_string(
+                image, 
+                lang='kor+eng',
+                config=self.tesseract_config
+            ).strip()
             
-            # 타입별 프롬프트
-            prompt = self._build_prompt(region_type, description)
-            
-            # Claude API 호출
-            message = self.claude.messages.create(
+            if text:
+                logger.debug(f"[Pass 1] OCR extracted {len(text)} chars")
+                return text
+        except Exception as e:
+            logger.warning(f"OCR extraction failed: {e}")
+        
+        return ""
+    
+    def _extract_with_vlm_guided(
+        self, 
+        image: Image.Image, 
+        region_type: str,
+        ocr_text: str
+    ) -> ExtractedContent:
+        """Pass 2: VLM으로 구조화 (OCR 텍스트 참고)"""
+        
+        # 이미지 → base64
+        buffered = BytesIO()
+        image.save(buffered, format="PNG")
+        img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+        
+        # 2-Pass 프롬프트 생성
+        prompt = self._build_2pass_prompt(region_type, ocr_text)
+        
+        # Claude API 호출
+        try:
+            response = self.claude.messages.create(
                 model="claude-sonnet-4-20250514",
                 max_tokens=2000,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "image/png",
-                                    "data": img_base64
-                                }
-                            },
-                            {
-                                "type": "text",
-                                "text": prompt
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": img_base64
                             }
-                        ]
-                    }
-                ]
+                        },
+                        {
+                            "type": "text",
+                            "text": prompt
+                        }
+                    ]
+                }]
             )
             
-            content = message.content[0].text
+            # 응답 추출
+            content = response.content[0].text
+            
+            logger.debug(f"[Pass 2] VLM structured {len(content)} chars")
             
             return ExtractedContent(
                 type=region_type,
                 content=content,
-                metadata={'source': 'vlm', 'description': description},
-                confidence=0.90
+                metadata={
+                    'source': 'ocr_vlm_2pass',
+                    'description': description,
+                    'model': 'claude-sonnet-4',
+                    'ocr_length': len(ocr_text)
+                },
+                confidence=0.95
             )
             
         except Exception as e:
-            logger.error(f"VLM 추출 실패: {e}")
-            return ExtractedContent(
-                type=region_type,
-                content='',
-                metadata={'source': 'error', 'description': description, 'error': str(e)},
-                confidence=0.0
-            )
+            logger.error(f"VLM extraction failed: {e}")
+            return None
     
-    def _build_prompt(self, region_type: str, description: str) -> str:
-        """타입별 프롬프트 생성"""
+    def _build_2pass_prompt(self, region_type: str, ocr_text: str) -> str:
+        """2-Pass 전략 프롬프트"""
         
-        base = f"이 이미지는 '{description}' 영역입니다.\n\n"
-        
-        if region_type == 'chart':
-            return base + """이 차트의 모든 데이터를 JSON 형식으로 추출하세요.
+        prompt = f"""이 이미지와 OCR 추출 텍스트를 참고하여 구조화된 마크다운을 생성하세요.
 
-**반드시 포함:**
-- type: 차트 타입 (bar/pie/line 등)
-- title: 차트 제목
-- data: 모든 데이터 포인트
-  - label: 정확한 라벨 (원본 그대로)
-  - value: 수치
+**중요: OCR 텍스트의 정확도를 최우선으로 하되, 이미지를 보고 구조를 파악하세요.**
 
-**중요:** 
-- 라벨은 차트에 표시된 원본 텍스트를 정확히 추출
-- 추측하지 말고 보이는 그대로 작성
-- 모든 데이터 포인트 누락 없이 포함
-
-JSON만 출력:
-```json
-{
-  "type": "...",
-  "title": "...",
-  "data": [...]
-}
-```"""
-        
-        elif region_type == 'table':
-            return base + """이 표를 마크다운 형식으로 변환하세요.
+---
+**OCR로 추출된 텍스트:**
+```
+{ocr_text[:1000]}...
+```
+---
 
 **요구사항:**
-- 모든 행/열 포함
-- 헤더와 데이터 구분
-- 정렬 유지
 
-마크다운만 출력:
-```markdown
-| 헤더1 | 헤더2 |
-|-------|-------|
-| 값1   | 값2   |
-```"""
+1. **정확성 최우선**:
+   - OCR 텍스트에 있는 모든 단어, 숫자를 **정확히** 사용하세요
+   - 절대로 단어를 바꾸거나 추측하지 마세요
+   - 예: "고관여" → "고찰어" 같은 오인식 금지
+   - 예: "프로스포츠" → "프로포츠" 같은 오타 금지
+
+2. **구조화**:
+   - 이미지를 보고 표, 차트, 리스트 구조를 파악
+   - OCR 텍스트를 적절한 마크다운 형식으로 배치
+   - 표는 반드시 마크다운 표 형식으로 (| 열1 | 열2 |)
+
+3. **차트/그래프 처리**:
+   - 차트 타입 명시 (원그래프, 막대그래프 등)
+   - OCR에서 추출된 숫자를 정확히 사용
+   - 상세한 해석 추가:
+     * 가장 높은/낮은 값 언급
+     * 주요 패턴이나 경향 설명
+     * 비교 분석 포함
+     * 차트를 보지 못한 사람도 이해할 수 있게 자세히 설명
+
+4. **표 처리**:
+   - 행/열 구조를 정확히 파악
+   - 헤더와 데이터를 명확히 구분
+   - 병합된 셀이 있다면 적절히 처리
+
+5. **가독성**:
+   - 적절한 제목과 소제목 사용
+   - 중요한 내용은 **굵게** 표시
+   - 목록은 불릿 포인트 사용
+
+**절대 금지 사항:**
+- ❌ OCR 텍스트에 없는 단어 추가
+- ❌ 숫자나 단어 변경
+- ❌ 맥락에 맞지 않는 해석
+- ❌ 추측이나 가정
+
+**출력 형식:**
+구조화된 마크다운만 출력하세요. 추가 설명이나 메타 정보는 제외하세요.
+"""
         
-        elif region_type == 'text':
-            return base + """이 텍스트를 정확히 추출하세요.
-
-**요구사항:**
-- 원문 그대로 (띄어쓰기 포함)
-- 줄바꿈 유지
-- 특수문자 포함
-
-텍스트만 출력 (JSON이나 마크다운 없이):"""
+        return prompt
+    
+    def _extract_with_ocr_fallback(
+        self, 
+        image: Image.Image, 
+        description: str
+    ) -> ExtractedContent:
+        """OCR 폴백 (VLM 실패 시)"""
         
-        else:
-            return base + "이 이미지를 상세히 설명하세요."
+        text = self._extract_with_ocr(image)
+        
+        return ExtractedContent(
+            type='text',
+            content=text if text else "",
+            metadata={'source': 'ocr_fallback', 'description': description},
+            confidence=0.75 if text else 0.0
+        )
 
 
-# NumPy import (PaddleOCR용)
-try:
-    import numpy as np
-except ImportError:
-    pass
+# ============================================================
+# 테스트 코드
+# ============================================================
+
+if __name__ == "__main__":
+    print("\n" + "="*60)
+    print("PRISM Phase 2.7 - 2-Pass Hybrid Extractor Test")
+    print("="*60 + "\n")
+    
+    extractor = HybridExtractor(vlm_provider='claude', ocr_engine='tesseract')
+    
+    if extractor.claude:
+        print("✅ 2-Pass extraction ready (OCR → VLM)")
+        print("   Pass 1: OCR extracts accurate text")
+        print("   Pass 2: VLM structures with OCR guidance")
+    else:
+        print("⚠️  VLM not available, using OCR only")
