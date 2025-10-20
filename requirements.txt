@@ -1,29 +1,63 @@
-# PRISM POC - 필수 패키지
+# PRISM Phase 2.7 - Python Dependencies
+# Python 3.11+ 호환
 
-# Web Framework
+# ============================================
+# Core Framework
+# ============================================
 streamlit==1.31.0
+python-dotenv==1.0.0
 
-# PDF Processing
-pdf2image==1.16.3
-PyPDF2==3.0.1
-pdfplumber==0.10.3
-# poppler-utils는 conda로 설치: conda install -c conda-forge poppler
+# ============================================
+# PDF Processing (Phase 2.7 핵심)
+# ============================================
+# PyMuPDF: PaddleOCR 호환 버전 (Windows에서 빌드 문제 회피)
+PyMuPDF==1.19.6         # Phase 2.7 메인: PDF → 이미지 변환 (안정 버전)
+pdf2image==1.16.3       # 레거시 호환: Poppler 기반
+Pillow==10.2.0          # 이미지 처리
 
-# OCR (Python 3.12 호환 버전)
-paddlepaddle>=2.6.0
-paddleocr>=2.7.3
-Pillow>=10.2.0
+# ============================================
+# PDF Processing (레거시 - 선택적 유지)
+# ============================================
+PyPDF2==3.0.1          # 레거시 코드에서 사용 중일 수 있음
+pdfplumber==0.10.3     # 레거시 코드에서 사용 중일 수 있음
 
-# VLM APIs
-anthropic>=0.18.1
-openai>=1.12.0
+# ============================================
+# OCR (Phase 2.7 Stage 2: Hybrid Extraction)
+# ============================================
+paddlepaddle==2.6.0    # Python 3.12 호환
+paddleocr==2.7.0       # 한국어 OCR (PyMuPDF<1.21.0 요구)
 
+# ============================================
+# VLM APIs (Phase 2.7 Stage 1, 2)
+# ============================================
+anthropic==0.18.1      # Claude API (메인)
+openai==1.12.0         # Azure OpenAI (선택, 레거시)
+
+# ============================================
 # Utilities
-python-dotenv>=1.0.0
-numpy>=1.26.0  # Python 3.12 호환
-requests>=2.31.0
+# ============================================
+numpy==1.26.3          # Python 3.12 호환
+requests==2.31.0       # HTTP 요청 (선택)
 
-# 선택적 패키지 (품질 평가용)
-# nltk>=3.8.1
-# rouge-score>=0.1.2
-# sentence-transformers>=2.3.1
+# ============================================
+# Quality Metrics (선택적)
+# ============================================
+# nltk==3.8.1
+# rouge-score==0.1.2
+# sentence-transformers==2.3.1
+
+# ============================================
+# 설치 참고사항
+# ============================================
+# - poppler-utils 설치 필요 (pdf2image용):
+#   Windows: https://github.com/oschwartz10612/poppler-windows/releases
+#   Mac: brew install poppler
+#   Linux: sudo apt-get install poppler-utils
+#
+# - Python 3.11 이상 권장
+# - Python 3.12의 경우 paddlepaddle/numpy 버전 주의
+#
+# - PyMuPDF 버전 주의:
+#   1.19.6 사용 (Windows 빌드 안정 버전)
+#   PaddleOCR가 PyMuPDF<1.21.0을 요구
+#   Phase 2.7 코드는 1.19.6에서도 정상 작동합니다

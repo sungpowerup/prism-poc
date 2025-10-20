@@ -1,325 +1,457 @@
 """
-PRISM Phase 2.3 - Intelligent Chunker (Phase 2.3 호환)
-
-RAG를 위한 지능형 문서 청킹 모듈
+PRISM Phase 2.7 - Intelligent Chunker
+의미 기반 청킹 시스템 (RAG 최적화)
 
 Author: 이서영 (Backend Lead)
-Date: 2025-10-13
+Date: 2025-10-20
 """
 
+import re
 from typing import List, Dict, Optional
 from dataclasses import dataclass, field
-import tiktoken
-import re
 
 
 @dataclass
 class Chunk:
-    """청크 데이터"""
+    """청크 데이터 클래스"""
     chunk_id: str
-    type: str  # "text", "table", "image"
     content: str
+    type: str  # 'text', 'table', 'chart', 'image'
     page_num: int
+    section_path: str
     metadata: Dict = field(default_factory=dict)
-    embedding: Optional[List[float]] = None
+    token_count: int = 0
     
     def to_dict(self) -> Dict:
+        """딕셔너리로 변환"""
         return {
-            "chunk_id": self.chunk_id,
-            "type": self.type,
-            "content": self.content,
-            "page_num": self.page_num,
-            "metadata": self.metadata,
-            "has_embedding": self.embedding is not None
+            'chunk_id': self.chunk_id,
+            'page_num': self.page_num,
+            'content': self.content,
+            'type': self.type,
+            'metadata': {
+                'section_path': self.section_path,
+                'token_count': self.token_count,
+                **self.metadata
+            }
         }
 
 
 class IntelligentChunker:
     """
-    지능형 청킹 모듈 (Phase 2.3 호환)
+    지능형 청킹 시스템
     
     전략:
-    1. DocumentElement 리스트를 받아서 처리
-    2. 표는 무조건 독립 청크 (크기 무관)
-    3. 제목/섹션으로 의미 단위 분리
-    4. 문장 경계에서만 분할
+    1. 섹션 기반 분할 (제목/소제목 감지)
+    2. 크기 제약 (100-500 토큰)
+    3. 의미 단위 유지
+    4. 컨텍스트 보존
     """
     
     def __init__(
         self,
-        chunk_size: int = 512,
-        chunk_overlap: int = 50,
-        use_embeddings: bool = False
+        min_chunk_size: int = 100,
+        max_chunk_size: int = 500,
+        overlap_size: int = 50
     ):
         """
         Args:
-            chunk_size: 청크 크기 (토큰)
-            chunk_overlap: 청크 중복 (토큰)
-            use_embeddings: 임베딩 생성 여부
+            min_chunk_size: 최소 청크 크기 (토큰)
+            max_chunk_size: 최대 청크 크기 (토큰)
+            overlap_size: 청크 간 오버랩 크기 (토큰)
         """
-        self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
-        self.use_embeddings = use_embeddings
+        self.min_chunk_size = min_chunk_size
+        self.max_chunk_size = max_chunk_size
+        self.overlap_size = overlap_size
         
-        # Tokenizer
-        self.tokenizer = tiktoken.get_encoding("cl100k_base")
-        
-        # Sentence Transformer (선택적)
-        self.embedder = None
-        if use_embeddings:
-            try:
-                from sentence_transformers import SentenceTransformer
-                self.embedder = SentenceTransformer('all-MiniLM-L6-v2')
-                print("✅ Sentence Transformer loaded")
-            except ImportError:
-                print("⚠️  sentence-transformers not installed. Embeddings disabled.")
-                self.use_embeddings = False
+        print(f"✅ IntelligentChunker initialized")
+        print(f"   Chunk size: {min_chunk_size}-{max_chunk_size} tokens")
+        print(f"   Overlap: {overlap_size} tokens")
     
-    def create_chunks(self, elements: List) -> List[Chunk]:
+    def chunk_content(
+        self,
+        content: str,
+        content_type: str,
+        page_num: int,
+        base_section: str = "",
+        metadata: Optional[Dict] = None
+    ) -> List[Chunk]:
         """
-        ⭐ Phase 2.3용 create_chunks 메서드
-        
-        DocumentElement 리스트를 받아서 Chunk 리스트로 변환
+        컨텐츠를 청크로 분할
         
         Args:
-            elements: DocumentElement 리스트
+            content: 원본 컨텐츠
+            content_type: 'text', 'table', 'chart', 'image'
+            page_num: 페이지 번호
+            base_section: 기본 섹션 경로
+            metadata: 추가 메타데이터
             
         Returns:
             Chunk 리스트
         """
-        from models.layout_detector import ElementType
+        
+        if not content or not content.strip():
+            return []
+        
+        # 타입별 청킹 전략
+        if content_type == 'text':
+            return self._chunk_text(content, page_num, base_section, metadata)
+        elif content_type == 'table':
+            return self._chunk_table(content, page_num, base_section, metadata)
+        elif content_type == 'chart':
+            return self._chunk_chart(content, page_num, base_section, metadata)
+        elif content_type == 'image':
+            return self._chunk_image(content, page_num, base_section, metadata)
+        else:
+            # 기본: 텍스트로 처리
+            return self._chunk_text(content, page_num, base_section, metadata)
+    
+    def _chunk_text(
+        self,
+        text: str,
+        page_num: int,
+        base_section: str,
+        metadata: Optional[Dict]
+    ) -> List[Chunk]:
+        """텍스트 컨텐츠 청킹"""
         
         chunks = []
         
-        # 페이지별로 그룹화
-        by_page = {}
-        for element in elements:
-            page_num = element.metadata.get('page_num', 1)
-            if page_num not in by_page:
-                by_page[page_num] = {'text': [], 'table': []}
+        # 1. 섹션 감지
+        sections = self._detect_sections(text)
+        
+        if not sections:
+            # 섹션이 없으면 전체를 하나의 섹션으로
+            sections = [{'level': 0, 'title': base_section or 'Content', 'content': text}]
+        
+        # 2. 섹션별 청킹
+        for i, section in enumerate(sections):
+            section_title = section.get('title', f'Section {i+1}')
+            section_content = section.get('content', '')
+            section_level = section.get('level', 0)
             
-            if element.type == ElementType.TABLE:
-                by_page[page_num]['table'].append(element)
+            # 섹션 경로 생성
+            if base_section:
+                section_path = f"{base_section} > {section_title}"
             else:
-                by_page[page_num]['text'].append(element)
-        
-        # 페이지별 처리
-        for page_num in sorted(by_page.keys()):
-            page_data = by_page[page_num]
+                section_path = section_title
             
-            # 1. 표 청크 (독립 처리)
-            for i, table_element in enumerate(page_data['table']):
-                chunk = Chunk(
-                    chunk_id=f"table_{page_num}_{i}",
-                    type="table",
-                    content=table_element.text or "",
+            # 토큰 수 계산
+            token_count = self._estimate_tokens(section_content)
+            
+            # 크기 확인
+            if token_count <= self.max_chunk_size:
+                # 적절한 크기: 하나의 청크로
+                chunk_id = f"chunk_{page_num:03d}_{len(chunks)+1:03d}"
+                chunks.append(Chunk(
+                    chunk_id=chunk_id,
+                    content=section_content.strip(),
+                    type='text',
                     page_num=page_num,
-                    metadata={
-                        "confidence": table_element.confidence,
-                        "source": "claude_vision"
-                    }
+                    section_path=section_path,
+                    metadata=metadata or {},
+                    token_count=token_count
+                ))
+            else:
+                # 너무 큼: 문단 단위로 분할
+                sub_chunks = self._split_by_paragraphs(
+                    section_content,
+                    page_num,
+                    section_path,
+                    metadata,
+                    start_index=len(chunks)
                 )
-                chunks.append(chunk)
-            
-            # 2. 텍스트 청크
-            text_elements = page_data['text']
-            if text_elements:
-                # 모든 텍스트를 하나로 합침
-                full_text = "\n\n".join(
-                    element.text for element in text_elements if element.text
-                )
-                
-                if full_text.strip():
-                    # 문장으로 분할
-                    sentences = self._split_into_sentences(full_text)
-                    
-                    # 청크 생성
-                    text_chunks = self._create_sentence_chunks(sentences, page_num)
-                    chunks.extend(text_chunks)
-        
-        # 임베딩 생성 (선택)
-        if self.use_embeddings and self.embedder:
-            self._add_embeddings(chunks)
+                chunks.extend(sub_chunks)
         
         return chunks
     
-    def _split_into_sentences(self, text: str) -> List[str]:
-        """
-        텍스트를 문장으로 분할
+    def _chunk_table(
+        self,
+        table_content: str,
+        page_num: int,
+        base_section: str,
+        metadata: Optional[Dict]
+    ) -> List[Chunk]:
+        """표 컨텐츠 청킹 (보통 하나의 청크로)"""
         
-        한국어 문장 종결 패턴:
-        - 다. / 요. / 음. / 함.
-        - ? / !
+        chunk_id = f"chunk_{page_num:03d}_table_001"
+        token_count = self._estimate_tokens(table_content)
+        
+        # 표 제목 추출 시도
+        table_title = self._extract_table_title(table_content)
+        section_path = f"{base_section} > {table_title}" if base_section else table_title
+        
+        return [Chunk(
+            chunk_id=chunk_id,
+            content=table_content.strip(),
+            type='table',
+            page_num=page_num,
+            section_path=section_path,
+            metadata=metadata or {},
+            token_count=token_count
+        )]
+    
+    def _chunk_chart(
+        self,
+        chart_content: str,
+        page_num: int,
+        base_section: str,
+        metadata: Optional[Dict]
+    ) -> List[Chunk]:
+        """차트 컨텐츠 청킹 (보통 하나의 청크로)"""
+        
+        chunk_id = f"chunk_{page_num:03d}_chart_001"
+        token_count = self._estimate_tokens(chart_content)
+        
+        # 차트 제목 추출 시도
+        chart_title = self._extract_chart_title(chart_content)
+        section_path = f"{base_section} > {chart_title}" if base_section else chart_title
+        
+        return [Chunk(
+            chunk_id=chunk_id,
+            content=chart_content.strip(),
+            type='chart',
+            page_num=page_num,
+            section_path=section_path,
+            metadata=metadata or {},
+            token_count=token_count
+        )]
+    
+    def _chunk_image(
+        self,
+        image_description: str,
+        page_num: int,
+        base_section: str,
+        metadata: Optional[Dict]
+    ) -> List[Chunk]:
+        """이미지 설명 청킹 (보통 하나의 청크로)"""
+        
+        chunk_id = f"chunk_{page_num:03d}_image_001"
+        token_count = self._estimate_tokens(image_description)
+        
+        section_path = f"{base_section} > Image" if base_section else "Image"
+        
+        return [Chunk(
+            chunk_id=chunk_id,
+            content=image_description.strip(),
+            type='image',
+            page_num=page_num,
+            section_path=section_path,
+            metadata=metadata or {},
+            token_count=token_count
+        )]
+    
+    def _detect_sections(self, text: str) -> List[Dict]:
         """
-        # 문장 종결 패턴
+        텍스트에서 섹션 감지
+        
+        Returns:
+            [{'level': 1, 'title': '제목', 'content': '내용'}, ...]
+        """
+        sections = []
+        
+        # 제목 패턴 (다양한 형식 지원)
         patterns = [
-            r'([^.!?]+[.!?])\s+',  # 마침표, 물음표, 느낌표
-            r'([^다요음함]+[다요음함]\.)' # 한국어 종결
+            # "## 제목" 형식
+            r'^(#{1,6})\s+(.+),
+            # "1. 제목", "1.1 제목" 형식
+            r'^(\d+\.(?:\d+\.)*)\s+(.+),
+            # "【제목】" 형식
+            r'^【(.+)】,
+            # "☉ 제목" 형식
+            r'^[☉◆●■▶]\s+(.+),
+            # 대문자로만 된 제목
+            r'^([A-Z][A-Z\s]{2,})
         ]
         
-        sentences = []
-        remaining = text
+        lines = text.split('\n')
+        current_section = None
+        current_content = []
         
-        for pattern in patterns:
-            matches = re.finditer(pattern, remaining)
-            for match in matches:
-                sentence = match.group(1).strip()
-                if sentence:
-                    sentences.append(sentence)
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # 제목 매칭 시도
+            is_heading = False
+            heading_level = 0
+            heading_title = None
+            
+            for pattern in patterns:
+                match = re.match(pattern, line, re.MULTILINE)
+                if match:
+                    is_heading = True
+                    if len(match.groups()) == 2:
+                        # 레벨과 제목
+                        level_str = match.group(1)
+                        heading_title = match.group(2).strip()
+                        heading_level = level_str.count('#') or level_str.count('.')
+                    else:
+                        # 제목만
+                        heading_title = match.group(1).strip()
+                        heading_level = 1
+                    break
+            
+            if is_heading and heading_title:
+                # 이전 섹션 저장
+                if current_section:
+                    current_section['content'] = '\n'.join(current_content).strip()
+                    sections.append(current_section)
+                
+                # 새 섹션 시작
+                current_section = {
+                    'level': heading_level,
+                    'title': heading_title,
+                    'content': ''
+                }
+                current_content = []
+            else:
+                # 컨텐츠 누적
+                current_content.append(line)
         
-        # 패턴에 매칭되지 않은 나머지 텍스트
-        if remaining.strip() and not sentences:
-            # 패턴이 없으면 그냥 \n\n으로 분할
-            sentences = [s.strip() for s in remaining.split('\n\n') if s.strip()]
+        # 마지막 섹션 저장
+        if current_section:
+            current_section['content'] = '\n'.join(current_content).strip()
+            sections.append(current_section)
         
-        return sentences if sentences else [text]
+        return sections
     
-    def _create_sentence_chunks(
+    def _split_by_paragraphs(
         self,
-        sentences: List[str],
-        page_num: int
+        text: str,
+        page_num: int,
+        section_path: str,
+        metadata: Optional[Dict],
+        start_index: int = 0
     ) -> List[Chunk]:
-        """
-        문장 리스트를 청크로 변환
+        """문단 단위로 텍스트 분할"""
         
-        전략:
-        - chunk_size 이하로 문장을 모음
-        - 문장 경계에서만 분할
-        - 오버랩 유지
-        """
         chunks = []
+        paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
         
-        current_sentences = []
+        current_chunk = []
         current_tokens = 0
-        chunk_idx = 0
         
-        for sentence in sentences:
-            sentence_tokens = len(self.tokenizer.encode(sentence))
+        for para in paragraphs:
+            para_tokens = self._estimate_tokens(para)
             
-            # 현재 청크에 추가하면 chunk_size 초과하는 경우
-            if current_tokens + sentence_tokens > self.chunk_size and current_sentences:
-                # 현재 청크 완성
-                chunk = self._build_text_chunk(
-                    current_sentences, page_num, chunk_idx
-                )
-                chunks.append(chunk)
-                chunk_idx += 1
+            if current_tokens + para_tokens <= self.max_chunk_size:
+                # 현재 청크에 추가
+                current_chunk.append(para)
+                current_tokens += para_tokens
+            else:
+                # 현재 청크 저장
+                if current_chunk:
+                    chunk_id = f"chunk_{page_num:03d}_{start_index + len(chunks) + 1:03d}"
+                    chunks.append(Chunk(
+                        chunk_id=chunk_id,
+                        content='\n\n'.join(current_chunk),
+                        type='text',
+                        page_num=page_num,
+                        section_path=section_path,
+                        metadata=metadata or {},
+                        token_count=current_tokens
+                    ))
                 
-                # 오버랩 문장 가져오기
-                overlap_sentences = self._get_overlap_sentences(
-                    current_sentences, self.chunk_overlap
-                )
-                
-                # 새 청크 시작 (오버랩 포함)
-                current_sentences = overlap_sentences
-                current_tokens = sum(
-                    len(self.tokenizer.encode(s)) for s in overlap_sentences
-                )
-            
-            current_sentences.append(sentence)
-            current_tokens += sentence_tokens
+                # 새 청크 시작
+                current_chunk = [para]
+                current_tokens = para_tokens
         
-        # 마지막 청크
-        if current_sentences:
-            chunk = self._build_text_chunk(
-                current_sentences, page_num, chunk_idx
-            )
-            chunks.append(chunk)
+        # 마지막 청크 저장
+        if current_chunk:
+            chunk_id = f"chunk_{page_num:03d}_{start_index + len(chunks) + 1:03d}"
+            chunks.append(Chunk(
+                chunk_id=chunk_id,
+                content='\n\n'.join(current_chunk),
+                type='text',
+                page_num=page_num,
+                section_path=section_path,
+                metadata=metadata or {},
+                token_count=current_tokens
+            ))
         
         return chunks
     
-    def _build_text_chunk(
-        self,
-        sentences: List[str],
-        page_num: int,
-        chunk_idx: int
-    ) -> Chunk:
-        """텍스트 청크 생성"""
-        content = " ".join(sentences)
-        token_count = len(self.tokenizer.encode(content))
+    def _extract_table_title(self, table_content: str) -> str:
+        """표 제목 추출"""
+        lines = table_content.split('\n')
         
-        chunk = Chunk(
-            chunk_id=f"text_{page_num}_{chunk_idx}",
-            type="text",
-            content=content,
-            page_num=page_num,
-            metadata={
-                "token_count": token_count,
-                "char_count": len(content),
-                "sentence_count": len(sentences)
-            }
-        )
-        return chunk
+        # 첫 줄이 제목일 가능성 높음
+        if lines and not lines[0].startswith('|'):
+            return lines[0].strip()
+        
+        return "Table"
     
-    def _get_overlap_sentences(
-        self,
-        sentences: List[str],
-        overlap_tokens: int
-    ) -> List[str]:
-        """
-        오버랩할 문장 추출
+    def _extract_chart_title(self, chart_content: str) -> str:
+        """차트 제목 추출"""
+        lines = chart_content.split('\n')
         
-        마지막 문장부터 역순으로 overlap_tokens만큼
-        """
-        overlap = []
-        total_tokens = 0
+        # "Title: ..." 패턴 찾기
+        for line in lines[:5]:  # 처음 5줄만 확인
+            if line.lower().startswith('title:'):
+                return line.split(':', 1)[1].strip()
         
-        for sentence in reversed(sentences):
-            tokens = len(self.tokenizer.encode(sentence))
-            if total_tokens + tokens > overlap_tokens:
-                break
-            overlap.insert(0, sentence)
-            total_tokens += tokens
-        
-        return overlap
+        return "Chart"
     
-    def _add_embeddings(self, chunks: List[Chunk]) -> None:
-        """임베딩 생성"""
-        if not self.embedder:
-            return
+    def _estimate_tokens(self, text: str) -> int:
+        """토큰 수 추정 (간단한 휴리스틱)"""
+        if not text:
+            return 0
         
-        texts = [c.content for c in chunks]
-        embeddings = self.embedder.encode(texts, show_progress_bar=False)
+        # 한글: 문자당 ~1.5 토큰
+        # 영문: 단어당 ~1.3 토큰
+        korean_chars = len(re.findall(r'[가-힣]', text))
+        english_words = len(re.findall(r'\b[a-zA-Z]+\b', text))
+        numbers = len(re.findall(r'\d+', text))
         
-        for chunk, embedding in zip(chunks, embeddings):
-            chunk.embedding = embedding.tolist()
+        estimated = int(korean_chars * 1.5 + english_words * 1.3 + numbers * 0.5)
+        
+        return max(estimated, len(text.split()) // 2)  # 최소값 보장
 
 
-# 테스트
+# ============================================================
+# 테스트 코드
+# ============================================================
+
 if __name__ == "__main__":
-    from models.layout_detector import DocumentElement, ElementType
+    print("\n" + "="*60)
+    print("PRISM Phase 2.7 - Intelligent Chunker Test")
+    print("="*60 + "\n")
     
-    # 샘플 데이터
-    elements = [
-        DocumentElement(
-            type=ElementType.TEXT,
-            bbox=(0, 0, 100, 100),
-            confidence=0.95,
-            text="이것은 첫 번째 문장입니다. 이것은 두 번째 문장입니다.",
-            metadata={'page_num': 1}
-        ),
-        DocumentElement(
-            type=ElementType.TABLE,
-            bbox=(0, 0, 100, 100),
-            confidence=0.95,
-            text="| A | B |\n|---|---|\n| 1 | 2 |",
-            metadata={'page_num': 1}
-        ),
-        DocumentElement(
-            type=ElementType.SECTION,
-            bbox=(0, 0, 100, 100),
-            confidence=0.95,
-            text="섹션 제목입니다. 섹션 내용이 여기에 있습니다.",
-            metadata={'page_num': 2, 'title': 'Section 1'}
-        )
-    ]
+    chunker = IntelligentChunker()
     
-    chunker = IntelligentChunker(chunk_size=100, chunk_overlap=20)
-    chunks = chunker.create_chunks(elements)
+    # 테스트 텍스트
+    test_text = """
+## 응답자 특성
+
+### 전체 응답자 개요
+2023년 조사에 참여한 전체 응답자는 총 35,000명이며 이 중 프로스포츠 팬은 25,000명, 일반국민은 10,000명입니다.
+
+### 성별 분포
+남성: 45.2%
+여성: 54.8%
+
+### 연령 분포
+14-19세: 11.2%
+20대: 25.9%
+30대: 22.3%
+40대: 19.9%
+50대 이상: 20.7%
+"""
     
-    print("\n✅ Chunking Test:")
-    print(f"  총 청크: {len(chunks)}개")
+    chunks = chunker.chunk_content(
+        content=test_text,
+        content_type='text',
+        page_num=1,
+        base_section="조사 개요"
+    )
     
+    print(f"✅ Generated {len(chunks)} chunks:\n")
     for chunk in chunks:
-        print(f"\n{chunk.chunk_id} ({chunk.type}, page {chunk.page_num}):")
-        print(f"  {chunk.content[:100]}...")
+        print(f"  {chunk.chunk_id}")
+        print(f"  Type: {chunk.type}")
+        print(f"  Section: {chunk.section_path}")
+        print(f"  Tokens: {chunk.token_count}")
+        print(f"  Content preview: {chunk.content[:100]}...")
+        print()

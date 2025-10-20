@@ -1,61 +1,31 @@
-# app.py
+"""
+PRISM Phase 2.7 - Streamlit Application
+지능형 청킹 시스템 UI
+
+Author: 최동현 (Frontend Lead)
+Date: 2025-10-20
+"""
 
 import streamlit as st
-import json
-import logging
-from datetime import datetime
-from pathlib import Path
-import sys
 import os
-from dotenv import load_dotenv
+import sys
+import json
+from pathlib import Path
+from datetime import datetime
+import tempfile
 
-# 프로젝트 루트 디렉토리를 Python 경로에 추가
+# 프로젝트 루트 디렉토리 추가
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-# 환경 변수 로드
-env_path = project_root / '.env'
-if env_path.exists():
-    load_dotenv(env_path)
-    print(f"✅ .env 파일 로드: {env_path}")
-    
-    # Claude API 키 확인
-    claude_key = os.getenv('ANTHROPIC_API_KEY', '')
-    if claude_key:
-        print(f"✅ Claude API 키 로드 성공: {claude_key[:20]}...")
-    else:
-        print("⚠️ Claude API 키가 없습니다")
-else:
-    print(f"⚠️ .env 파일을 찾을 수 없습니다: {env_path}")
-
-from core.multi_vlm_service import MultiVLMService
-from core.pdf_processor import PDFProcessor
-
-# 로깅 설정
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+from core.phase27_pipeline import Phase27Pipeline
 
 # 페이지 설정
 st.set_page_config(
-    page_title="PRISM",
-    page_icon="📄",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_title="PRISM Phase 2.7",
+    page_icon="🔷",
+    layout="wide"
 )
-
-# 전역 변수로 서비스 초기화
-if 'vlm_service' not in st.session_state:
-    default_provider = os.getenv('DEFAULT_VLM_PROVIDER', 'claude')
-    st.session_state.vlm_service = MultiVLMService(default_provider=default_provider)
-
-if 'pdf_processor' not in st.session_state:
-    st.session_state.pdf_processor = PDFProcessor(vlm_service=st.session_state.vlm_service)
-
-vlm_service = st.session_state.vlm_service
-pdf_processor = st.session_state.pdf_processor
 
 # CSS 스타일
 st.markdown("""
@@ -64,29 +34,23 @@ st.markdown("""
         font-size: 2.5rem;
         font-weight: bold;
         color: #1f77b4;
+        text-align: center;
         margin-bottom: 0.5rem;
     }
     .sub-header {
         font-size: 1.2rem;
         color: #666;
+        text-align: center;
         margin-bottom: 2rem;
     }
-    .metric-card {
-        background-color: #f0f2f6;
+    .chunk-card {
+        background-color: #f8f9fa;
         padding: 1rem;
         border-radius: 0.5rem;
-        margin: 0.5rem 0;
-    }
-    .chunk-card {
-        background-color: white;
-        padding: 1.5rem;
-        border-radius: 0.5rem;
-        border: 1px solid #e0e0e0;
+        border-left: 4px solid #1f77b4;
         margin: 1rem 0;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
     .chunk-header {
-        font-size: 1.1rem;
         font-weight: bold;
         color: #1f77b4;
         margin-bottom: 0.5rem;
@@ -94,320 +58,356 @@ st.markdown("""
     .chunk-meta {
         font-size: 0.9rem;
         color: #666;
-        margin-bottom: 1rem;
+        margin-bottom: 0.5rem;
     }
-    .download-section {
-        background-color: #e8f4f8;
-        padding: 1.5rem;
+    .stat-box {
+        background-color: #e3f2fd;
+        padding: 1rem;
         border-radius: 0.5rem;
-        margin: 2rem 0;
+        text-align: center;
+    }
+    .stat-value {
+        font-size: 2rem;
+        font-weight: bold;
+        color: #1976d2;
+    }
+    .stat-label {
+        font-size: 0.9rem;
+        color: #666;
     }
 </style>
 """, unsafe_allow_html=True)
 
-def display_results(results):
-    """처리 결과 표시"""
-    
-    # 메타데이터 표시
-    st.markdown("### 📊 처리 결과 요약")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        st.metric("총 청크 수", results['metadata']['total_chunks'])
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        chunk_types = results['metadata']['chunk_types']
-        st.metric("이미지 청크", chunk_types.get('image', 0))
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    with col3:
-        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
-        st.metric("텍스트 청크", chunk_types.get('text', 0))
-        st.markdown('</div>', unsafe_allow_html=True)
-    
-    st.markdown("---")
-    
-    # 청크별 상세 내용
-    st.markdown("### 📄 페이지별 분석 결과")
-    
-    for chunk in results['chunks']:
-        with st.container():
-            st.markdown('<div class="chunk-card">', unsafe_allow_html=True)
-            
-            # 헤더
-            st.markdown(
-                f'<div class="chunk-header">페이지 {chunk["page_num"]} - {chunk["type"].upper()}</div>',
-                unsafe_allow_html=True
-            )
-            
-            # 메타 정보
-            meta_info = f"청크 ID: {chunk['chunk_id']}"
-            if chunk.get('provider'):
-                meta_info += f" | VLM: {chunk['provider']}"
-            
-            st.markdown(
-                f'<div class="chunk-meta">{meta_info}</div>',
-                unsafe_allow_html=True
-            )
-            
-            # 내용
-            if chunk.get('content'):
-                st.markdown(chunk['content'])
-            
-            # OCR 텍스트 미리보기 (있는 경우)
-            if chunk.get('ocr_text_preview'):
-                with st.expander("🔍 OCR 추출 텍스트 미리보기"):
-                    st.text(chunk['ocr_text_preview'])
-            
-            st.markdown('</div>', unsafe_allow_html=True)
+# ============================================================
+# Helper Functions
+# ============================================================
 
-def create_markdown_export(results):
-    """마크다운 형식으로 내보내기"""
+def convert_to_markdown(result: dict) -> str:
+    """결과를 마크다운으로 변환"""
     md_lines = []
     
     # 헤더
-    md_lines.append("# PRISM 문서 분석 결과\n")
-    md_lines.append(f"**처리 시간**: {results['metadata']['processed_at']}\n")
-    md_lines.append(f"**총 청크 수**: {results['metadata']['total_chunks']}\n")
-    md_lines.append("\n---\n")
+    md_lines.append("# PRISM Phase 2.7 - 처리 결과")
+    md_lines.append("")
+    md_lines.append(f"**처리 일시:** {result['metadata']['processed_at']}")
+    md_lines.append(f"**총 페이지:** {result['metadata']['total_pages']}")
+    md_lines.append(f"**총 청크:** {result['metadata']['total_chunks']}")
+    md_lines.append(f"**처리 시간:** {result['metadata']['processing_time_seconds']}초")
+    md_lines.append("")
+    md_lines.append("## 청크 타입별 통계")
+    md_lines.append("")
     
-    # 각 청크
-    for chunk in results['chunks']:
-        md_lines.append(f"\n## 페이지 {chunk['page_num']}\n")
-        md_lines.append(f"**청크 ID**: {chunk['chunk_id']}  ")
-        md_lines.append(f"**타입**: {chunk['type']}  ")
+    for chunk_type, count in result['metadata']['chunk_types'].items():
+        md_lines.append(f"- **{chunk_type}**: {count}개")
+    
+    md_lines.append("")
+    md_lines.append("---")
+    md_lines.append("")
+    
+    # 청크별 내용
+    for chunk in result['chunks']:
+        chunk_id = chunk['chunk_id']
+        page_num = chunk['page_num']
+        chunk_type = chunk['type']
+        content = chunk['content']
+        section_path = chunk['metadata'].get('section_path', 'N/A')
+        token_count = chunk['metadata'].get('token_count', 0)
         
-        if chunk.get('provider'):
-            md_lines.append(f"**VLM**: {chunk['provider']}  ")
+        # 타입별 아이콘
+        type_icons = {
+            'text': '📝',
+            'table': '📊',
+            'chart': '📈',
+            'image': '🖼️'
+        }
+        icon = type_icons.get(chunk_type, '📄')
         
-        md_lines.append("\n")
-        
-        if chunk.get('content'):
-            md_lines.append(chunk['content'])
-            md_lines.append("\n")
-        
-        if chunk.get('ocr_text_preview'):
-            md_lines.append("\n### OCR 추출 텍스트\n")
-            md_lines.append("```")
-            md_lines.append(chunk['ocr_text_preview'])
-            md_lines.append("```\n")
-        
-        md_lines.append("\n---\n")
+        md_lines.append(f"## {icon} {chunk_id}")
+        md_lines.append("")
+        md_lines.append(f"**페이지:** {page_num} | **타입:** {chunk_type} | **토큰:** {token_count}")
+        md_lines.append(f"**경로:** {section_path}")
+        md_lines.append("")
+        md_lines.append("### 내용")
+        md_lines.append("")
+        md_lines.append(content)
+        md_lines.append("")
+        md_lines.append("---")
+        md_lines.append("")
     
     return '\n'.join(md_lines)
 
-def sidebar_settings():
-    """사이드바 설정"""
-    with st.sidebar:
-        st.markdown('<div class="main-header">🎯 모델 설정</div>', unsafe_allow_html=True)
-        
-        # VLM 프로바이더 선택
-        st.markdown("### VLM 프로바이더")
-        
-        current_provider = vlm_service.get_current_provider()
-        provider_options = {
-            'claude': '🤖 Claude Sonnet 4',
-            'azure_openai': '🔷 Azure OpenAI GPT-4',
-            'ollama': '🦙 Ollama (Local)'
-        }
-        
-        selected_provider = st.selectbox(
-            "",
-            options=list(provider_options.keys()),
-            format_func=lambda x: provider_options[x],
-            index=list(provider_options.keys()).index(current_provider),
-            key="provider_select"
-        )
-        
-        if selected_provider != current_provider:
-            vlm_service.set_provider(selected_provider)
-            st.success(f"✅ {provider_options[selected_provider]}로 변경되었습니다")
-        
-        # 프로바이더 상태 표시
-        st.markdown("#### 사용 가능한 프로바이더")
-        for provider, display_name in provider_options.items():
-            status = vlm_service.provider_status.get(provider, {})
-            if status.get('available'):
-                st.markdown(f"✅ {display_name}")
-            else:
-                error_msg = status.get('error', '알 수 없는 오류')
-                st.markdown(f"❌ {display_name}")
-                st.caption(f"   {error_msg}")
-        
-        st.markdown("---")
-        
-        # 처리 설정
-        st.markdown('<div class="main-header">⚙️ 처리 설정</div>', unsafe_allow_html=True)
-        
-        max_pages = st.number_input(
-            "최대 페이지 수",
-            min_value=1,
-            max_value=20,
-            value=20,
-            help="처리할 최대 페이지 수를 설정합니다"
-        )
-        
-        use_ocr = st.checkbox(
-            "OCR 사용",
-            value=True,
-            help="PaddleOCR을 사용하여 텍스트를 추출합니다"
-        )
-        
-        use_text_chunking = st.checkbox(
-            "원본 청킹 활성화",
-            value=True,
-            help="원본을 100-500자 단위로 분할합니다"
-        )
-        
-        st.markdown("---")
-        
-        # 정보 표시
-        st.markdown("### ℹ️ 정보")
-        st.info("""
-        **PRISM POC**
-        
-        차세대 지능형 문서 이해 플랫폼
-        
-        - 다중 VLM 지원
-        - OCR 통합
-        - 지능형 청킹
-        """)
-        
-        return max_pages, use_ocr, use_text_chunking
 
-def process_file(uploaded_file, max_pages, use_ocr, use_text_chunking):
-    """파일 처리 함수"""
-    try:
-        # 파일 읽기
-        file_bytes = uploaded_file.read()
-        
-        # 진행 상태 표시
-        progress_placeholder = st.empty()
-        
-        def update_progress(message, progress):
-            progress_placeholder.info(f"{message} ({progress}%)")
-        
-        # PDF 처리
-        logger.info("PDF 처리 시작")
-        elements = pdf_processor.process_pdf(
-            pdf_data=file_bytes,
-            use_ocr=use_ocr,
-            progress_callback=update_progress
-        )
-        
-        logger.info(f"추출된 청크 수: {len(elements)}")
-        
-        # 페이지 필터링
-        if max_pages > 0:
-            elements = [e for e in elements if e.get('page_num', 0) <= max_pages]
-            logger.info(f"필터링 후 청크 수: {len(elements)}")
-        
-        # 결과 구성
-        results = {
-            "metadata": {
-                "processed_at": datetime.now().isoformat(),
-                "total_chunks": len(elements),
-                "chunk_types": {}
-            },
-            "chunks": elements  # ← 핵심 수정: elements를 chunks에 할당
-        }
-        
-        # 타입별 카운트
-        for element in elements:
-            elem_type = element.get('type', 'unknown')
-            results["metadata"]["chunk_types"][elem_type] = \
-                results["metadata"]["chunk_types"].get(elem_type, 0) + 1
-        
-        # 세션에 저장
-        st.session_state.processing_results = results
-        st.session_state.processed = True
-        
-        progress_placeholder.success("✅ 처리 완료!")
-        
-        # 결과 표시
-        display_results(results)
-        
-    except Exception as e:
-        logger.error(f"처리 오류: {e}", exc_info=True)
-        st.error(f"❌ 처리 실패: {str(e)}")
-
-def main():
-    """메인 함수"""
+def display_chunk(chunk: dict):
+    """청크 표시"""
+    chunk_id = chunk['chunk_id']
+    page_num = chunk['page_num']
+    chunk_type = chunk['type']
+    content = chunk['content']
+    section_path = chunk['metadata'].get('section_path', 'N/A')
+    token_count = chunk['metadata'].get('token_count', 0)
     
-    # 헤더
-    st.markdown('<div class="main-header">PRISM</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-header">차세대 지능형 문서 이해 플랫폼</div>', unsafe_allow_html=True)
+    # 타입별 아이콘
+    type_icons = {
+        'text': '📝',
+        'table': '📊',
+        'chart': '📈',
+        'image': '🖼️'
+    }
+    icon = type_icons.get(chunk_type, '📄')
     
-    # 사이드바 설정
-    max_pages, use_ocr, use_text_chunking = sidebar_settings()
-    
-    # 파일 업로드
-    st.markdown("### 📄 PDF 파일을 업로드하세요")
-    
-    uploaded_file = st.file_uploader(
-        "",
-        type=['pdf'],
-        help="PDF 파일을 드래그하거나 클릭하여 업로드하세요 (최대 200MB)"
+    st.markdown(f'<div class="chunk-card">', unsafe_allow_html=True)
+    st.markdown(f'<div class="chunk-header">{icon} {chunk_id}</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="chunk-meta">페이지: {page_num} | 타입: {chunk_type} | 토큰: {token_count}<br>경로: {section_path}</div>',
+        unsafe_allow_html=True
     )
     
-    if uploaded_file:
-        # 파일 정보 표시
-        col1, col2 = st.columns([2, 1])
+    # 내용 표시
+    with st.expander("내용 보기", expanded=False):
+        if chunk_type == 'table':
+            # 표는 마크다운으로 렌더링
+            st.markdown(content)
+        else:
+            st.text(content)
+    
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# ============================================================
+# Main App
+# ============================================================
+
+def main():
+    """메인 애플리케이션"""
+    
+    # 헤더
+    st.markdown('<div class="main-header">🔷 PRISM Phase 2.7</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">지능형 문서 청킹 시스템 - RAG 최적화</div>', unsafe_allow_html=True)
+    
+    # 사이드바
+    with st.sidebar:
+        st.header("⚙️ 설정")
+        
+        st.subheader("청킹 파라미터")
+        min_chunk_size = st.slider("최소 청크 크기 (토큰)", 50, 200, 100)
+        max_chunk_size = st.slider("최대 청크 크기 (토큰)", 300, 1000, 500)
+        overlap_size = st.slider("오버랩 크기 (토큰)", 0, 100, 50)
+        
+        st.divider()
+        
+        st.subheader("처리 옵션")
+        max_pages = st.number_input("최대 페이지 수", min_value=1, max_value=50, value=10)
+        
+        st.divider()
+        
+        st.markdown("""
+        ### 📖 시스템 정보
+        
+        **Phase 2.7 특징:**
+        - 🔍 2-Stage Pipeline
+        - 🔄 하이브리드 추출 (OCR + VLM)
+        - ✂️ 의미 기반 청킹
+        - 🎯 RAG 최적화
+        """)
+    
+    # 파일 업로드
+    st.subheader("📄 PDF 파일 업로드")
+    uploaded_file = st.file_uploader(
+        "PDF 파일을 선택하세요",
+        type=['pdf'],
+        help="지능형 청킹 시스템으로 처리됩니다"
+    )
+    
+    if not uploaded_file:
+        st.info("👆 PDF 파일을 업로드하여 시작하세요")
+        
+        st.markdown("""
+        ### 🎯 Phase 2.7의 주요 개선사항
+        
+        **1. 2-Stage Pipeline**
+        - Stage 1: Layout Detection (영역 분류)
+        - Stage 2: Hybrid Extraction (OCR + VLM)
+        - Stage 3: Intelligent Chunking (의미 단위)
+        
+        **2. 범용 문서 지원**
+        - 보고서, 논문, 매뉴얼, 계약서 등
+        - 문서 타입에 무관하게 작동
+        
+        **3. RAG 검색 최적화**
+        - 의미 단위 청킹 (100-500 토큰)
+        - 섹션 경로 메타데이터
+        - 컨텍스트 보존
+        
+        **4. 정확도 향상**
+        - OCR 우선 (텍스트 정확도 95%+)
+        - VLM 보조 (표/차트 구조화)
+        - 원본 충실도 극대화
+        """)
+        return
+    
+    # 처리 버튼
+    if st.button("🚀 처리 시작", type="primary", use_container_width=True):
+        
+        # 임시 파일 저장
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+            tmp_file.write(uploaded_file.getvalue())
+            tmp_path = tmp_file.name
+        
+        try:
+            # 파이프라인 초기화
+            with st.spinner("⚙️ 파이프라인 초기화 중..."):
+                pipeline = Phase27Pipeline(
+                    min_chunk_size=min_chunk_size,
+                    max_chunk_size=max_chunk_size,
+                    overlap_size=overlap_size
+                )
+            
+            # 처리 실행
+            with st.spinner("🔄 문서 처리 중... (시간이 소요될 수 있습니다)"):
+                result = pipeline.process_pdf(tmp_path, max_pages=max_pages)
+            
+            # 세션 상태에 저장
+            st.session_state['result'] = result
+            st.session_state['processed_filename'] = uploaded_file.name
+            
+            st.success("✅ 처리 완료!")
+            st.rerun()
+            
+        except Exception as e:
+            st.error(f"❌ 처리 중 오류 발생: {str(e)}")
+            import traceback
+            st.code(traceback.format_exc())
+        
+        finally:
+            # 임시 파일 삭제
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+    
+    # 결과 표시
+    if 'result' in st.session_state:
+        result = st.session_state['result']
+        filename = st.session_state.get('processed_filename', 'document.pdf')
+        
+        st.divider()
+        
+        # 통계 표시
+        st.subheader("📊 처리 결과 통계")
+        
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            st.info(f"📎 **{uploaded_file.name}** ({uploaded_file.size / 1024:.1f} KB)")
+            st.markdown('<div class="stat-box">', unsafe_allow_html=True)
+            st.markdown(f'<div class="stat-value">{result["metadata"]["total_pages"]}</div>', unsafe_allow_html=True)
+            st.markdown('<div class="stat-label">총 페이지</div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
         
         with col2:
-            if st.button("🚀 처리 시작", type="primary", use_container_width=True):
-                process_file(uploaded_file, max_pages, use_ocr, use_text_chunking)
-    
-    # 결과가 있으면 다운로드 섹션 표시
-    if st.session_state.get('processed', False) and st.session_state.get('processing_results'):
-        st.markdown("---")
-        st.markdown('<div class="download-section">', unsafe_allow_html=True)
-        st.markdown("### 📥 PDF 처리 종료 ...")
+            st.markdown('<div class="stat-box">', unsafe_allow_html=True)
+            st.markdown(f'<div class="stat-value">{result["metadata"]["total_chunks"]}</div>', unsafe_allow_html=True)
+            st.markdown('<div class="stat-label">총 청크</div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
         
-        results = st.session_state.processing_results
+        with col3:
+            st.markdown('<div class="stat-box">', unsafe_allow_html=True)
+            st.markdown(f'<div class="stat-value">{result["metadata"]["processing_time_seconds"]}s</div>', unsafe_allow_html=True)
+            st.markdown('<div class="stat-label">처리 시간</div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
         
-        col1, col2, col3 = st.columns(3)
+        with col4:
+            avg_time = result["metadata"]["processing_time_seconds"] / result["metadata"]["total_pages"]
+            st.markdown('<div class="stat-box">', unsafe_allow_html=True)
+            st.markdown(f'<div class="stat-value">{avg_time:.1f}s</div>', unsafe_allow_html=True)
+            st.markdown('<div class="stat-label">페이지당 평균</div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+        
+        # 청크 타입별 통계
+        st.subheader("📈 청크 타입별 분포")
+        
+        chunk_types = result['metadata']['chunk_types']
+        
+        cols = st.columns(len(chunk_types))
+        for i, (chunk_type, count) in enumerate(chunk_types.items()):
+            with cols[i]:
+                type_icons = {
+                    'text': '📝',
+                    'table': '📊',
+                    'chart': '📈',
+                    'image': '🖼️'
+                }
+                icon = type_icons.get(chunk_type, '📄')
+                st.metric(f"{icon} {chunk_type.upper()}", count)
+        
+        st.divider()
+        
+        # 다운로드 버튼
+        st.subheader("💾 결과 다운로드")
+        
+        col1, col2 = st.columns(2)
         
         with col1:
             # JSON 다운로드
-            json_str = json.dumps(results, ensure_ascii=False, indent=2)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            json_str = json.dumps(result, ensure_ascii=False, indent=2)
+            json_filename = f"prism_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
             
             st.download_button(
-                label="📄 JSON 다운로드",
+                label="📥 JSON 다운로드",
                 data=json_str,
-                file_name=f"prism_result_{timestamp}.json",
+                file_name=json_filename,
                 mime="application/json",
                 use_container_width=True
             )
         
         with col2:
             # Markdown 다운로드
-            md_content = create_markdown_export(results)
+            md_str = convert_to_markdown(result)
+            md_filename = f"prism_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
             
             st.download_button(
-                label="📝 Markdown 다운로드",
-                data=md_content,
-                file_name=f"prism_result_{timestamp}.md",
+                label="📥 Markdown 다운로드",
+                data=md_str,
+                file_name=md_filename,
                 mime="text/markdown",
                 use_container_width=True
             )
         
-        with col3:
-            # 새로 시작
-            if st.button("🔄 새로 시작", use_container_width=True):
-                st.session_state.processed = False
-                st.session_state.processing_results = None
-                st.rerun()
+        st.divider()
         
-        st.markdown('</div>', unsafe_allow_html=True)
+        # 청크 표시
+        st.subheader("📋 청크 목록")
+        
+        # 필터 옵션
+        filter_col1, filter_col2 = st.columns([1, 3])
+        
+        with filter_col1:
+            filter_type = st.selectbox(
+                "타입 필터",
+                ['전체'] + list(chunk_types.keys())
+            )
+        
+        with filter_col2:
+            search_query = st.text_input(
+                "검색어",
+                placeholder="청크 내용 검색..."
+            )
+        
+        # 청크 필터링
+        filtered_chunks = result['chunks']
+        
+        if filter_type != '전체':
+            filtered_chunks = [c for c in filtered_chunks if c['type'] == filter_type]
+        
+        if search_query:
+            filtered_chunks = [
+                c for c in filtered_chunks 
+                if search_query.lower() in c['content'].lower()
+            ]
+        
+        st.write(f"**표시 중:** {len(filtered_chunks)} / {len(result['chunks'])} 청크")
+        
+        # 청크 표시
+        for chunk in filtered_chunks:
+            display_chunk(chunk)
+
 
 if __name__ == "__main__":
     main()
