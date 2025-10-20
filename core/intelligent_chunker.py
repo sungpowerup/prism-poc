@@ -124,44 +124,42 @@ class IntelligentChunker:
             # 섹션이 없으면 전체를 하나의 섹션으로
             sections = [{'level': 0, 'title': base_section or 'Content', 'content': text}]
         
-        # 2. 섹션별 청킹
+        # 2. 각 섹션을 청크로 분할
         for i, section in enumerate(sections):
-            section_title = section.get('title', f'Section {i+1}')
-            section_content = section.get('content', '')
-            section_level = section.get('level', 0)
+            section_title = section['title']
+            section_content = section['content']
             
-            # 섹션 경로 생성
+            # 섹션 경로 구성
             if base_section:
                 section_path = f"{base_section} > {section_title}"
             else:
                 section_path = section_title
             
-            # 토큰 수 계산
-            token_count = self._estimate_tokens(section_content)
+            # 섹션이 너무 크면 분할
+            section_tokens = self._estimate_tokens(section_content)
             
-            # 크기 확인
-            if token_count <= self.max_chunk_size:
-                # 적절한 크기: 하나의 청크로
-                chunk_id = f"chunk_{page_num:03d}_{len(chunks)+1:03d}"
+            if section_tokens <= self.max_chunk_size:
+                # 한 청크로 처리
+                chunk_id = f"chunk_{page_num:03d}_{len(chunks) + 1:03d}"
                 chunks.append(Chunk(
                     chunk_id=chunk_id,
-                    content=section_content.strip(),
+                    content=section_content,
                     type='text',
                     page_num=page_num,
                     section_path=section_path,
                     metadata=metadata or {},
-                    token_count=token_count
+                    token_count=section_tokens
                 ))
             else:
-                # 너무 큼: 문단 단위로 분할
-                sub_chunks = self._split_by_paragraphs(
+                # 문단 단위로 분할
+                section_chunks = self._split_by_paragraphs(
                     section_content,
                     page_num,
                     section_path,
                     metadata,
                     start_index=len(chunks)
                 )
-                chunks.extend(sub_chunks)
+                chunks.extend(section_chunks)
         
         return chunks
     
@@ -172,7 +170,7 @@ class IntelligentChunker:
         base_section: str,
         metadata: Optional[Dict]
     ) -> List[Chunk]:
-        """표 컨텐츠 청킹 (보통 하나의 청크로)"""
+        """표 청킹 (보통 하나의 청크로)"""
         
         chunk_id = f"chunk_{page_num:03d}_table_001"
         token_count = self._estimate_tokens(table_content)
@@ -198,7 +196,7 @@ class IntelligentChunker:
         base_section: str,
         metadata: Optional[Dict]
     ) -> List[Chunk]:
-        """차트 컨텐츠 청킹 (보통 하나의 청크로)"""
+        """차트 청킹 (보통 하나의 청크로)"""
         
         chunk_id = f"chunk_{page_num:03d}_chart_001"
         token_count = self._estimate_tokens(chart_content)
@@ -253,15 +251,15 @@ class IntelligentChunker:
         # 제목 패턴 (다양한 형식 지원)
         patterns = [
             # "## 제목" 형식
-            r'^(#{1,6})\s+(.+),
+            r'^(#{1,6})\s+(.+)',
             # "1. 제목", "1.1 제목" 형식
-            r'^(\d+\.(?:\d+\.)*)\s+(.+),
+            r'^(\d+\.(?:\d+\.)*)\s+(.+)',
             # "【제목】" 형식
-            r'^【(.+)】,
+            r'^【(.+)】',
             # "☉ 제목" 형식
-            r'^[☉◆●■▶]\s+(.+),
+            r'^[☉◆●■▶]\s+(.+)',
             # 대문자로만 된 제목
-            r'^([A-Z][A-Z\s]{2,})
+            r'^([A-Z][A-Z\s]{2,})'
         ]
         
         lines = text.split('\n')

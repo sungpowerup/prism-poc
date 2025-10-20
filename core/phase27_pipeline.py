@@ -34,12 +34,14 @@ class Phase27Pipeline:
     
     def __init__(
         self,
+        vlm_provider: str = 'claude',
         min_chunk_size: int = 100,
         max_chunk_size: int = 500,
         overlap_size: int = 50
     ):
         """
         Args:
+            vlm_provider: VLM 프로바이더 ('claude', 'azure_openai', 'ollama')
             min_chunk_size: 최소 청크 크기 (토큰)
             max_chunk_size: 최대 청크 크기 (토큰)
             overlap_size: 청크 간 오버랩 (토큰)
@@ -48,11 +50,14 @@ class Phase27Pipeline:
         print("PRISM Phase 2.7 Pipeline Initialization")
         print("="*60 + "\n")
         
+        self.vlm_provider = vlm_provider
+        print(f"🤖 VLM Provider: {vlm_provider.upper()}")
+        
         # Stage 1: Layout Detection
-        self.layout_detector = LayoutDetector()
+        self.layout_detector = LayoutDetector(vlm_provider=vlm_provider)
         
         # Stage 2: Hybrid Extraction
-        self.extractor = HybridExtractor()
+        self.extractor = HybridExtractor(vlm_provider=vlm_provider)
         
         # Stage 3: Intelligent Chunking
         self.chunker = IntelligentChunker(
@@ -62,6 +67,23 @@ class Phase27Pipeline:
         )
         
         print("\n✅ Pipeline ready!\n")
+    
+    def process(
+        self,
+        pdf_path: str,
+        max_pages: Optional[int] = None
+    ) -> Dict:
+        """
+        PDF 문서 전체 처리 (메인 엔트리포인트)
+        
+        Args:
+            pdf_path: PDF 파일 경로
+            max_pages: 최대 처리 페이지 수
+            
+        Returns:
+            처리 결과 딕셔너리
+        """
+        return self.process_pdf(pdf_path, max_pages)
     
     def process_pdf(
         self,
@@ -81,7 +103,7 @@ class Phase27Pipeline:
         start_time = time.time()
         
         print(f"📄 Processing PDF: {pdf_path}")
-        print(f"⏱️  Start time: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        print(f"⏱️  Start time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
         
         # PDF 열기
         doc = fitz.open(pdf_path)
@@ -92,42 +114,49 @@ class Phase27Pipeline:
         
         print(f"📖 Total pages: {total_pages}\n")
         
-        # 페이지별 처리
+        # 각 페이지 처리
         all_chunks = []
         
         for page_num in range(total_pages):
-            print(f"{'='*60}")
+            print("="*60)
             print(f"📄 Processing Page {page_num + 1}/{total_pages}")
-            print(f"{'='*60}\n")
+            print("="*60 + "\n")
             
+            # 페이지별 청크 생성
             page_chunks = self._process_page(doc, page_num)
             all_chunks.extend(page_chunks)
             
             print(f"\n✅ Page {page_num + 1} completed: {len(page_chunks)} chunks generated\n")
         
+        # 문서 닫기
         doc.close()
         
-        # 결과 통계
-        elapsed_time = time.time() - start_time
+        # 처리 완료
+        end_time = time.time()
+        processing_time = end_time - start_time
         
+        # 메타데이터
+        metadata = {
+            'processed_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
+            'total_pages': total_pages,
+            'total_chunks': len(all_chunks),
+            'processing_time_seconds': round(processing_time, 2),
+            'chunk_types': self._count_chunk_types(all_chunks),
+            'vlm_provider': self.vlm_provider
+        }
+        
+        # 결과 딕셔너리
         result = {
-            'metadata': {
-                'processed_at': time.strftime('%Y-%m-%dT%H:%M:%S'),
-                'total_pages': total_pages,
-                'total_chunks': len(all_chunks),
-                'processing_time_seconds': round(elapsed_time, 2),
-                'chunk_types': self._count_chunk_types(all_chunks)
-            },
+            'metadata': metadata,
             'chunks': [chunk.to_dict() for chunk in all_chunks]
         }
         
-        print(f"\n{'='*60}")
-        print(f"🎉 Processing Complete!")
-        print(f"{'='*60}")
-        print(f"⏱️  Total time: {elapsed_time:.1f}s")
+        print("="*60)
+        print("🎉 Processing Complete!")
+        print("="*60)
+        print(f"⏱️  Total time: {processing_time:.1f}s")
         print(f"📊 Total chunks: {len(all_chunks)}")
-        print(f"📈 Chunk types: {result['metadata']['chunk_types']}")
-        print()
+        print(f"📈 Chunk types: {metadata['chunk_types']}\n")
         
         return result
     
@@ -136,62 +165,56 @@ class Phase27Pipeline:
         단일 페이지 처리
         
         Args:
-            doc: PDF 문서 객체
+            doc: PyMuPDF 문서 객체
             page_num: 페이지 번호 (0-based)
             
         Returns:
-            Chunk 리스트
+            청크 리스트
         """
         page = doc[page_num]
         
-        # 1. 페이지를 이미지로 변환
+        # Stage 1: Page → Image
         print("🖼️  Step 1: Converting page to image...")
-        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x resolution
+        pix = page.get_pixmap(dpi=150)
         img_data = pix.tobytes("png")
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        print(f"   Image size: {img.width}x{img.height}")
         
-        from io import BytesIO
-        page_image = Image.open(BytesIO(img_data))
-        print(f"   Image size: {page_image.size[0]}x{page_image.size[1]}\n")
-        
-        # 2. Stage 1: Layout Detection
+        # Stage 2: Layout Detection
         print("🔍 Step 2: Detecting layout regions...")
-        regions = self.layout_detector.detect(page_image)
+        regions = self.layout_detector.detect_regions(img)
+        print(f"   Found {len(regions)} regions")
         
-        if not regions:
-            print("   ⚠️  No regions detected, treating whole page as text\n")
-            # 전체 페이지를 하나의 텍스트 영역으로
-            regions = [Region(
-                type='text',
-                bbox=(0, 0, page_image.size[0], page_image.size[1]),
-                confidence=0.5,
-                description='Full page'
-            )]
-        
-        print(f"   Found {len(regions)} regions\n")
-        
-        # 3. Stage 2: Hybrid Extraction
+        # Stage 3: Hybrid Extraction
         print("📝 Step 3: Extracting content from regions...")
         extracted_contents = []
         
         for i, region in enumerate(regions, 1):
             print(f"   Region {i}/{len(regions)}: {region.type} - {region.description}")
             
-            # 영역 이미지 crop
-            region_image = self.layout_detector.crop_region(page_image, region)
+            # 영역 이미지 추출
+            region_img = img.crop((
+                region.bbox['x'],
+                region.bbox['y'],
+                region.bbox['x'] + region.bbox['width'],
+                region.bbox['y'] + region.bbox['height']
+            ))
             
-            # 하이브리드 추출
-            content = self.extractor.extract(
-                region_image=region_image,
+            # 컨텐츠 추출
+            content = self.extractor.extract_content(
+                image=region_img,
                 region_type=region.type,
-                description=region.description
+                page_text=page.get_text()
             )
             
             extracted_contents.append(content)
-            print(f"      ✓ Extracted {len(content.content)} characters (confidence: {content.confidence:.2f})")
+            
+            # 추출 결과 출력
+            char_count = len(content.content)
+            confidence = content.metadata.get('confidence', 0)
+            print(f"      ✓ Extracted {char_count} characters (confidence: {confidence:.2f})")
         
-        print()
-        
-        # 4. Stage 3: Intelligent Chunking
+        # Stage 4: Intelligent Chunking
         print("✂️  Step 4: Creating intelligent chunks...")
         all_chunks = []
         
@@ -228,7 +251,11 @@ if __name__ == "__main__":
     print("PRISM Phase 2.7 - Pipeline Test")
     print("="*60 + "\n")
     
-    pipeline = Phase27Pipeline()
+    # VLM Provider 선택
+    import sys
+    vlm_provider = sys.argv[1] if len(sys.argv) > 1 else 'claude'
+    
+    pipeline = Phase27Pipeline(vlm_provider=vlm_provider)
     
     # 테스트 PDF 경로 확인
     test_pdf = Path("input/test_document.pdf")
@@ -243,6 +270,7 @@ if __name__ == "__main__":
         print(f"   Chunks: {result['metadata']['total_chunks']}")
         print(f"   Types: {result['metadata']['chunk_types']}")
         print(f"   Time: {result['metadata']['processing_time_seconds']}s")
+        print(f"   Provider: {result['metadata']['vlm_provider']}")
     else:
         print(f"⚠️  Test PDF not found: {test_pdf}")
         print(f"   Please place a PDF file at: {test_pdf.absolute()}")
