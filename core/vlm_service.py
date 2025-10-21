@@ -1,181 +1,157 @@
 """
 core/vlm_service.py
-VLM 서비스 (UTF-8 인코딩 완전 수정)
+PRISM Phase 3.0 - VLM API 통합 서비스 (수정판)
 
-핵심 수정:
-1. Azure OpenAI 응답 강제 UTF-8 인코딩
-2. 프롬프트에 "한국어로 응답" 명시
-3. JSON 저장 시 ensure_ascii=False
+Azure OpenAI / Anthropic Claude / Ollama 지원
 """
 
 import os
+import base64
 import time
-from typing import Dict, List
-from dotenv import load_dotenv
 import json
+from typing import Optional, Dict, Any, Union
+import logging
+import cv2
+import numpy as np
 
-# 프롬프트 임포트
-from prompts.chart_prompt import get_chart_prompt
-from prompts.table_prompt import get_table_prompt
-from prompts.diagram_prompt import get_diagram_prompt
-
-load_dotenv()
+logger = logging.getLogger(__name__)
 
 
 class VLMService:
-    """
-    멀티 VLM 서비스
+    """VLM API 서비스 (멀티 프로바이더)"""
     
-    지원:
-    - azure_openai: Azure OpenAI GPT-4V
-    - claude: Anthropic Claude 3.5
-    - local_sllm: Ollama (LLaVA)
-    """
-    
-    def __init__(self, provider: str = 'azure_openai'):
+    def __init__(self, provider='azure_openai'):
+        """
+        Args:
+            provider: 'azure_openai', 'claude', 'ollama'
+        """
         self.provider = provider
         
         if provider == 'azure_openai':
-            from openai import AzureOpenAI
-            self.client = AzureOpenAI(
-                api_key=os.getenv('AZURE_OPENAI_API_KEY'),
-                api_version=os.getenv('AZURE_OPENAI_API_VERSION', '2024-02-15-preview'),
-                azure_endpoint=os.getenv('AZURE_OPENAI_ENDPOINT')
-            )
-            self.deployment = os.getenv('AZURE_OPENAI_DEPLOYMENT', 'gpt-4-vision')
-        
+            self._init_azure_openai()
         elif provider == 'claude':
-            from anthropic import Anthropic
-            self.client = Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
-        
-        elif provider == 'local_sllm':
-            import requests
-            self.base_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
-            self.model = os.getenv('OLLAMA_MODEL', 'llava:13b')
-        
+            self._init_claude()
+        elif provider == 'ollama':
+            self._init_ollama()
         else:
-            raise ValueError(f"지원하지 않는 provider: {provider}")
+            raise ValueError(f"지원하지 않는 프로바이더: {provider}")
+        
+        logger.info(f"VLM Service 초기화: {provider}")
     
-    def generate_caption(
-        self, 
-        image_data: str, 
-        element_type: str,
-        subtypes: List[str] = None
-    ) -> Dict:
+    def _init_azure_openai(self):
+        """Azure OpenAI 초기화"""
+        from openai import AzureOpenAI
+        
+        self.client = AzureOpenAI(
+            api_key=os.getenv('AZURE_OPENAI_API_KEY'),
+            api_version=os.getenv('AZURE_OPENAI_API_VERSION', '2024-02-15-preview'),
+            azure_endpoint=os.getenv('AZURE_OPENAI_ENDPOINT')
+        )
+        self.deployment = os.getenv('AZURE_OPENAI_DEPLOYMENT', 'gpt-4o')
+    
+    def _init_claude(self):
+        """Anthropic Claude 초기화"""
+        from anthropic import Anthropic
+        
+        self.client = Anthropic(
+            api_key=os.getenv('ANTHROPIC_API_KEY')
+        )
+        self.model = "claude-sonnet-4-20250514"
+    
+    def _init_ollama(self):
+        """Ollama 초기화"""
+        import requests
+        
+        self.base_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
+        self.model = os.getenv('OLLAMA_MODEL', 'llava:7b')
+    
+    def analyze_image(
+        self,
+        image: Union[np.ndarray, bytes],
+        prompt: str,
+        max_tokens: int = 2000
+    ) -> Union[str, Dict]:
         """
-        이미지 캡션 생성
+        이미지 분석 (통합 인터페이스)
         
         Args:
-            image_data: Base64 인코딩된 이미지
-            element_type: 'chart', 'table', 'diagram', 'text', 'image'
-            subtypes: ['pie', 'bar'] 등
-        
+            image: numpy array 또는 bytes
+            prompt: 분석 프롬프트
+            max_tokens: 최대 토큰 수
+            
         Returns:
-            {
-                'caption': str,
-                'tokens_used': int,
-                'processing_time_sec': float
-            }
+            str 또는 dict (JSON인 경우)
         """
         start_time = time.time()
         
-        # 프롬프트 선택
-        prompt = self._select_prompt(element_type, subtypes)
-        
-        # ✅ 수정: 프롬프트에 한국어 응답 강제 추가
-        prompt = f"{prompt}\n\n**중요: 반드시 한국어로 응답하세요. 모든 텍스트는 UTF-8 인코딩으로 작성하세요.**"
-        
-        # VLM 호출
-        if self.provider == 'azure_openai':
-            result = self._call_azure_openai(image_data, prompt)
-        elif self.provider == 'claude':
-            result = self._call_claude(image_data, prompt)
-        elif self.provider == 'local_sllm':
-            result = self._call_ollama(image_data, prompt)
+        # numpy array → bytes 변환
+        if isinstance(image, np.ndarray):
+            image_bytes = self._numpy_to_bytes(image)
         else:
-            raise ValueError(f"Unknown provider: {self.provider}")
+            image_bytes = image
         
-        # ✅ 수정: UTF-8 인코딩 강제 보장
-        caption = self._force_utf8(result['caption'])
+        # Base64 인코딩
+        image_b64 = base64.b64encode(image_bytes).decode('utf-8')
         
-        processing_time = time.time() - start_time
-        
-        return {
-            'caption': caption,
-            'tokens_used': result.get('tokens_used', 0),
-            'processing_time_sec': processing_time
-        }
+        # 프로바이더별 호출
+        try:
+            if self.provider == 'azure_openai':
+                result = self._call_azure_openai(image_b64, prompt, max_tokens)
+            elif self.provider == 'claude':
+                result = self._call_claude(image_b64, prompt, max_tokens)
+            elif self.provider == 'ollama':
+                result = self._call_ollama(image_b64, prompt, max_tokens)
+            
+            elapsed = time.time() - start_time
+            logger.info(f"   VLM 분석 완료: {elapsed:.2f}초")
+            
+            # JSON 파싱 시도
+            if isinstance(result, str) and (result.strip().startswith('{') or 'json' in prompt.lower()):
+                try:
+                    # 마크다운 코드 블록 제거
+                    clean_result = result.replace('```json', '').replace('```', '').strip()
+                    return json.loads(clean_result)
+                except json.JSONDecodeError:
+                    pass
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"   VLM 분석 실패: {e}")
+            raise
     
-    def _select_prompt(self, element_type: str, subtypes: List[str]) -> str:
-        """
-        Element 타입과 세부 타입에 맞는 프롬프트 선택
-        """
-        if element_type == 'chart':
-            return get_chart_prompt(subtypes)
-        elif element_type == 'table':
-            return get_table_prompt()
-        elif element_type == 'diagram':
-            return get_diagram_prompt(subtypes)
-        else:
-            # 기본 프롬프트
-            return "이 이미지를 자세히 설명하세요."
-    
-    def _call_azure_openai(self, image_data: str, prompt: str) -> Dict:
-        """
-        Azure OpenAI 호출 (UTF-8 강제)
-        """
-        # data:image/png;base64, 제거
-        if ',' in image_data:
-            image_data = image_data.split(',')[1]
-        
+    def _call_azure_openai(self, image_b64: str, prompt: str, max_tokens: int) -> str:
+        """Azure OpenAI 호출"""
         response = self.client.chat.completions.create(
             model=self.deployment,
             messages=[
                 {
-                    "role": "system",
-                    "content": "You are a helpful assistant that analyzes images in Korean. Always respond in UTF-8 encoded Korean."
-                },
-                {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": prompt},
+                        {
+                            "type": "text",
+                            "text": prompt
+                        },
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/png;base64,{image_data}"
+                                "url": f"data:image/png;base64,{image_b64}"
                             }
                         }
                     ]
                 }
             ],
-            max_tokens=2000,
-            temperature=0.3
+            max_tokens=max_tokens,
+            temperature=0.0
         )
         
-        # ✅ 수정: 응답 텍스트 UTF-8 강제 변환
-        raw_caption = response.choices[0].message.content
-        
-        # 1차: 바이트 → UTF-8
-        caption_bytes = raw_caption.encode('utf-8', errors='ignore')
-        caption = caption_bytes.decode('utf-8', errors='ignore')
-        
-        tokens_used = response.usage.total_tokens
-        
-        return {
-            'caption': caption,
-            'tokens_used': tokens_used
-        }
+        return response.choices[0].message.content
     
-    def _call_claude(self, image_data: str, prompt: str) -> Dict:
-        """
-        Claude 호출
-        """
-        if ',' in image_data:
-            image_data = image_data.split(',')[1]
-        
+    def _call_claude(self, image_b64: str, prompt: str, max_tokens: int) -> str:
+        """Anthropic Claude 호출"""
         message = self.client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=2000,
+            model=self.model,
+            max_tokens=max_tokens,
             messages=[
                 {
                     "role": "user",
@@ -185,7 +161,7 @@ class VLMService:
                             "source": {
                                 "type": "base64",
                                 "media_type": "image/png",
-                                "data": image_data
+                                "data": image_b64
                             }
                         },
                         {
@@ -194,106 +170,59 @@ class VLMService:
                         }
                     ]
                 }
-            ]
+            ],
+            temperature=0.0
         )
         
-        caption = message.content[0].text
-        tokens_used = message.usage.input_tokens + message.usage.output_tokens
-        
-        return {
-            'caption': caption,
-            'tokens_used': tokens_used
-        }
+        return message.content[0].text
     
-    def _call_ollama(self, image_data: str, prompt: str) -> Dict:
-        """
-        Ollama 호출
-        """
+    def _call_ollama(self, image_b64: str, prompt: str, max_tokens: int) -> str:
+        """Ollama 호출"""
         import requests
-        
-        if ',' in image_data:
-            image_data = image_data.split(',')[1]
         
         response = requests.post(
             f"{self.base_url}/api/generate",
             json={
                 "model": self.model,
                 "prompt": prompt,
-                "images": [image_data],
-                "stream": False
+                "images": [image_b64],
+                "stream": False,
+                "options": {
+                    "num_predict": max_tokens,
+                    "temperature": 0.0
+                }
             },
             timeout=120
         )
         
         response.raise_for_status()
-        result = response.json()
-        
-        return {
-            'caption': result['response'],
-            'tokens_used': 0  # Ollama는 토큰 미제공
-        }
+        return response.json()['response']
     
-    def _force_utf8(self, text: str) -> str:
-        """
-        UTF-8 인코딩 강제 보장
+    def _numpy_to_bytes(self, image: np.ndarray) -> bytes:
+        """numpy array → PNG bytes"""
+        # BGR → RGB 변환 (OpenCV 사용하는 경우)
+        if len(image.shape) == 3 and image.shape[2] == 3:
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         
-        Steps:
-        1. bytes → UTF-8 디코딩
-        2. 깨진 문자 제거
-        3. 재검증
-        """
-        try:
-            # 1차: 바이트 변환
-            text_bytes = text.encode('utf-8', errors='ignore')
-            clean_text = text_bytes.decode('utf-8', errors='ignore')
-            
-            # 2차: 깨진 패턴 확인
-            if self._has_encoding_issue(clean_text):
-                # Latin1로 재인코딩 시도
-                text_bytes = clean_text.encode('latin1', errors='ignore')
-                clean_text = text_bytes.decode('utf-8', errors='ignore')
-            
-            return clean_text
+        # PNG 인코딩
+        success, encoded = cv2.imencode('.png', image)
         
-        except (UnicodeDecodeError, UnicodeEncodeError) as e:
-            print(f"⚠️  인코딩 변환 실패: {e}")
-            return text
-    
-    def _has_encoding_issue(self, text: str) -> bool:
-        """
-        인코딩 문제 감지
+        if not success:
+            raise ValueError("이미지 인코딩 실패")
         
-        특징:
-        - 한글이 깨지면 ì, ë, í 등의 특정 패턴 나타남
-        """
-        bad_patterns = ['ì', 'ë', 'í', 'ê', 'î', 'ï', 'ð', 'ñ', 'Â']
-        
-        # 패턴이 여러 개 나타나면 인코딩 문제
-        count = sum(1 for p in bad_patterns if p in text)
-        
-        return count >= 3
+        return encoded.tobytes()
 
 
-# 테스트
+# 테스트 코드
 if __name__ == '__main__':
-    import base64
+    # 간단한 테스트
+    vlm = VLMService(provider='azure_openai')
     
-    # 테스트용 이미지 (1x1 투명 PNG)
-    test_image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    # 테스트 이미지 생성
+    test_image = np.zeros((100, 100, 3), dtype=np.uint8)
+    cv2.putText(test_image, "TEST", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
     
-    service = VLMService(provider='azure_openai')
-    result = service.generate_caption(
-        image_data=test_image,
-        element_type='chart',
-        subtypes=['pie', 'bar']
-    )
+    # 테스트 호출
+    result = vlm.analyze_image(test_image, "이 이미지에 무엇이 있나요?")
     
-    print(f"Caption: {result['caption']}")
-    print(f"Tokens: {result['tokens_used']}")
-    print(f"Time: {result['processing_time_sec']:.2f}s")
-    
-    # 한글 테스트
-    if 'ì' in result['caption'] or 'ë' in result['caption']:
-        print("❌ 한글 인코딩 실패")
-    else:
-        print("✅ 한글 인코딩 성공")
+    print(f"결과: {result}")
