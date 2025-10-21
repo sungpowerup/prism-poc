@@ -13,6 +13,10 @@ from typing import Optional, Dict, Any, Union
 import logging
 import cv2
 import numpy as np
+from dotenv import load_dotenv
+
+# 환경 변수 로드
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 

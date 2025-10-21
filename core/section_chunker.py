@@ -184,34 +184,23 @@ class SectionAwareChunker:
         if len(text) <= self.max_size:
             return [text]
         
-        # 문장 분할 (한국어 문장 부호)
-        sentences = re.split(r'([.!?]\s+|\.(?=\s+[A-Z])|(?<=[가-힣])\.\s+)', text)
+        # 간단한 문장 분할 (마침표, 느낌표, 물음표 기준)
+        sentence_pattern = r'[.!?]\s+'
+        sentences = re.split(sentence_pattern, text)
         
-        # 분할 결과 재조합 (구두점 포함)
-        combined_sentences = []
-        current = ""
-        
-        for part in sentences:
-            if re.match(r'[.!?]\s*
-    , part):
-                # 구두점만 있으면 이전 문장에 붙임
-                current += part
-                if current.strip():
-                    combined_sentences.append(current.strip())
-                current = ""
-            else:
-                current += part
-        
-        if current.strip():
-            combined_sentences.append(current.strip())
+        # 빈 문장 제거
+        sentences = [s.strip() for s in sentences if s.strip()]
         
         # 청크 생성
         chunks = []
         current_chunk = ""
         
-        for sentence in combined_sentences:
+        for sentence in sentences:
             # 현재 청크에 추가했을 때 크기 확인
-            potential_chunk = current_chunk + " " + sentence if current_chunk else sentence
+            if current_chunk:
+                potential_chunk = current_chunk + ". " + sentence
+            else:
+                potential_chunk = sentence
             
             if len(potential_chunk) <= self.max_size:
                 current_chunk = potential_chunk
@@ -233,11 +222,11 @@ class SectionAwareChunker:
         if current_chunk:
             # 너무 작으면 이전 청크에 병합
             if len(current_chunk) < self.min_size and chunks:
-                chunks[-1] += " " + current_chunk
+                chunks[-1] = chunks[-1] + ". " + current_chunk
             else:
                 chunks.append(current_chunk)
         
-        return chunks
+        return chunks if chunks else [text]
 
 
 # 테스트 코드

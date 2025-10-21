@@ -10,6 +10,16 @@ from pathlib import Path
 import json
 import time
 import logging
+from dotenv import load_dotenv
+import os
+
+# 환경 변수 로드 (최우선)
+load_dotenv()
+
+# 환경 변수 확인
+if not os.getenv('AZURE_OPENAI_API_KEY'):
+    st.error("⚠️ .env 파일에 AZURE_OPENAI_API_KEY가 설정되지 않았습니다!")
+    st.stop()
 
 # 로깅 설정
 logging.basicConfig(

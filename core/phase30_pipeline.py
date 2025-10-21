@@ -16,6 +16,11 @@ from typing import List, Dict, Any
 import logging
 import cv2
 import numpy as np
+from dotenv import load_dotenv
+from PIL import Image
+
+# 환경 변수 로드
+load_dotenv()
 
 from .pdf_processor import PDFProcessor
 from .layout_detector import LayoutDetector, Region
@@ -98,12 +103,41 @@ class Phase30Pipeline:
         
         # Stage 1: PDF → Images
         logger.info("\n--- Stage 1: PDF → Page Images ---")
-        page_images = self.pdf_processor.pdf_to_images(pdf_path)
+        page_images_raw = self.pdf_processor.pdf_to_images(pdf_path)
         
         if max_pages:
-            page_images = page_images[:max_pages]
+            page_images_raw = page_images_raw[:max_pages]
         
-        logger.info(f"✅ {len(page_images)}개 페이지 변환 완료\n")
+        # PIL Image → numpy array 변환
+        page_images = []
+        for i, img in enumerate(page_images_raw, 1):
+            if isinstance(img, str):
+                # Base64 문자열인 경우
+                import base64
+                from io import BytesIO
+                
+                # data URL 제거
+                if img.startswith('data:image'):
+                    img = img.split(',')[1]
+                
+                img_bytes = base64.b64decode(img)
+                pil_img = Image.open(BytesIO(img_bytes))
+                np_img = np.array(pil_img)
+            elif hasattr(img, 'convert'):
+                # PIL Image인 경우
+                np_img = np.array(img.convert('RGB'))
+            else:
+                # 이미 numpy array인 경우
+                np_img = img
+            
+            # BGR → RGB 변환 확인 (OpenCV는 BGR 사용)
+            if len(np_img.shape) == 3 and np_img.shape[2] == 3:
+                # RGB 그대로 사용 (PIL은 RGB)
+                page_images.append(np_img)
+            else:
+                page_images.append(np_img)
+        
+        logger.info(f"✅ {len(page_images)}개 페이지 변환 완료 (numpy array)\n")
         
         all_regions = []
         all_extractions = []
