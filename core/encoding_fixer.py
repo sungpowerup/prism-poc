@@ -326,9 +326,9 @@ if __name__ == '__main__':
     
     # 테스트 케이스
     broken_texts = [
-        "ì´ í'œëŠ" 2023ë…„ ì¡°ì‚¬ì— ì°¸ì—¬í•œ ì „ì²´ ì'ë‹µìž",
-        "í"„ë¡œìŠ¤í¬ì¸  íŒ¬ì€ 25,000ëª…",
-        "ìˆ˜ë„ê¶Œì´ 52.5%ë¡œ"
+        "i\xc2\xb4 \xed\x91\x9c\xeb\x8a\x94 2023\xeb\x85\x84",  # "이 표는 2023년"
+        "\xed\x94\x84\xeb\xa1\x9c\xec\x8a\xa4\xed\x8f\xac\xec\x9d\xb8",  # "프로스포츠"
+        "\xec\x88\x98\xeb\x8f\x84\xea\xb6\x8c\xec\x9d\xb4 52.5%"  # "수도권이 52.5%"
     ]
     
     print("=== EncodingFixer 테스트 ===\n")
