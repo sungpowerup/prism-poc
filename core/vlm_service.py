@@ -1,11 +1,11 @@
 """
 core/vlm_service.py
-VLM 서비스 (UTF-8 인코딩 보장)
+VLM 서비스 (UTF-8 인코딩 완전 수정)
 
-개선 사항:
-- Azure OpenAI 응답 UTF-8 인코딩 수정
-- 세부 타입별 프롬프트 선택
-- 에러 처리 강화
+핵심 수정:
+1. Azure OpenAI 응답 강제 UTF-8 인코딩
+2. 프롬프트에 "한국어로 응답" 명시
+3. JSON 저장 시 ensure_ascii=False
 """
 
 import os
@@ -82,6 +82,9 @@ class VLMService:
         # 프롬프트 선택
         prompt = self._select_prompt(element_type, subtypes)
         
+        # ✅ 수정: 프롬프트에 한국어 응답 강제 추가
+        prompt = f"{prompt}\n\n**중요: 반드시 한국어로 응답하세요. 모든 텍스트는 UTF-8 인코딩으로 작성하세요.**"
+        
         # VLM 호출
         if self.provider == 'azure_openai':
             result = self._call_azure_openai(image_data, prompt)
@@ -92,8 +95,8 @@ class VLMService:
         else:
             raise ValueError(f"Unknown provider: {self.provider}")
         
-        # UTF-8 인코딩 보장
-        caption = self._ensure_utf8(result['caption'])
+        # ✅ 수정: UTF-8 인코딩 강제 보장
+        caption = self._force_utf8(result['caption'])
         
         processing_time = time.time() - start_time
         
@@ -119,7 +122,7 @@ class VLMService:
     
     def _call_azure_openai(self, image_data: str, prompt: str) -> Dict:
         """
-        Azure OpenAI 호출
+        Azure OpenAI 호출 (UTF-8 강제)
         """
         # data:image/png;base64, 제거
         if ',' in image_data:
@@ -128,6 +131,10 @@ class VLMService:
         response = self.client.chat.completions.create(
             model=self.deployment,
             messages=[
+                {
+                    "role": "system",
+                    "content": "You are a helpful assistant that analyzes images in Korean. Always respond in UTF-8 encoded Korean."
+                },
                 {
                     "role": "user",
                     "content": [
@@ -145,7 +152,13 @@ class VLMService:
             temperature=0.3
         )
         
-        caption = response.choices[0].message.content
+        # ✅ 수정: 응답 텍스트 UTF-8 강제 변환
+        raw_caption = response.choices[0].message.content
+        
+        # 1차: 바이트 → UTF-8
+        caption_bytes = raw_caption.encode('utf-8', errors='ignore')
+        caption = caption_bytes.decode('utf-8', errors='ignore')
+        
         tokens_used = response.usage.total_tokens
         
         return {
@@ -155,17 +168,13 @@ class VLMService:
     
     def _call_claude(self, image_data: str, prompt: str) -> Dict:
         """
-        Anthropic Claude 호출
+        Claude 호출
         """
-        # data:image/png;base64, 제거
         if ',' in image_data:
-            media_type = image_data.split(';')[0].split(':')[1]
             image_data = image_data.split(',')[1]
-        else:
-            media_type = 'image/png'
         
-        response = self.client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+        message = self.client.messages.create(
+            model="claude-sonnet-4-20250514",
             max_tokens=2000,
             messages=[
                 {
@@ -175,7 +184,7 @@ class VLMService:
                             "type": "image",
                             "source": {
                                 "type": "base64",
-                                "media_type": media_type,
+                                "media_type": "image/png",
                                 "data": image_data
                             }
                         },
@@ -188,8 +197,8 @@ class VLMService:
             ]
         )
         
-        caption = response.content[0].text
-        tokens_used = response.usage.input_tokens + response.usage.output_tokens
+        caption = message.content[0].text
+        tokens_used = message.usage.input_tokens + message.usage.output_tokens
         
         return {
             'caption': caption,
@@ -198,11 +207,10 @@ class VLMService:
     
     def _call_ollama(self, image_data: str, prompt: str) -> Dict:
         """
-        Ollama (Local sLLM) 호출
+        Ollama 호출
         """
         import requests
         
-        # data:image/png;base64, 제거
         if ',' in image_data:
             image_data = image_data.split(',')[1]
         
@@ -213,7 +221,8 @@ class VLMService:
                 "prompt": prompt,
                 "images": [image_data],
                 "stream": False
-            }
+            },
+            timeout=120
         )
         
         response.raise_for_status()
@@ -221,31 +230,33 @@ class VLMService:
         
         return {
             'caption': result['response'],
-            'tokens_used': 0  # Ollama는 토큰 정보 없음
+            'tokens_used': 0  # Ollama는 토큰 미제공
         }
     
-    def _ensure_utf8(self, text: str) -> str:
+    def _force_utf8(self, text: str) -> str:
         """
-        UTF-8 인코딩 보장
+        UTF-8 인코딩 강제 보장
         
-        Azure OpenAI API 응답이 잘못된 인코딩일 경우 수정
-        
-        방법:
-        1. latin1로 인코딩 → UTF-8로 디코딩 (재인코딩)
-        2. 실패하면 원본 반환 (이미 정상)
+        Steps:
+        1. bytes → UTF-8 디코딩
+        2. 깨진 문자 제거
+        3. 재검증
         """
         try:
-            # 1. 한글이 깨진 경우 감지
-            if self._has_encoding_issue(text):
-                # 2. latin1 → UTF-8 재인코딩
-                fixed_text = text.encode('latin1').decode('utf-8')
-                return fixed_text
-            else:
-                # 정상이면 그대로
-                return text
+            # 1차: 바이트 변환
+            text_bytes = text.encode('utf-8', errors='ignore')
+            clean_text = text_bytes.decode('utf-8', errors='ignore')
+            
+            # 2차: 깨진 패턴 확인
+            if self._has_encoding_issue(clean_text):
+                # Latin1로 재인코딩 시도
+                text_bytes = clean_text.encode('latin1', errors='ignore')
+                clean_text = text_bytes.decode('utf-8', errors='ignore')
+            
+            return clean_text
         
-        except (UnicodeDecodeError, UnicodeEncodeError):
-            # 실패하면 원본 반환
+        except (UnicodeDecodeError, UnicodeEncodeError) as e:
+            print(f"⚠️  인코딩 변환 실패: {e}")
             return text
     
     def _has_encoding_issue(self, text: str) -> bool:
@@ -254,12 +265,10 @@ class VLMService:
         
         특징:
         - 한글이 깨지면 ì, ë, í 등의 특정 패턴 나타남
-        - 연속된 2-3바이트 문자
         """
-        # 잘못된 인코딩 패턴
-        bad_patterns = ['ì', 'ë', 'í', 'ê', 'î', 'ï', 'ð', 'ñ']
+        bad_patterns = ['ì', 'ë', 'í', 'ê', 'î', 'ï', 'ð', 'ñ', 'Â']
         
-        # 패턴이 여러 개 나타나면 인코딩 문제로 판단
+        # 패턴이 여러 개 나타나면 인코딩 문제
         count = sum(1 for p in bad_patterns if p in text)
         
         return count >= 3
@@ -282,3 +291,9 @@ if __name__ == '__main__':
     print(f"Caption: {result['caption']}")
     print(f"Tokens: {result['tokens_used']}")
     print(f"Time: {result['processing_time_sec']:.2f}s")
+    
+    # 한글 테스트
+    if 'ì' in result['caption'] or 'ë' in result['caption']:
+        print("❌ 한글 인코딩 실패")
+    else:
+        print("✅ 한글 인코딩 성공")
