@@ -13,6 +13,7 @@ import json
 import tempfile
 from pathlib import Path
 from datetime import datetime
+from typing import Dict, List, Optional
 from dotenv import load_dotenv
 
 # 환경 변수 로드

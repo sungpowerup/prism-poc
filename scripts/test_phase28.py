@@ -10,6 +10,7 @@ import sys
 import json
 from pathlib import Path
 from datetime import datetime
+from typing import Dict, List, Optional
 
 # Core 모듈
 from core.phase28_pipeline import Phase28Pipeline

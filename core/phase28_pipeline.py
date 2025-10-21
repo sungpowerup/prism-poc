@@ -235,17 +235,29 @@ class Phase28Pipeline:
         # 청킹
         print("🧩 Step 3: Intelligent Chunking...")
         
-        chunks = self.chunker.chunk_text(
-            text=content,
-            metadata={
-                'page_number': page_num,
-                'element_type': element_type,
-                'confidence': confidence,
-                'source': 'vlm'
-            }
+        chunks_list = self.chunker.chunk_region(
+            content=content,
+            region_type=element_type,
+            page_num=page_num,
+            section_path=f"Page {page_num}",
+            source='vlm'
         )
         
-        print(f"   ✓ Created {len(chunks)} chunk(s)")
+        print(f"   ✓ Created {len(chunks_list)} chunk(s)")
+        
+        # Chunk를 Dict로 변환
+        chunks = []
+        for chunk in chunks_list:
+            chunk_dict = {
+                'chunk_id': f"chunk_{page_num}_{id(chunk)}",
+                'page_number': chunk.page_num,
+                'element_type': chunk.type,
+                'content': chunk.content,
+                'metadata': chunk.metadata,
+                'model_used': self.vlm_provider,
+                'processing_time_sec': processing_time
+            }
+            chunks.append(chunk_dict)
         
         # 통계
         stats = {
