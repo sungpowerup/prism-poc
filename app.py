@@ -1,28 +1,33 @@
 """
-PRISM Phase 2.7 - Streamlit Web Application
-PDF 문서 지능형 처리 UI (완전판)
+PRISM Phase 2.9 - Streamlit Web Application
+구조화된 문서 처리 UI
 
-Author: 최동현 (Frontend Lead)
-Date: 2025-10-20
-Fix: process_document 함수 추가
+개선 사항:
+1. 구조화된 VLM 프롬프트
+2. 한글 인코딩 자동 수정
+3. 섹션 기반 청킹
+4. RAG 최적화
+
+Author: 최동현 (Frontend Lead) + 전체 팀
+Date: 2025-10-21
+Version: 2.9
 """
 
 import streamlit as st
 import os
 import json
 import tempfile
-import shutil
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, Any
 from dotenv import load_dotenv
 
 # 환경 변수 로드
 load_dotenv()
 
-# core 모듈 import
+# Core 모듈
 try:
-    from core.phase27_pipeline import Phase27Pipeline
+    from core.phase29_pipeline import Phase29Pipeline
 except ImportError as e:
     st.error(f"❌ core 모듈 임포트 실패: {e}")
     st.stop()
@@ -32,7 +37,7 @@ except ImportError as e:
 # ============================================================
 
 st.set_page_config(
-    page_title="PRISM Phase 2.7",
+    page_title="PRISM Phase 2.9",
     page_icon="🔷",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -51,54 +56,46 @@ st.markdown("""
         text-align: center;
         padding: 1rem 0;
         margin-bottom: 2rem;
+        background: linear-gradient(90deg, #1f77b4, #17a2b8);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
     }
-    .section-header {
-        font-size: 1.5rem;
+    .phase-badge {
+        display: inline-block;
+        background: #28a745;
+        color: white;
+        padding: 0.25rem 0.75rem;
+        border-radius: 1rem;
+        font-size: 0.9rem;
         font-weight: bold;
-        color: #2c3e50;
-        margin-top: 2rem;
-        margin-bottom: 1rem;
-        border-bottom: 2px solid #1f77b4;
-        padding-bottom: 0.5rem;
+        margin-left: 1rem;
     }
-    .metric-card {
-        background-color: #f8f9fa;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        border-left: 4px solid #1f77b4;
-        margin: 0.5rem 0;
-    }
-    .chunk-card {
-        background-color: #ffffff;
+    .improvement-box {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
         padding: 1.5rem;
         border-radius: 0.5rem;
-        border: 1px solid #e0e0e0;
-        margin: 1rem 0;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }
-    .success-box {
-        background-color: #d4edda;
-        border: 1px solid #c3e6cb;
-        color: #155724;
-        padding: 1rem;
-        border-radius: 0.3rem;
         margin: 1rem 0;
     }
-    .error-box {
-        background-color: #f8d7da;
-        border: 1px solid #f5c6cb;
-        color: #721c24;
+    .chunk-card {
+        background-color: #f8f9fa;
+        border-left: 4px solid #1f77b4;
         padding: 1rem;
-        border-radius: 0.3rem;
-        margin: 1rem 0;
+        margin: 0.5rem 0;
+        border-radius: 0.25rem;
     }
-    .info-box {
-        background-color: #d1ecf1;
-        border: 1px solid #bee5eb;
-        color: #0c5460;
+    .section-title {
+        color: #1f77b4;
+        font-weight: bold;
+        font-size: 1.1rem;
+        margin-top: 1rem;
+    }
+    .stat-box {
+        background: white;
+        border: 2px solid #e9ecef;
+        border-radius: 0.5rem;
         padding: 1rem;
-        border-radius: 0.3rem;
-        margin: 1rem 0;
+        text-align: center;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -110,205 +107,198 @@ st.markdown("""
 if 'result' not in st.session_state:
     st.session_state.result = None
 
-if 'processing' not in st.session_state:
-    st.session_state.processing = False
-
 # ============================================================
 # Helper Functions
 # ============================================================
 
-def save_uploaded_file(uploaded_file) -> Optional[str]:
-    """업로드된 파일을 임시 디렉토리에 저장"""
-    try:
-        # 임시 디렉토리 생성
-        temp_dir = Path("temp")
-        temp_dir.mkdir(exist_ok=True)
-        
-        # 파일 저장
-        file_path = temp_dir / uploaded_file.name
-        with open(file_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        
-        return str(file_path)
-    except Exception as e:
-        st.error(f"❌ 파일 저장 실패: {e}")
-        return None
+def save_uploaded_file(uploaded_file) -> str:
+    """업로드 파일을 임시 디렉토리에 저장"""
+    temp_dir = tempfile.mkdtemp()
+    file_path = os.path.join(temp_dir, uploaded_file.name)
+    
+    with open(file_path, 'wb') as f:
+        f.write(uploaded_file.getbuffer())
+    
+    return file_path
 
 
-def convert_to_markdown(result: Dict) -> str:
-    """결과를 Markdown 형식으로 변환"""
-    md_lines = []
+def display_metadata(result: Dict):
+    """메타데이터 표시"""
+    st.markdown("## 📊 처리 결과 요약")
     
-    # 헤더
-    md_lines.append("# PRISM Phase 2.7 - 문서 추출 결과\n")
-    md_lines.append(f"**생성일시**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-    md_lines.append("---\n")
-    
-    # 메타데이터
-    metadata = result.get('metadata', {})
-    md_lines.append("## 📄 문서 정보\n")
-    md_lines.append(f"- **파일명**: {metadata.get('filename', 'N/A')}")
-    md_lines.append(f"- **총 페이지**: {metadata.get('total_pages', 0)}")
-    md_lines.append(f"- **처리 시간**: {metadata.get('processing_time_sec', 0):.2f}초")
-    md_lines.append(f"- **총 청크**: {metadata.get('total_chunks', 0)}\n")
-    md_lines.append("---\n")
-    
-    # Stage 1 통계
-    stage1 = result.get('stage1_elements', [])
-    if stage1:
-        md_lines.append("## 📊 Stage 1: Element 추출 통계\n")
-        
-        # 타입별 집계
-        type_counts = {}
-        for elem in stage1:
-            elem_type = elem.get('type', 'unknown')
-            type_counts[elem_type] = type_counts.get(elem_type, 0) + 1
-        
-        for elem_type, count in type_counts.items():
-            md_lines.append(f"- **{elem_type}**: {count}개")
-        md_lines.append("\n---\n")
-    
-    # Stage 2 청크
-    chunks = result.get('stage2_chunks', [])
-    if chunks:
-        md_lines.append("## 🧩 Stage 2: 지능형 청크\n")
-        
-        for i, chunk in enumerate(chunks, 1):
-            md_lines.append(f"### 청크 #{i}\n")
-            md_lines.append(f"**페이지**: {chunk.get('page_number', 'N/A')}")
-            md_lines.append(f"**타입**: {chunk.get('element_type', 'N/A')}")
-            md_lines.append(f"**모델**: {chunk.get('model_used', 'N/A')}\n")
-            md_lines.append("**내용**:\n")
-            md_lines.append("```")
-            md_lines.append(chunk.get('content', ''))
-            md_lines.append("```\n")
-            md_lines.append("---\n")
-    
-    return "\n".join(md_lines)
-
-
-def display_statistics(result: Dict):
-    """통계 정보 표시"""
-    st.markdown('<div class="section-header">📊 처리 통계</div>', unsafe_allow_html=True)
-    
-    metadata = result.get('metadata', {})
+    metadata = result['metadata']
     
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric(
-            label="총 페이지",
-            value=metadata.get('total_pages', 0)
-        )
+        st.markdown('<div class="stat-box">', unsafe_allow_html=True)
+        st.metric("총 페이지", f"{metadata['total_pages']}개")
+        st.markdown('</div>', unsafe_allow_html=True)
     
     with col2:
-        st.metric(
-            label="총 청크",
-            value=metadata.get('total_chunks', 0)
-        )
+        st.markdown('<div class="stat-box">', unsafe_allow_html=True)
+        st.metric("총 청크", f"{metadata['total_chunks']}개")
+        st.markdown('</div>', unsafe_allow_html=True)
     
     with col3:
-        st.metric(
-            label="처리 시간",
-            value=f"{metadata.get('processing_time_sec', 0):.1f}초"
-        )
+        st.markdown('<div class="stat-box">', unsafe_allow_html=True)
+        st.metric("처리 시간", f"{metadata['processing_time_sec']:.1f}초")
+        st.markdown('</div>', unsafe_allow_html=True)
     
     with col4:
-        st.metric(
-            label="VLM 모델",
-            value=metadata.get('vlm_provider', 'N/A')
-        )
+        st.markdown('<div class="stat-box">', unsafe_allow_html=True)
+        st.metric("인코딩 수정", f"{metadata['encoding_fixes']['fixed']}건")
+        st.markdown('</div>', unsafe_allow_html=True)
 
 
-def display_stage1_elements(elements: List[Dict]):
-    """Stage 1 Element 표시"""
-    st.markdown('<div class="section-header">📋 Stage 1: 추출된 Elements</div>', unsafe_allow_html=True)
+def display_chunks(result: Dict):
+    """청크 표시"""
+    st.markdown("## 🧩 구조화된 청크")
     
-    if not elements:
-        st.info("추출된 Element가 없습니다.")
-        return
-    
-    # 타입별 집계
-    type_counts = {}
-    for elem in elements:
-        elem_type = elem.get('type', 'unknown')
-        type_counts[elem_type] = type_counts.get(elem_type, 0) + 1
-    
-    # 집계 표시
-    st.markdown("**타입별 분포:**")
-    cols = st.columns(len(type_counts))
-    for idx, (elem_type, count) in enumerate(type_counts.items()):
-        with cols[idx]:
-            st.metric(label=elem_type.upper(), value=count)
-    
-    # 상세 리스트 (Expander)
-    with st.expander("📄 상세 Element 목록", expanded=False):
-        for i, elem in enumerate(elements, 1):
-            st.markdown(f"**Element #{i}**")
-            st.json({
-                "페이지": elem.get('page_number'),
-                "타입": elem.get('type'),
-                "위치": elem.get('bbox'),
-                "내용": elem.get('content', '')[:100] + "..." if len(elem.get('content', '')) > 100 else elem.get('content', '')
-            })
-            st.markdown("---")
-
-
-def display_stage2_chunks(chunks: List[Dict]):
-    """Stage 2 청크 표시"""
-    st.markdown('<div class="section-header">🧩 Stage 2: 지능형 청크</div>', unsafe_allow_html=True)
+    chunks = result['stage3_chunks']
     
     if not chunks:
-        st.info("생성된 청크가 없습니다.")
+        st.warning("청크가 없습니다.")
         return
     
+    # 페이지별 필터
+    page_numbers = sorted(set(c['metadata']['page_number'] for c in chunks))
+    selected_page = st.selectbox(
+        "페이지 선택",
+        options=['전체'] + page_numbers,
+        index=0
+    )
+    
+    # 필터링
+    if selected_page != '전체':
+        filtered_chunks = [c for c in chunks if c['metadata']['page_number'] == selected_page]
+    else:
+        filtered_chunks = chunks
+    
+    st.info(f"📄 {len(filtered_chunks)}개 청크 표시")
+    
     # 청크 표시
-    for i, chunk in enumerate(chunks, 1):
-        with st.expander(f"📦 청크 #{i} - 페이지 {chunk.get('page_number', 'N/A')} ({chunk.get('element_type', 'N/A')})", expanded=False):
-            st.markdown(f"**모델**: {chunk.get('model_used', 'N/A')}")
-            st.markdown(f"**처리 시간**: {chunk.get('processing_time_sec', 0):.2f}초")
+    for i, chunk in enumerate(filtered_chunks, start=1):
+        metadata = chunk['metadata']
+        
+        with st.expander(
+            f"📦 청크 #{i} - 페이지 {metadata['page_number']} ({metadata['element_type']})",
+            expanded=(i == 1)
+        ):
+            # 메타데이터
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**기본 정보**")
+                st.text(f"페이지: {metadata['page_number']}")
+                st.text(f"타입: {metadata['element_type']}")
+                st.text(f"글자 수: {metadata['char_count']}자")
+                st.text(f"청크 순서: {metadata['chunk_index'] + 1}/{metadata['total_chunks']}")
+            
+            with col2:
+                st.markdown("**구조 정보**")
+                
+                section = metadata.get('section_title', '')
+                if section:
+                    st.text(f"섹션: {section}")
+                else:
+                    st.text("섹션: (없음)")
+                
+                chart_type = metadata.get('chart_type', '')
+                if chart_type:
+                    st.text(f"차트 타입: {chart_type}")
+                
+                keywords = metadata.get('keywords', [])
+                if keywords:
+                    st.text(f"키워드: {', '.join(keywords[:5])}")
+            
+            # 내용
             st.markdown("---")
-            st.markdown("**변환된 내용:**")
+            st.markdown("**📝 내용**")
             st.text_area(
                 label="내용",
-                value=chunk.get('content', ''),
+                value=chunk['content'],
                 height=200,
                 key=f"chunk_{i}",
-                disabled=True
+                label_visibility="collapsed"
             )
 
 
 def display_download_buttons(result: Dict):
-    """다운로드 버튼 표시"""
-    st.markdown('<div class="section-header">💾 다운로드</div>', unsafe_allow_html=True)
+    """다운로드 버튼"""
+    st.markdown("## 💾 다운로드")
     
     col1, col2 = st.columns(2)
     
-    # JSON 다운로드
+    # JSON
     with col1:
         json_data = json.dumps(result, ensure_ascii=False, indent=2)
         st.download_button(
             label="📥 JSON 다운로드",
             data=json_data,
-            file_name=f"prism_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+            file_name=f"prism_phase29_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
             mime="application/json"
         )
     
-    # Markdown 다운로드
+    # Markdown
     with col2:
-        md_data = convert_to_markdown(result)
+        md_data = generate_markdown(result)
         st.download_button(
             label="📥 Markdown 다운로드",
             data=md_data,
-            file_name=f"prism_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+            file_name=f"prism_phase29_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
             mime="text/markdown"
         )
 
 
-def process_document(uploaded_file, vlm_provider: str):
-    """문서 처리 메인 함수"""
+def generate_markdown(result: Dict) -> str:
+    """Markdown 생성"""
+    lines = []
     
-    # 진행 상태 표시
+    lines.append("# PRISM Phase 2.9 - 구조화된 문서 추출")
+    lines.append("")
+    lines.append(f"**생성일시**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+    
+    # 메타데이터
+    meta = result['metadata']
+    lines.append("## 📄 문서 정보")
+    lines.append("")
+    lines.append(f"- **파일명**: {meta['filename']}")
+    lines.append(f"- **총 페이지**: {meta['total_pages']}개")
+    lines.append(f"- **총 청크**: {meta['total_chunks']}개")
+    lines.append(f"- **처리 시간**: {meta['processing_time_sec']}초")
+    lines.append("")
+    
+    # 청크
+    lines.append("## 🧩 청크")
+    lines.append("")
+    
+    for i, chunk in enumerate(result['stage3_chunks'], start=1):
+        meta = chunk['metadata']
+        
+        lines.append(f"### 청크 #{i}")
+        lines.append("")
+        lines.append(f"- 페이지: {meta['page_number']}")
+        lines.append(f"- 타입: {meta['element_type']}")
+        
+        if meta.get('section_title'):
+            lines.append(f"- 섹션: {meta['section_title']}")
+        
+        lines.append("")
+        lines.append("```")
+        lines.append(chunk['content'])
+        lines.append("```")
+        lines.append("")
+    
+    return '\n'.join(lines)
+
+
+def process_document(uploaded_file, vlm_provider: str):
+    """문서 처리"""
+    
     progress_bar = st.progress(0)
     status_text = st.empty()
     
@@ -318,18 +308,15 @@ def process_document(uploaded_file, vlm_provider: str):
         progress_bar.progress(25)
         
         pdf_path = save_uploaded_file(uploaded_file)
-        if not pdf_path:
-            st.error("파일 저장에 실패했습니다.")
-            return
         
         # 2. Pipeline 초기화
         status_text.text("2/4 Pipeline 초기화 중...")
         progress_bar.progress(50)
         
-        pipeline = Phase27Pipeline(vlm_provider=vlm_provider)
+        pipeline = Phase29Pipeline(vlm_provider=vlm_provider)
         
         # 3. 문서 처리
-        status_text.text("3/4 문서 처리 중... (시간이 걸릴 수 있습니다)")
+        status_text.text("3/4 구조화된 분석 진행 중... (시간이 걸릴 수 있습니다)")
         progress_bar.progress(75)
         
         result = pipeline.process_pdf(pdf_path)
@@ -338,11 +325,11 @@ def process_document(uploaded_file, vlm_provider: str):
         status_text.text("4/4 처리 완료!")
         progress_bar.progress(100)
         
-        # 세션 상태에 저장
+        # 세션 상태 저장
         st.session_state.result = result
         
         # 성공 메시지
-        st.success("✅ 문서 처리가 완료되었습니다!")
+        st.success("✅ 구조화된 문서 처리가 완료되었습니다!")
         
         # 임시 파일 정리
         try:
@@ -353,13 +340,11 @@ def process_document(uploaded_file, vlm_provider: str):
     except Exception as e:
         st.error(f"❌ 처리 중 오류 발생: {str(e)}")
         
-        # 상세 에러 (Expander)
         with st.expander("🔍 상세 에러 정보"):
             import traceback
             st.code(traceback.format_exc())
     
     finally:
-        # 진행 표시 제거
         progress_bar.empty()
         status_text.empty()
 
@@ -372,19 +357,38 @@ def main():
     """메인 애플리케이션"""
     
     # 헤더
-    st.markdown('<div class="main-header">🔷 PRISM Phase 2.7</div>', unsafe_allow_html=True)
-    st.markdown('<p style="text-align: center; color: #666;">PDF 문서 지능형 전처리 시스템</p>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="main-header">🔷 PRISM Phase 2.9'
+        '<span class="phase-badge">Structured</span></div>',
+        unsafe_allow_html=True
+    )
+    
+    st.markdown('<p style="text-align: center; color: #666;">구조화된 문서 처리 시스템</p>', unsafe_allow_html=True)
+    
+    # 개선사항 박스
+    with st.container():
+        st.markdown("""
+        <div class="improvement-box">
+            <h3 style="margin-top: 0;">🎉 Phase 2.9 주요 개선사항</h3>
+            <ul style="margin-bottom: 0;">
+                <li><strong>구조화된 VLM 프롬프트</strong>: 섹션/차트별 독립 분석</li>
+                <li><strong>한글 인코딩 자동 수정</strong>: 완벽한 한글 복원</li>
+                <li><strong>섹션 기반 청킹</strong>: 의미 단위 보존</li>
+                <li><strong>RAG 최적화</strong>: 검색 효율성 극대화</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
     
     # 사이드바 설정
     with st.sidebar:
         st.markdown("## ⚙️ 설정")
         
-        # VLM 프로바이더 선택
+        # VLM 선택
         vlm_provider = st.selectbox(
             "VLM 프로바이더",
-            options=["claude", "azure_openai", "ollama"],
+            options=["azure_openai", "claude", "ollama"],
             index=0,
-            help="문서 처리에 사용할 VLM 모델을 선택하세요"
+            help="문서 분석에 사용할 VLM 모델"
         )
         
         st.markdown("---")
@@ -400,73 +404,59 @@ def main():
         
         st.markdown("---")
         
-        st.markdown("### 🔧 지원 기능")
+        st.markdown("### 🆕 Phase 2.9 특징")
         st.markdown("""
-        - ✅ PDF → 이미지 변환 (PyMuPDF)
-        - ✅ Element 자동 추출
-        - ✅ VLM 기반 설명 생성
-        - ✅ 지능형 청킹
-        - ✅ JSON/MD 다운로드
+        - ✅ 섹션 헤더 자동 추출
+        - ✅ 차트 타입 명시
+        - ✅ 리스트 형식 데이터
+        - ✅ 인사이트 제공
+        - ✅ RAG 최적화
         """)
+        
+        st.markdown("---")
+        
+        # 시스템 정보
+        st.markdown("### 💻 시스템 정보")
+        st.text(f"Phase: 2.9")
+        st.text(f"VLM: {vlm_provider}")
     
     # 메인 영역
-    st.markdown("---")
-    
-    # 파일 업로드
     uploaded_file = st.file_uploader(
-        "📁 PDF 파일 업로드",
+        "📄 PDF 파일을 선택하세요",
         type=['pdf'],
-        help="처리할 PDF 문서를 선택하세요"
+        help="최대 200MB, 20페이지까지 처리 가능"
     )
     
-    if uploaded_file is not None:
-        # 파일 정보 표시
-        st.markdown('<div class="info-box">', unsafe_allow_html=True)
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write(f"**파일명**: {uploaded_file.name}")
-        with col2:
-            st.write(f"**크기**: {uploaded_file.size / 1024:.2f} KB")
-        st.markdown('</div>', unsafe_allow_html=True)
+    if uploaded_file:
+        st.info(f"📎 파일: {uploaded_file.name} ({uploaded_file.size / 1024:.1f} KB)")
         
-        # 처리 시작 버튼
         if st.button("🚀 처리 시작", type="primary", use_container_width=True):
-            with st.spinner("문서 처리 중..."):
-                process_document(uploaded_file, vlm_provider)
+            process_document(uploaded_file, vlm_provider)
     
     # 결과 표시
-    if st.session_state.result is not None:
+    if st.session_state.result:
         st.markdown("---")
-        st.markdown('<div class="success-box">✅ 처리 완료!</div>', unsafe_allow_html=True)
         
         result = st.session_state.result
         
-        # 통계
-        display_statistics(result)
+        # 메타데이터
+        display_metadata(result)
         
-        # Stage 1 Elements
-        stage1_elements = result.get('stage1_elements', [])
-        if stage1_elements:
-            display_stage1_elements(stage1_elements)
+        st.markdown("---")
         
-        # Stage 2 Chunks
-        stage2_chunks = result.get('stage2_chunks', [])
-        if stage2_chunks:
-            display_stage2_chunks(stage2_chunks)
+        # 청크 표시
+        display_chunks(result)
+        
+        st.markdown("---")
         
         # 다운로드
         display_download_buttons(result)
         
-        # 새 문서 처리 버튼
-        st.markdown("---")
+        # 새 문서 처리
         if st.button("🔄 새 문서 처리", use_container_width=True):
             st.session_state.result = None
             st.rerun()
 
 
-# ============================================================
-# 실행
-# ============================================================
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
