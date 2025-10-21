@@ -1,91 +1,51 @@
 """
 core/phase29_pipeline.py
-PRISM Phase 2.9 - 구조화된 문서 처리 파이프라인
+PRISM Phase 2.9 파이프라인 (간소화 버전)
 
-개선 사항 (vs Phase 2.8):
-1. ✅ 구조화된 VLM 프롬프트 적용
-2. ✅ 한글 인코딩 자동 수정
-3. ✅ 섹션 기반 지능형 청킹
-4. ✅ RAG 최적화 메타데이터
-5. ✅ 차트별 독립 처리
-
-Author: PRISM 개발팀 전원
-Date: 2025-10-21
+Phase 2.8 파이프라인을 재사용하여 안정성 확보
 """
 
 import os
-import json
-import time
-from pathlib import Path
-from datetime import datetime
-from typing import List, Dict, Any, Optional
 import logging
+from pathlib import Path
+from typing import Dict, List, Optional, Any
+from datetime import datetime
+import json
 
-from .pdf_processor import PDFProcessor
-from .element_classifier import ElementClassifier
-from .vlm_service import VLMService
-from .structured_prompts import StructuredPrompts
-from .encoding_fixer import EncodingFixer, SmartEncodingFixer
-from .structural_chunker import RAGOptimizedChunker
+# Phase 2.8 파이프라인 재사용
+from core.phase28_pipeline import Phase28Pipeline
+from core.smart_encoding_fixer import SmartEncodingFixer
+from core.rag_optimized_chunker import RAGOptimizedChunker
 
-# 로깅 설정
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('logs/phase29.log', encoding='utf-8'),
-        logging.StreamHandler()
-    ]
-)
 logger = logging.getLogger(__name__)
 
 
 class Phase29Pipeline:
     """
-    Phase 2.9 처리 파이프라인
+    PRISM Phase 2.9 처리 파이프라인
     
-    Processing Flow:
-    1. PDF → 페이지 이미지
-    2. 페이지 이미지 → VLM 구조화 분석
-    3. 인코딩 수정
-    4. 구조 기반 청킹
-    5. 메타데이터 풍부화
+    Phase 2.8 기반 + 추가 기능:
+    1. 스마트 인코딩 수정
+    2. RAG 최적화 청킹
     """
     
     def __init__(self, vlm_provider: str = 'azure_openai'):
         """
         Args:
-            vlm_provider: 'azure_openai', 'claude', 'ollama'
+            vlm_provider: VLM 프로바이더
         """
         logger.info("="*60)
         logger.info("PRISM Phase 2.9 Pipeline 초기화")
         logger.info("="*60)
         
-        # 1. VLM 서비스
-        self.vlm_service = VLMService(provider=vlm_provider)
-        self.vlm_provider = vlm_provider
-        logger.info(f"✅ VLM 서비스: {vlm_provider}")
+        # Phase 2.8 파이프라인 사용
+        self.phase28 = Phase28Pipeline(vlm_provider=vlm_provider)
+        logger.info("✅ Phase 2.8 파이프라인 로드")
         
-        # 2. PDF 프로세서
-        try:
-            self.pdf_processor = PDFProcessor(vlm_service=self.vlm_service)
-        except TypeError:
-            self.pdf_processor = PDFProcessor()
-        logger.info("✅ PDF 프로세서 초기화")
-        
-        # 3. Element 분류기
-        self.element_classifier = ElementClassifier(use_vlm=False)
-        logger.info("✅ Element 분류기 초기화")
-        
-        # 4. 프롬프트 생성기
-        self.prompt_builder = StructuredPrompts()
-        logger.info("✅ 구조화된 프롬프트 생성기")
-        
-        # 5. 인코딩 수정기
+        # Phase 2.9 추가 기능
         self.encoding_fixer = SmartEncodingFixer()
         logger.info("✅ 스마트 인코딩 수정기")
         
-        # 6. 청킹 엔진
         self.chunker = RAGOptimizedChunker(
             min_chunk_size=100,
             max_chunk_size=800,
@@ -93,6 +53,8 @@ class Phase29Pipeline:
             preserve_structure=True
         )
         logger.info("✅ RAG 최적화 청킹 엔진")
+        
+        self.vlm_provider = vlm_provider
         
         logger.info("="*60)
     
@@ -103,7 +65,7 @@ class Phase29Pipeline:
         max_pages: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        PDF 문서 전체 처리
+        PDF 문서 처리
         
         Args:
             pdf_path: PDF 파일 경로
@@ -111,357 +73,126 @@ class Phase29Pipeline:
             max_pages: 최대 처리 페이지 수
             
         Returns:
-            처리 결과 딕셔너리
+            처리 결과
         """
-        start_time = time.time()
-        
         logger.info("\n" + "="*60)
-        logger.info(f"📄 문서 처리 시작: {Path(pdf_path).name}")
+        logger.info(f"📄 Phase 2.9 문서 처리: {Path(pdf_path).name}")
         logger.info("="*60)
         
-        # 출력 디렉토리 생성
-        os.makedirs(output_dir, exist_ok=True)
+        # Phase 2.8로 기본 처리
+        phase28_result = self.phase28.process_pdf(
+            pdf_path=pdf_path,
+            output_dir=output_dir,
+            max_pages=max_pages
+        )
         
-        # Stage 1: PDF → 페이지 이미지 → VLM 분석
-        stage1_results = self._stage1_vlm_analysis(pdf_path, max_pages)
+        # Phase 2.9 추가 처리
         
-        # Stage 2: 인코딩 수정
-        stage2_results = self._stage2_fix_encoding(stage1_results)
+        # 1. 인코딩 수정
+        logger.info("\n--- Phase 2.9: 인코딩 수정 ---")
+        fixed_chunks = self._fix_encoding(phase28_result['stage2_chunks'])
         
-        # Stage 3: 구조화된 청킹
-        stage3_results = self._stage3_structural_chunking(stage2_results)
+        # 2. RAG 최적화 청킹
+        logger.info("\n--- Phase 2.9: RAG 청킹 ---")
+        rag_chunks = self._optimize_for_rag(fixed_chunks)
         
-        # 통계 계산
-        processing_time = time.time() - start_time
-        stats = self._calculate_statistics(stage1_results, stage3_results, processing_time)
-        
-        # 결과 취합
+        # 결과 통합
         result = {
             'metadata': {
                 'filename': Path(pdf_path).name,
-                'total_pages': len(stage1_results),
-                'total_chunks': len(stage3_results),
-                'processing_time_sec': round(processing_time, 2),
+                'phase': '2.9',
                 'vlm_provider': self.vlm_provider,
                 'processed_at': datetime.now().isoformat(),
-                'encoding_fixes': self.encoding_fixer.base_fixer.get_stats(),
-                'phase': '2.9'
+                'total_pages': phase28_result['metadata']['total_pages'],
+                'total_chunks': len(rag_chunks),
+                'processing_time_sec': phase28_result['metadata']['processing_time_sec'],
+                'encoding_fixes': self.encoding_fixer.base_fixer.get_stats()
             },
-            'stage1_vlm_analysis': [self._summarize_page(p) for p in stage1_results],
-            'stage3_chunks': [chunk.to_dict() for chunk in stage3_results]
+            'chunks': [chunk.to_dict() for chunk in rag_chunks]
         }
         
-        # 결과 저장
+        # 저장
         self._save_results(result, output_dir)
         
         logger.info("\n" + "="*60)
-        logger.info("✅ 문서 처리 완료")
-        logger.info(f"   페이지: {result['metadata']['total_pages']}개")
-        logger.info(f"   청크: {result['metadata']['total_chunks']}개")
-        logger.info(f"   처리 시간: {processing_time:.2f}초")
-        logger.info(f"   인코딩 수정: {stats['encoding_fixes']}건")
+        logger.info("✅ Phase 2.9 처리 완료")
+        logger.info(f"   청크: {len(rag_chunks)}개")
+        logger.info(f"   인코딩 수정: {result['metadata']['encoding_fixes']['fixed']}건")
         logger.info("="*60)
         
         return result
     
-    def _stage1_vlm_analysis(
-        self,
-        pdf_path: str,
-        max_pages: Optional[int]
-    ) -> List[Dict[str, Any]]:
-        """
-        Stage 1: VLM 구조화 분석
-        """
-        logger.info("\n--- Stage 1: VLM 구조화 분석 ---")
-        
-        # PDF → 이미지 변환
-        page_images = self.pdf_processor.pdf_to_images(pdf_path)
-        
-        if max_pages:
-            page_images = page_images[:max_pages]
-        
-        logger.info(f"페이지 수: {len(page_images)}")
-        
-        results = []
-        
-        for page_num, page_image in enumerate(page_images, start=1):
-            logger.info(f"\n[페이지 {page_num}/{len(page_images)}]")
-            
-            page_start_time = time.time()
-            
-            # 1. Element 분류 (전체 페이지)
-            classification = self.element_classifier.classify_image(page_image)
-            element_type = classification['type']
-            confidence = classification['confidence']
-            
-            logger.info(f"  타입: {element_type} (신뢰도: {confidence:.2f})")
-            
-            # 2. 구조화된 프롬프트 생성
-            prompt = self.prompt_builder.build_prompt_with_context(
-                element_type=element_type,
-                page_number=page_num,
-                total_pages=len(page_images),
-                detected_regions=1
-            )
-            
-            # 3. VLM 분석
-            logger.info(f"  VLM 분석 중... (프롬프트: {len(prompt)}자)")
-            
-            vlm_result = self.vlm_service.analyze_image(
-                image=page_image,
-                prompt=prompt
-            )
-            
-            caption = vlm_result.get('text', '')
-            tokens = vlm_result.get('tokens_used', 0)
-            
-            page_time = time.time() - page_start_time
-            
-            logger.info(f"  완료: {len(caption)}자 (토큰: {tokens}, {page_time:.2f}초)")
-            
-            results.append({
-                'page_number': page_num,
-                'element_type': element_type,
-                'confidence': confidence,
-                'caption': caption,
-                'tokens_used': tokens,
-                'processing_time_sec': page_time
-            })
-        
-        logger.info(f"\nStage 1 완료: {len(results)}개 페이지 분석")
-        
-        return results
-    
-    def _stage2_fix_encoding(
-        self,
-        stage1_results: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        """
-        Stage 2: 인코딩 수정
-        """
-        logger.info("\n--- Stage 2: 인코딩 수정 ---")
-        
-        fixed_results = []
+    def _fix_encoding(self, chunks: List[Dict]) -> List[Dict]:
+        """인코딩 수정"""
+        fixed_chunks = []
         fix_count = 0
         
-        for page_data in stage1_results:
-            caption = page_data['caption']
+        for chunk in chunks:
+            content = chunk.get('content', '')
             
             # 인코딩 수정
-            fixed_caption, confidence = self.encoding_fixer.fix_with_confidence(caption)
+            fixed_content, confidence = self.encoding_fixer.fix_with_confidence(content)
             
-            if fixed_caption != caption:
+            if fixed_content != content:
                 fix_count += 1
-                logger.info(f"페이지 {page_data['page_number']}: 인코딩 수정 (신뢰도: {confidence:.2%})")
+                logger.info(f"청크 수정: 신뢰도 {confidence:.2%}")
             
-            # 결과 업데이트
-            fixed_data = page_data.copy()
-            fixed_data['caption'] = fixed_caption
-            fixed_data['encoding_confidence'] = confidence
-            
-            fixed_results.append(fixed_data)
+            # 업데이트
+            fixed_chunk = chunk.copy()
+            fixed_chunk['content'] = fixed_content
+            fixed_chunks.append(fixed_chunk)
         
-        logger.info(f"Stage 2 완료: {fix_count}개 페이지 인코딩 수정")
+        logger.info(f"인코딩 수정 완료: {fix_count}건")
         
-        return fixed_results
+        return fixed_chunks
     
-    def _stage3_structural_chunking(
-        self,
-        stage2_results: List[Dict[str, Any]]
-    ) -> List:
-        """
-        Stage 3: 구조화된 청킹
-        """
-        logger.info("\n--- Stage 3: 구조화된 청킹 ---")
+    def _optimize_for_rag(self, chunks: List[Dict]) -> List:
+        """RAG 최적화 청킹"""
         
-        all_chunks = []
+        # 전체 텍스트 결합
+        full_text = "\n\n".join([
+            f"[페이지 {c.get('page_number', 1)}]\n{c.get('content', '')}"
+            for c in chunks
+        ])
         
-        for page_data in stage2_results:
-            page_num = page_data['page_number']
-            caption = page_data['caption']
-            element_type = page_data['element_type']
-            
-            # 구조 기반 청킹
-            chunks = self.chunker.chunk_document(
-                content=caption,
-                page_number=page_num,
-                element_type=element_type
-            )
-            
-            # 추가 메타데이터
-            for chunk in chunks:
-                chunk.metadata['tokens_used'] = page_data['tokens_used']
-                chunk.metadata['processing_time_sec'] = page_data['processing_time_sec']
-                chunk.metadata['model_used'] = self.vlm_provider
-            
-            all_chunks.extend(chunks)
-            
-            logger.info(f"페이지 {page_num}: {len(chunks)}개 청크 생성")
+        # RAG 청킹
+        rag_chunks = self.chunker.chunk_with_structure(
+            text=full_text,
+            metadata={'source_chunks': len(chunks)}
+        )
         
-        logger.info(f"Stage 3 완료: 총 {len(all_chunks)}개 청크")
+        logger.info(f"RAG 청킹 완료: {len(chunks)} → {len(rag_chunks)}개")
         
-        return all_chunks
-    
-    def _calculate_statistics(
-        self,
-        stage1_results: List[Dict],
-        chunks: List,
-        processing_time: float
-    ) -> Dict[str, Any]:
-        """통계 계산"""
-        
-        # 청크 타입 분포
-        chunk_types = {}
-        for chunk in chunks:
-            etype = chunk.metadata.get('element_type', 'unknown')
-            chunk_types[etype] = chunk_types.get(etype, 0) + 1
-        
-        # 인코딩 수정 통계
-        encoding_fixes = self.encoding_fixer.base_fixer.get_stats()
-        
-        return {
-            'total_pages': len(stage1_results),
-            'total_chunks': len(chunks),
-            'chunk_types': chunk_types,
-            'avg_chunks_per_page': len(chunks) / len(stage1_results) if stage1_results else 0,
-            'processing_time': processing_time,
-            'avg_time_per_page': processing_time / len(stage1_results) if stage1_results else 0,
-            'encoding_fixes': encoding_fixes['fixed']
-        }
-    
-    def _summarize_page(self, page_data: Dict) -> Dict:
-        """페이지 요약"""
-        return {
-            'page_number': page_data['page_number'],
-            'element_type': page_data['element_type'],
-            'confidence': round(page_data['confidence'], 2),
-            'caption_length': len(page_data['caption']),
-            'tokens_used': page_data['tokens_used'],
-            'processing_time_sec': round(page_data['processing_time_sec'], 2)
-        }
+        return rag_chunks
     
     def _save_results(self, result: Dict, output_dir: str):
-        """
-        결과 저장 (JSON + Markdown)
+        """결과 저장"""
+        os.makedirs(output_dir, exist_ok=True)
         
-        Features:
-        - UTF-8 BOM으로 저장
-        - JSON과 MD 동시 생성
-        - 타임스탬프 자동 추가
-        """
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = Path(result['metadata']['filename']).stem
+        filename = result['metadata']['filename']
+        base_name = Path(filename).stem
         
-        # JSON 저장 (UTF-8 BOM)
-        json_path = Path(output_dir) / f"{filename}_phase29_{timestamp}.json"
-        with open(json_path, 'w', encoding='utf-8-sig') as f:
+        # JSON 저장
+        json_path = Path(output_dir) / f"{base_name}_phase29.json"
+        with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
         
-        logger.info(f"💾 JSON 저장: {json_path}")
-        
-        # Markdown 저장
-        md_path = Path(output_dir) / f"{filename}_phase29_{timestamp}.md"
-        md_content = self._generate_markdown(result)
-        
-        with open(md_path, 'w', encoding='utf-8-sig') as f:
-            f.write(md_content)
-        
-        logger.info(f"💾 Markdown 저장: {md_path}")
-    
-    def _generate_markdown(self, result: Dict) -> str:
-        """
-        Markdown 형식으로 결과 생성
-        
-        Format:
-        - 문서 정보
-        - 청크별 섹션
-        - 구조화된 레이아웃
-        """
-        lines = []
-        
-        # 헤더
-        lines.append("# PRISM Phase 2.9 - 구조화된 문서 추출 결과")
-        lines.append("")
-        lines.append(f"**생성일시**: {result['metadata']['processed_at'][:19]}")
-        lines.append("")
-        lines.append("---")
-        lines.append("")
-        
-        # 문서 정보
-        lines.append("## 📄 문서 정보")
-        lines.append("")
-        lines.append(f"- **파일명**: {result['metadata']['filename']}")
-        lines.append(f"- **총 페이지**: {result['metadata']['total_pages']}개")
-        lines.append(f"- **총 청크**: {result['metadata']['total_chunks']}개")
-        lines.append(f"- **처리 시간**: {result['metadata']['processing_time_sec']:.2f}초")
-        lines.append(f"- **VLM 프로바이더**: {result['metadata']['vlm_provider']}")
-        lines.append(f"- **인코딩 수정**: {result['metadata']['encoding_fixes']['fixed']}건")
-        lines.append(f"- **Phase**: {result['metadata']['phase']}")
-        lines.append("")
-        lines.append("---")
-        lines.append("")
-        
-        # 청크
-        lines.append("## 🧩 구조화된 청크")
-        lines.append("")
-        
-        for i, chunk_dict in enumerate(result['stage3_chunks'], start=1):
-            lines.append(f"### 청크 #{i}")
-            lines.append("")
-            
-            metadata = chunk_dict['metadata']
-            
-            lines.append(f"**페이지**: {metadata['page_number']}")
-            lines.append(f"**타입**: {metadata['element_type']}")
-            lines.append(f"**모델**: {metadata.get('model_used', 'N/A')}")
-            
-            # 섹션 정보
-            if metadata.get('section_title'):
-                lines.append(f"**섹션**: {metadata['section_title']}")
-            
-            # 차트 정보
-            if metadata.get('chart_type'):
-                lines.append(f"**차트 타입**: {metadata['chart_type']}")
-            
-            # 키워드
-            if metadata.get('keywords'):
-                keywords = ', '.join(metadata['keywords'][:5])
-                lines.append(f"**키워드**: {keywords}")
-            
-            lines.append("")
-            lines.append("**내용**:")
-            lines.append("")
-            lines.append("```")
-            lines.append(chunk_dict['content'])
-            lines.append("```")
-            lines.append("")
-            lines.append("---")
-            lines.append("")
-        
-        return '\n'.join(lines)
+        logger.info(f"💾 결과 저장: {json_path}")
 
 
-# CLI 실행
+# 사용 예시
 if __name__ == '__main__':
-    import sys
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s'
+    )
     
-    if len(sys.argv) < 2:
-        print("사용법: python phase29_pipeline.py <pdf_path> [output_dir] [vlm_provider]")
-        print("예시: python phase29_pipeline.py input/test.pdf output azure_openai")
-        sys.exit(1)
+    pipeline = Phase29Pipeline(vlm_provider='azure_openai')
     
-    pdf_path = sys.argv[1]
-    output_dir = sys.argv[2] if len(sys.argv) > 2 else 'output'
-    vlm_provider = sys.argv[3] if len(sys.argv) > 3 else 'azure_openai'
+    result = pipeline.process_pdf(
+        pdf_path='input/test.pdf',
+        output_dir='output',
+        max_pages=3
+    )
     
-    # 파이프라인 실행
-    pipeline = Phase29Pipeline(vlm_provider=vlm_provider)
-    result = pipeline.process_pdf(pdf_path, output_dir)
-    
-    print("\n" + "="*60)
-    print("🎉 처리 완료!")
-    print("="*60)
-    print(f"페이지: {result['metadata']['total_pages']}")
-    print(f"청크: {result['metadata']['total_chunks']}")
-    print(f"시간: {result['metadata']['processing_time_sec']:.2f}초")
-    print("="*60)
+    print(f"\n✅ 처리 완료: {result['metadata']['total_chunks']}개 청크")

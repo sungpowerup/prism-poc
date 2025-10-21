@@ -19,7 +19,7 @@ import json
 import tempfile
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, List, Optional, Any
 from dotenv import load_dotenv
 
 # 환경 변수 로드
@@ -132,7 +132,7 @@ def display_metadata(result: Dict):
     
     with col1:
         st.markdown('<div class="stat-box">', unsafe_allow_html=True)
-        st.metric("총 페이지", f"{metadata['total_pages']}개")
+        st.metric("총 페이지", f"{metadata.get('total_pages', 'N/A')}개")
         st.markdown('</div>', unsafe_allow_html=True)
     
     with col2:
@@ -147,81 +147,83 @@ def display_metadata(result: Dict):
     
     with col4:
         st.markdown('<div class="stat-box">', unsafe_allow_html=True)
-        st.metric("인코딩 수정", f"{metadata['encoding_fixes']['fixed']}건")
+        encoding_fixes = metadata.get('encoding_fixes', {})
+        fixed_count = encoding_fixes.get('fixed', 0) if isinstance(encoding_fixes, dict) else 0
+        st.metric("인코딩 수정", f"{fixed_count}건")
         st.markdown('</div>', unsafe_allow_html=True)
 
 
 def display_chunks(result: Dict):
-    """청크 표시"""
+    """청크 표시 (Phase 2.9 호환)"""
     st.markdown("## 🧩 구조화된 청크")
     
-    chunks = result['stage3_chunks']
+    # Phase 2.9는 'chunks', Phase 2.8은 'stage3_chunks' 또는 'stage2_chunks'
+    chunks = result.get('chunks') or result.get('stage3_chunks') or result.get('stage2_chunks', [])
     
     if not chunks:
         st.warning("청크가 없습니다.")
         return
     
-    # 페이지별 필터
-    page_numbers = sorted(set(c['metadata']['page_number'] for c in chunks))
-    selected_page = st.selectbox(
-        "페이지 선택",
-        options=['전체'] + page_numbers,
-        index=0
-    )
-    
-    # 필터링
-    if selected_page != '전체':
-        filtered_chunks = [c for c in chunks if c['metadata']['page_number'] == selected_page]
-    else:
-        filtered_chunks = chunks
-    
-    st.info(f"📄 {len(filtered_chunks)}개 청크 표시")
+    st.info(f"📄 총 {len(chunks)}개 청크")
     
     # 청크 표시
-    for i, chunk in enumerate(filtered_chunks, start=1):
-        metadata = chunk['metadata']
+    for i, chunk in enumerate(chunks, start=1):
+        # Phase 2.9 청크 구조
+        if 'chunk_id' in chunk:
+            chunk_id = chunk['chunk_id']
+            text = chunk.get('text', '')
+            section_title = chunk.get('section_title', '(없음)')
+            chunk_type = chunk.get('chunk_type', 'unknown')
+            keywords = chunk.get('keywords', [])
+            char_count = chunk.get('char_count', 0)
+            
+            with st.expander(
+                f"📦 {chunk_id} - {section_title} ({chunk_type})",
+                expanded=(i == 1)
+            ):
+                # 메타데이터
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.markdown("**기본 정보**")
+                    st.text(f"청크 ID: {chunk_id}")
+                    st.text(f"타입: {chunk_type}")
+                    st.text(f"글자 수: {char_count}자")
+                
+                with col2:
+                    st.markdown("**구조 정보**")
+                    st.text(f"섹션: {section_title}")
+                    if keywords:
+                        st.text(f"키워드: {', '.join(keywords[:5])}")
+                
+                # 내용
+                st.markdown("---")
+                st.markdown("**📝 내용**")
+                st.text_area(
+                    label="내용",
+                    value=text,
+                    height=200,
+                    key=f"chunk_{i}",
+                    label_visibility="collapsed"
+                )
         
-        with st.expander(
-            f"📦 청크 #{i} - 페이지 {metadata['page_number']} ({metadata['element_type']})",
-            expanded=(i == 1)
-        ):
-            # 메타데이터
-            col1, col2 = st.columns(2)
+        # Phase 2.8 청크 구조 (하위 호환)
+        else:
+            content = chunk.get('content', '')
+            page_number = chunk.get('page_number', 0)
+            element_type = chunk.get('element_type', 'unknown')
             
-            with col1:
-                st.markdown("**기본 정보**")
-                st.text(f"페이지: {metadata['page_number']}")
-                st.text(f"타입: {metadata['element_type']}")
-                st.text(f"글자 수: {metadata['char_count']}자")
-                st.text(f"청크 순서: {metadata['chunk_index'] + 1}/{metadata['total_chunks']}")
-            
-            with col2:
-                st.markdown("**구조 정보**")
-                
-                section = metadata.get('section_title', '')
-                if section:
-                    st.text(f"섹션: {section}")
-                else:
-                    st.text("섹션: (없음)")
-                
-                chart_type = metadata.get('chart_type', '')
-                if chart_type:
-                    st.text(f"차트 타입: {chart_type}")
-                
-                keywords = metadata.get('keywords', [])
-                if keywords:
-                    st.text(f"키워드: {', '.join(keywords[:5])}")
-            
-            # 내용
-            st.markdown("---")
-            st.markdown("**📝 내용**")
-            st.text_area(
-                label="내용",
-                value=chunk['content'],
-                height=200,
-                key=f"chunk_{i}",
-                label_visibility="collapsed"
-            )
+            with st.expander(
+                f"📦 청크 #{i} - 페이지 {page_number} ({element_type})",
+                expanded=(i == 1)
+            ):
+                st.text_area(
+                    label="내용",
+                    value=content,
+                    height=200,
+                    key=f"chunk_{i}",
+                    label_visibility="collapsed"
+                )
 
 
 def display_download_buttons(result: Dict):
@@ -237,7 +239,8 @@ def display_download_buttons(result: Dict):
             label="📥 JSON 다운로드",
             data=json_data,
             file_name=f"prism_phase29_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-            mime="application/json"
+            mime="application/json",
+            use_container_width=True
         )
     
     # Markdown
@@ -247,12 +250,13 @@ def display_download_buttons(result: Dict):
             label="📥 Markdown 다운로드",
             data=md_data,
             file_name=f"prism_phase29_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
-            mime="text/markdown"
+            mime="text/markdown",
+            use_container_width=True
         )
 
 
 def generate_markdown(result: Dict) -> str:
-    """Markdown 생성"""
+    """Markdown 생성 (Phase 2.9 호환)"""
     lines = []
     
     lines.append("# PRISM Phase 2.9 - 구조화된 문서 추출")
@@ -267,30 +271,46 @@ def generate_markdown(result: Dict) -> str:
     lines.append("## 📄 문서 정보")
     lines.append("")
     lines.append(f"- **파일명**: {meta['filename']}")
-    lines.append(f"- **총 페이지**: {meta['total_pages']}개")
+    lines.append(f"- **총 페이지**: {meta.get('total_pages', 'N/A')}개")
     lines.append(f"- **총 청크**: {meta['total_chunks']}개")
     lines.append(f"- **처리 시간**: {meta['processing_time_sec']}초")
+    lines.append(f"- **Phase**: {meta.get('phase', '2.9')}")
     lines.append("")
     
     # 청크
     lines.append("## 🧩 청크")
     lines.append("")
     
-    for i, chunk in enumerate(result['stage3_chunks'], start=1):
-        meta = chunk['metadata']
-        
+    # Phase 2.9 또는 2.8 호환
+    chunks = result.get('chunks') or result.get('stage3_chunks') or result.get('stage2_chunks', [])
+    
+    for i, chunk in enumerate(chunks, start=1):
         lines.append(f"### 청크 #{i}")
         lines.append("")
-        lines.append(f"- 페이지: {meta['page_number']}")
-        lines.append(f"- 타입: {meta['element_type']}")
         
-        if meta.get('section_title'):
-            lines.append(f"- 섹션: {meta['section_title']}")
+        # Phase 2.9
+        if 'chunk_id' in chunk:
+            lines.append(f"- **ID**: {chunk['chunk_id']}")
+            lines.append(f"- **타입**: {chunk.get('chunk_type', 'unknown')}")
+            lines.append(f"- **섹션**: {chunk.get('section_title', '(없음)')}")
+            
+            if chunk.get('keywords'):
+                lines.append(f"- **키워드**: {', '.join(chunk['keywords'][:5])}")
+            
+            lines.append("")
+            lines.append("```")
+            lines.append(chunk.get('text', ''))
+            lines.append("```")
         
-        lines.append("")
-        lines.append("```")
-        lines.append(chunk['content'])
-        lines.append("```")
+        # Phase 2.8
+        else:
+            lines.append(f"- **페이지**: {chunk.get('page_number', 'N/A')}")
+            lines.append(f"- **타입**: {chunk.get('element_type', 'unknown')}")
+            lines.append("")
+            lines.append("```")
+            lines.append(chunk.get('content', ''))
+            lines.append("```")
+        
         lines.append("")
     
     return '\n'.join(lines)
@@ -304,53 +324,47 @@ def process_document(uploaded_file, vlm_provider: str):
     
     try:
         # 1. 파일 저장
-        status_text.text("1/4 파일 저장 중...")
-        progress_bar.progress(25)
+        status_text.text("📁 파일 저장 중...")
+        progress_bar.progress(10)
         
         pdf_path = save_uploaded_file(uploaded_file)
         
-        # 2. Pipeline 초기화
-        status_text.text("2/4 Pipeline 초기화 중...")
-        progress_bar.progress(50)
+        # 2. 파이프라인 초기화
+        status_text.text("⚙️ 파이프라인 초기화 중...")
+        progress_bar.progress(20)
         
         pipeline = Phase29Pipeline(vlm_provider=vlm_provider)
         
         # 3. 문서 처리
-        status_text.text("3/4 구조화된 분석 진행 중... (시간이 걸릴 수 있습니다)")
-        progress_bar.progress(75)
+        status_text.text("🔄 문서 처리 중... (1~2분 소요)")
+        progress_bar.progress(30)
         
         result = pipeline.process_pdf(pdf_path)
         
         # 4. 완료
-        status_text.text("4/4 처리 완료!")
         progress_bar.progress(100)
+        status_text.text("✅ 처리 완료!")
         
-        # 세션 상태 저장
+        # 결과 저장
         st.session_state.result = result
         
-        # 성공 메시지
-        st.success("✅ 구조화된 문서 처리가 완료되었습니다!")
+        st.success(f"✅ 처리 완료! ({result['metadata']['total_chunks']}개 청크 생성)")
+        st.balloons()
         
-        # 임시 파일 정리
-        try:
-            os.remove(pdf_path)
-        except:
-            pass
+        # 화면 새로고침
+        st.rerun()
         
     except Exception as e:
         st.error(f"❌ 처리 중 오류 발생: {str(e)}")
         
+        # 상세 에러 정보
         with st.expander("🔍 상세 에러 정보"):
             import traceback
             st.code(traceback.format_exc())
-    
-    finally:
-        progress_bar.empty()
-        status_text.empty()
 
 
 # ============================================================
-# 메인 UI
+# 메인 애플리케이션
 # ============================================================
 
 def main():
@@ -363,37 +377,32 @@ def main():
         unsafe_allow_html=True
     )
     
-    st.markdown('<p style="text-align: center; color: #666;">구조화된 문서 처리 시스템</p>', unsafe_allow_html=True)
+    # Phase 2.9 개선사항
+    st.markdown("""
+    <div class="improvement-box">
+        <h3 style="margin-top:0;">✨ Phase 2.9 주요 개선사항</h3>
+        <ul style="margin-bottom:0;">
+            <li><strong>구조화된 VLM 프롬프트</strong>: 섹션 헤더 자동 추출, 차트 타입 명시</li>
+            <li><strong>스마트 인코딩 수정</strong>: 한글 깨짐 자동 복구</li>
+            <li><strong>섹션 기반 청킹</strong>: 문서 구조 보존, 의미 단위 분할</li>
+            <li><strong>RAG 최적화</strong>: 키워드 추출, 메타데이터 풍부화</li>
+        </ul>
+    </div>
+    """, unsafe_allow_html=True)
     
-    # 개선사항 박스
-    with st.container():
-        st.markdown("""
-        <div class="improvement-box">
-            <h3 style="margin-top: 0;">🎉 Phase 2.9 주요 개선사항</h3>
-            <ul style="margin-bottom: 0;">
-                <li><strong>구조화된 VLM 프롬프트</strong>: 섹션/차트별 독립 분석</li>
-                <li><strong>한글 인코딩 자동 수정</strong>: 완벽한 한글 복원</li>
-                <li><strong>섹션 기반 청킹</strong>: 의미 단위 보존</li>
-                <li><strong>RAG 최적화</strong>: 검색 효율성 극대화</li>
-            </ul>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # 사이드바 설정
+    # 사이드바
     with st.sidebar:
-        st.markdown("## ⚙️ 설정")
+        st.markdown("### 🤖 VLM 프로바이더")
         
-        # VLM 선택
         vlm_provider = st.selectbox(
-            "VLM 프로바이더",
-            options=["azure_openai", "claude", "ollama"],
+            "프로바이더 선택",
+            options=['azure_openai', 'claude', 'ollama'],
             index=0,
-            help="문서 분석에 사용할 VLM 모델"
+            help="Azure OpenAI 권장 (가장 안정적)"
         )
         
         st.markdown("---")
         
-        # 정보
         st.markdown("### 📖 사용 방법")
         st.markdown("""
         1. PDF 파일 업로드
