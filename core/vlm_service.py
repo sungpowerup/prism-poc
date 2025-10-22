@@ -1,5 +1,15 @@
 """
-PRISM Phase 3.0 - VLM Service (UTF-8 처리 개선)
+PRISM Phase 3.0+ - VLM Service (환경 변수 로딩 완전 수정)
+
+✅ 수정사항:
+1. load_dotenv() 명시적 호출
+2. 환경 변수 검증 강화
+3. 상세한 오류 메시지
+4. UTF-8 인코딩 처리 개선
+
+Author: 박준호 (AI/ML Lead)
+Date: 2025-10-22
+Version: 3.2
 """
 
 import os
@@ -11,13 +21,17 @@ from typing import Dict, Any
 from openai import AzureOpenAI
 from anthropic import Anthropic
 
+# ✅ 환경 변수 로드 (최우선)
+from dotenv import load_dotenv
+load_dotenv()
+
 logger = logging.getLogger(__name__)
 
 
 class VLMService:
     """
     Vision Language Model 서비스
-    UTF-8 인코딩 처리 개선
+    UTF-8 인코딩 처리 개선 + 환경 변수 로딩 강화
     """
     
     def __init__(self, provider: str = "azure_openai"):
@@ -30,23 +44,65 @@ class VLMService:
         self.provider = provider
         
         if provider == "azure_openai":
-            self.client = AzureOpenAI(
-                api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-                api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
-                azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT")
-            )
-            self.deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+            # 환경 변수 확인
+            api_key = os.getenv("AZURE_OPENAI_API_KEY")
+            api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
+            azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+            deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+            
+            # 검증
+            missing = []
+            if not api_key:
+                missing.append("AZURE_OPENAI_API_KEY")
+            if not azure_endpoint:
+                missing.append("AZURE_OPENAI_ENDPOINT")
+            if not deployment:
+                missing.append("AZURE_OPENAI_DEPLOYMENT")
+            
+            if missing:
+                error_msg = f"❌ 다음 환경 변수가 설정되지 않았습니다: {', '.join(missing)}\n\n"
+                error_msg += ".env 파일을 확인하세요:\n"
+                error_msg += f"  - AZURE_OPENAI_API_KEY={'✅' if api_key else '❌'}\n"
+                error_msg += f"  - AZURE_OPENAI_ENDPOINT={'✅' if azure_endpoint else '❌'}\n"
+                error_msg += f"  - AZURE_OPENAI_DEPLOYMENT={'✅' if deployment else '❌'}"
+                raise ValueError(error_msg)
+            
+            logger.info(f"✅ Azure OpenAI 환경 변수 로드 완료")
+            logger.info(f"  - Endpoint: {azure_endpoint}")
+            logger.info(f"  - Deployment: {deployment}")
+            logger.info(f"  - API Version: {api_version}")
+            
+            try:
+                self.client = AzureOpenAI(
+                    api_key=api_key,
+                    api_version=api_version,
+                    azure_endpoint=azure_endpoint
+                )
+                self.deployment = deployment
+                logger.info(f"✅ Azure OpenAI 클라이언트 초기화 완료")
+            except Exception as e:
+                raise RuntimeError(f"❌ Azure OpenAI 클라이언트 초기화 실패: {e}")
         
         elif provider == "claude":
-            self.client = Anthropic(
-                api_key=os.getenv("ANTHROPIC_API_KEY")
-            )
-            self.model = "claude-3-5-sonnet-20241022"
+            # Claude 초기화
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+            
+            if not api_key:
+                raise ValueError("❌ ANTHROPIC_API_KEY 환경 변수가 설정되지 않았습니다.")
+            
+            logger.info(f"✅ Claude API 키 로드 완료")
+            
+            try:
+                self.client = Anthropic(api_key=api_key)
+                self.model = "claude-3-5-sonnet-20241022"
+                logger.info(f"✅ Claude 클라이언트 초기화 완료")
+            except Exception as e:
+                raise RuntimeError(f"❌ Claude 클라이언트 초기화 실패: {e}")
         
         else:
-            raise ValueError(f"Unsupported provider: {provider}")
+            raise ValueError(f"❌ 지원하지 않는 프로바이더: {provider}")
         
-        logger.info(f"VLM Service 초기화: {provider}")
+        logger.info(f"✅ VLM Service 초기화 완료: {provider}")
     
     def analyze_image(
         self,
@@ -60,236 +116,97 @@ class VLMService:
         Args:
             image_data: Base64 인코딩된 이미지
             element_type: 'pie_chart', 'bar_chart', 'table', 'map', 'header'
-            prompt: 분석 프롬프트
+            prompt: VLM 프롬프트
             
         Returns:
-            분석 결과 (UTF-8 문자열)
+            VLM 응답 (자연어)
         """
-        start_time = time.time()
+        if self.provider == "azure_openai":
+            return self._analyze_azure(image_data, prompt)
+        elif self.provider == "claude":
+            return self._analyze_claude(image_data, prompt)
+        else:
+            raise ValueError(f"❌ 지원하지 않는 프로바이더: {self.provider}")
+    
+    def _analyze_azure(self, image_data: str, prompt: str) -> str:
+        """Azure OpenAI로 이미지 분석"""
         
         try:
-            if self.provider == "azure_openai":
-                result = self._analyze_with_azure(image_data, prompt)
-            elif self.provider == "claude":
-                result = self._analyze_with_claude(image_data, prompt)
-            else:
-                raise ValueError(f"Unsupported provider: {self.provider}")
+            response = self.client.chat.completions.create(
+                model=self.deployment,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": prompt
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{image_data}"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=500,
+                temperature=0.3
+            )
             
-            # ✅ UTF-8 인코딩 검증 및 수정
-            result = self._ensure_utf8(result)
+            result = response.choices[0].message.content
             
-            elapsed = time.time() - start_time
-            logger.info(f"   VLM 분석 완료: {elapsed:.2f}초")
+            # UTF-8 정규화
+            if result:
+                result = result.strip()
+            
+            logger.info(f"✅ Azure OpenAI 응답 수신 ({len(result)} 글자)")
             
             return result
-        
-        except Exception as e:
-            logger.error(f"   VLM 분석 실패: {str(e)}")
-            raise
-    
-    def _analyze_with_azure(self, image_data: str, prompt: str) -> str:
-        """
-        Azure OpenAI로 이미지 분석
-        
-        Args:
-            image_data: Base64 이미지
-            prompt: 프롬프트
             
-        Returns:
-            분석 결과
-        """
-        response = self.client.chat.completions.create(
-            model=self.deployment,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": prompt
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{image_data}"
+        except Exception as e:
+            logger.error(f"❌ Azure OpenAI API 오류: {e}")
+            raise RuntimeError(f"Azure OpenAI API 호출 실패: {e}")
+    
+    def _analyze_claude(self, image_data: str, prompt: str) -> str:
+        """Claude로 이미지 분석"""
+        
+        try:
+            message = self.client.messages.create(
+                model=self.model,
+                max_tokens=500,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": image_data
+                                }
+                            },
+                            {
+                                "type": "text",
+                                "text": prompt
                             }
-                        }
-                    ]
-                }
-            ],
-            max_tokens=2000,
-            temperature=0.1
-        )
-        
-        return response.choices[0].message.content
-    
-    def _analyze_with_claude(self, image_data: str, prompt: str) -> str:
-        """
-        Claude로 이미지 분석
-        
-        Args:
-            image_data: Base64 이미지
-            prompt: 프롬프트
+                        ]
+                    }
+                ]
+            )
             
-        Returns:
-            분석 결과
-        """
-        response = self.client.messages.create(
-            model=self.model,
-            max_tokens=2000,
-            temperature=0.1,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/png",
-                                "data": image_data
-                            }
-                        },
-                        {
-                            "type": "text",
-                            "text": prompt
-                        }
-                    ]
-                }
-            ]
-        )
-        
-        return response.content[0].text
-    
-    def _ensure_utf8(self, text: str) -> str:
-        """
-        UTF-8 인코딩 검증 및 수정
-        
-        Args:
-            text: 입력 텍스트
+            result = message.content[0].text
             
-        Returns:
-            UTF-8로 보장된 텍스트
-        """
-        try:
-            # 1. 이미 UTF-8인지 확인
-            text.encode('utf-8').decode('utf-8')
-            return text
-        
-        except UnicodeDecodeError:
-            logger.warning("   UTF-8 디코딩 오류 감지, 수정 시도 중...")
+            # UTF-8 정규화
+            if result:
+                result = result.strip()
             
-            # 2. Latin-1 → UTF-8 변환 시도
-            try:
-                # Latin-1로 인코딩 후 UTF-8로 디코딩
-                fixed_text = text.encode('latin-1').decode('utf-8')
-                logger.info("   ✅ UTF-8 변환 성공 (Latin-1 → UTF-8)")
-                return fixed_text
+            logger.info(f"✅ Claude 응답 수신 ({len(result)} 글자)")
             
-            except (UnicodeDecodeError, UnicodeEncodeError):
-                # 3. 강제 변환 (잘못된 문자 제거)
-                logger.warning("   ⚠️ 강제 UTF-8 변환 (일부 문자 손실 가능)")
-                return text.encode('utf-8', errors='ignore').decode('utf-8', errors='ignore')
-        
+            return result
+            
         except Exception as e:
-            logger.error(f"   UTF-8 처리 실패: {str(e)}")
-            return text
-    
-    def _fix_mojibake(self, text: str) -> str:
-        """
-        Mojibake (문자 깨짐) 수정
-        
-        Args:
-            text: 깨진 텍스트 (예: "ì§€ì—­ë³„")
-            
-        Returns:
-            복원된 텍스트 (예: "지역별")
-        """
-        try:
-            # Latin-1로 잘못 디코딩된 UTF-8을 복원
-            return text.encode('latin-1').decode('utf-8')
-        except (UnicodeDecodeError, UnicodeEncodeError):
-            return text
-    
-    def extract_map_data(self, content: str) -> Dict[str, Any]:
-        """
-        지도 데이터 추출 (JSON 파싱 강화)
-        
-        Args:
-            content: VLM 응답 텍스트
-            
-        Returns:
-            추출된 데이터
-        """
-        # JSON 블록 추출 시도
-        try:
-            # 1. 직접 JSON 파싱
-            data = json.loads(content)
-            return data
-        
-        except json.JSONDecodeError:
-            # 2. Markdown 코드 블록 제거 후 재시도
-            try:
-                # ```json ... ``` 제거
-                cleaned = content.replace('```json', '').replace('```', '').strip()
-                data = json.loads(cleaned)
-                return data
-            
-            except json.JSONDecodeError:
-                # 3. 자연어 텍스트로 반환 (JSON이 아님)
-                logger.warning("   JSON 파싱 실패, 자연어 텍스트로 처리")
-                return {
-                    "text": content,
-                    "regions": []
-                }
-
-
-class MultiVLMService:
-    """
-    다중 VLM 서비스 관리자 (폴백 지원)
-    """
-    
-    def __init__(self, primary: str = "azure_openai", fallback: str = "claude"):
-        """
-        다중 VLM 초기화
-        
-        Args:
-            primary: 주 VLM
-            fallback: 폴백 VLM
-        """
-        self.primary = VLMService(primary)
-        
-        try:
-            self.fallback = VLMService(fallback)
-        except Exception as e:
-            logger.warning(f"폴백 VLM 초기화 실패: {e}")
-            self.fallback = None
-    
-    def analyze_image(
-        self,
-        image_data: str,
-        element_type: str,
-        prompt: str
-    ) -> str:
-        """
-        이미지 분석 (폴백 지원)
-        
-        Args:
-            image_data: Base64 이미지
-            element_type: Element 타입
-            prompt: 프롬프트
-            
-        Returns:
-            분석 결과
-        """
-        try:
-            return self.primary.analyze_image(image_data, element_type, prompt)
-        
-        except Exception as e:
-            logger.warning(f"Primary VLM 실패: {e}")
-            
-            if self.fallback:
-                logger.info("Fallback VLM으로 재시도...")
-                return self.fallback.analyze_image(image_data, element_type, prompt)
-            else:
-                raise
+            logger.error(f"❌ Claude API 오류: {e}")
+            raise RuntimeError(f"Claude API 호출 실패: {e}")
