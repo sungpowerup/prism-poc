@@ -1,13 +1,13 @@
 """
-PRISM Phase 3.2 - Streamlit Web Application (Fixed)
+PRISM Phase 3.2 - Streamlit Web Application (VLMService 수정)
 
 ✅ 수정사항:
-- Phase32Pipeline 초기화 방식 수정
-- PDFProcessor, LayoutDetector, VLMService, Storage 직접 전달
+- VLMService 초기화 시 provider만 전달 (api_key 제거)
+- VLMService가 내부적으로 환경 변수 로드
 
 Author: 최동현 (Frontend Lead)
 Date: 2025-10-22
-Version: 3.2 (Fixed)
+Version: 3.2.1 (VLMService Fix)
 """
 
 import streamlit as st
@@ -119,7 +119,7 @@ def main():
         # VLM 프로바이더 선택
         available_providers = []
         if AZURE_API_KEY and AZURE_ENDPOINT:
-            available_providers.append('azure')
+            available_providers.append('azure_openai')
         if ANTHROPIC_API_KEY:
             available_providers.append('claude')
         
@@ -137,7 +137,7 @@ def main():
             "VLM 프로바이더",
             options=available_providers,
             format_func=lambda x: {
-                'azure': '🔷 Azure OpenAI',
+                'azure_openai': '🔷 Azure OpenAI',
                 'claude': '🟣 Anthropic Claude'
             }.get(x, x)
         )
@@ -166,38 +166,25 @@ def main():
         1. PDF 파일 업로드
         2. VLM 프로바이더 선택
         3. '처리 시작' 클릭
-        4. 결과 확인
-        """)
-        
-        st.markdown("---")
-        st.markdown("### 🎯 Phase 3.2 특징")
-        st.markdown("""
-        - ✅ 최소 Region 감지 (6-8개/페이지)
-        - ✅ 고정밀 필터링
-        - ✅ 빠른 처리 속도
-        - ✅ 비용 최소화
+        4. 결과 확인 및 다운로드
         """)
     
-    # 메인 영역
-    st.markdown("## 📤 PDF 문서 업로드")
-    
+    # 메인 컨텐츠
     uploaded_file = st.file_uploader(
-        "PDF 파일을 선택하세요",
+        "📄 PDF 파일 업로드",
         type=['pdf'],
-        help="최대 200MB, 20페이지 권장"
+        help="최대 200MB, 최대 50페이지"
     )
     
     if uploaded_file:
         # 파일 정보
-        file_size_mb = uploaded_file.size / (1024 * 1024)
-        
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("파일명", uploaded_file.name)
         with col2:
-            st.metric("크기", f"{file_size_mb:.2f} MB")
+            st.metric("크기", f"{uploaded_file.size / 1024 / 1024:.2f} MB")
         with col3:
-            st.metric("VLM", vlm_provider.upper())
+            st.metric("타입", uploaded_file.type)
         
         # 처리 버튼
         if st.button("🚀 처리 시작", type="primary", use_container_width=True):
@@ -208,52 +195,38 @@ def main():
         display_results(st.session_state.result)
 
 
-def process_pdf(uploaded_file, vlm_provider, max_pages):
+def process_pdf(uploaded_file, vlm_provider: str, max_pages: int):
     """PDF 처리"""
-    
-    # 임시 파일 저장
-    temp_dir = Path("temp")
-    temp_dir.mkdir(exist_ok=True)
-    
-    pdf_path = temp_dir / uploaded_file.name
-    with open(pdf_path, 'wb') as f:
-        f.write(uploaded_file.getbuffer())
-    
     try:
         # 프로그레스 바
         progress_bar = st.progress(0)
         status_text = st.empty()
         
         # ==========================================
-        # Stage 1: 모듈 초기화
+        # Stage 1: 파일 저장 및 모듈 초기화
         # ==========================================
-        status_text.text("⚙️ Phase 3.2 모듈 초기화 중...")
+        status_text.text("⏳ 모듈 초기화 중...")
         progress_bar.progress(10)
         
-        # PDFProcessor
-        pdf_processor = PDFProcessor()
+        # 임시 파일 저장
+        input_dir = Path("data/input")
+        input_dir.mkdir(parents=True, exist_ok=True)
         
-        # LayoutDetectorV32
+        pdf_path = input_dir / uploaded_file.name
+        pdf_path.write_bytes(uploaded_file.read())
+        
+        # 모듈 초기화
+        pdf_processor = PDFProcessor()
         layout_detector = LayoutDetectorV32()
         
-        # VLMService
-        if vlm_provider == 'azure':
-            vlm_service = VLMService(
-                provider='azure',
-                api_key=AZURE_API_KEY,
-                endpoint=AZURE_ENDPOINT,
-                deployment_name=AZURE_DEPLOYMENT
-            )
-        else:  # claude
-            vlm_service = VLMService(
-                provider='claude',
-                api_key=ANTHROPIC_API_KEY
-            )
+        # ✅ 수정: VLMService는 provider만 전달
+        # VLMService가 내부적으로 환경 변수를 로드함
+        vlm_service = VLMService(provider=vlm_provider)
         
         # Storage
         storage = Storage('data/prism_poc.db')
         
-        # Phase32Pipeline 초기화 (수정된 방식)
+        # Phase32Pipeline 초기화
         pipeline = Phase32Pipeline(
             pdf_processor=pdf_processor,
             layout_detector=layout_detector,
@@ -286,82 +259,95 @@ def process_pdf(uploaded_file, vlm_provider, max_pages):
         - ✅ 성공: {result['success_count']}개
         - ❌ 실패: {result['failed_count']}개
         - 🔥 VLM API 호출: {result['vlm_calls']}회
-        - ⏱️  처리 시간: {result['total_time_sec']:.2f}초
+        - ⏱️  처리 시간: {result['total_time_sec']:.1f}초
         - 🎯 평균 신뢰도: {result['avg_confidence']:.2%}
         """)
         
     except Exception as e:
         st.error(f"❌ 처리 중 오류 발생: {e}")
         
-        # 상세 에러 정보
-        import traceback
         with st.expander("🔍 상세 에러 정보"):
+            import traceback
             st.code(traceback.format_exc())
 
 
-def display_results(result):
+def display_results(result: dict):
     """결과 표시"""
-    
+    st.markdown("---")
     st.markdown("## 📊 처리 결과")
     
-    # 메트릭
+    # 메트릭 카드
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("전체 페이지", result['total_pages'])
+        st.metric(
+            "총 Region",
+            f"{result['total_regions']}개",
+            help="감지된 전체 영역 수"
+        )
     
     with col2:
-        st.metric("감지된 Region", result['total_regions'])
+        st.metric(
+            "성공률",
+            f"{result['success_count'] / result['total_regions'] * 100:.1f}%",
+            help="성공적으로 처리된 비율"
+        )
     
     with col3:
-        st.metric("VLM 호출", result['vlm_calls'])
+        st.metric(
+            "처리 시간",
+            f"{result['total_time_sec']:.1f}초",
+            help="전체 처리 소요 시간"
+        )
     
     with col4:
-        st.metric("처리 시간", f"{result['total_time_sec']:.1f}초")
+        st.metric(
+            "평균 신뢰도",
+            f"{result['avg_confidence']:.1%}",
+            help="VLM 처리 평균 신뢰도"
+        )
     
-    # Region별 상세 결과
-    st.markdown("### 🔍 Region별 결과")
+    # 상세 결과
+    with st.expander("📋 상세 결과 보기"):
+        st.json(result)
     
-    for i, region_result in enumerate(result['results'], start=1):
-        with st.expander(
-            f"Region {i} - Page {region_result['page']} - "
-            f"{region_result['region_type']} "
-            f"(신뢰도: {region_result['confidence']:.2%})"
-        ):
-            col1, col2 = st.columns([1, 2])
-            
-            with col1:
-                st.markdown("**정보**")
-                st.text(f"Region ID: {region_result['region_id']}")
-                st.text(f"페이지: {region_result['page']}")
-                st.text(f"타입: {region_result['region_type']}")
-                st.text(f"상태: {region_result['status']}")
-                
-                if 'bbox' in region_result:
-                    bbox = region_result['bbox']
-                    st.text(f"위치: ({bbox[0]}, {bbox[1]})")
-                    st.text(f"크기: {bbox[2]}x{bbox[3]}")
-            
-            with col2:
-                st.markdown("**VLM 변환 결과**")
-                
-                if region_result['status'] == 'success':
-                    st.success(region_result['caption'])
-                else:
-                    st.error(f"오류: {region_result.get('error', 'Unknown')}")
+    # 다운로드 버튼
+    col1, col2 = st.columns(2)
     
-    # JSON 다운로드
-    st.markdown("### 💾 결과 다운로드")
+    with col1:
+        # JSON 다운로드
+        json_str = json.dumps(result, indent=2, ensure_ascii=False)
+        st.download_button(
+            label="📥 JSON 다운로드",
+            data=json_str,
+            file_name=f"prism_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+            mime="application/json"
+        )
     
-    json_str = json.dumps(result, ensure_ascii=False, indent=2)
-    
-    st.download_button(
-        label="📥 JSON 다운로드",
-        data=json_str,
-        file_name=f"prism_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-        mime="application/json"
-    )
+    with col2:
+        # Markdown 다운로드
+        md_content = f"""# PRISM Phase 3.2 처리 결과
+
+## 요약
+- 총 Region: {result['total_regions']}개
+- 성공: {result['success_count']}개
+- 실패: {result['failed_count']}개
+- VLM 호출: {result['vlm_calls']}회
+- 처리 시간: {result['total_time_sec']:.1f}초
+- 평균 신뢰도: {result['avg_confidence']:.2%}
+
+## 상세 결과
+```json
+{json.dumps(result, indent=2, ensure_ascii=False)}
+```
+"""
+        st.download_button(
+            label="📥 Markdown 다운로드",
+            data=md_content,
+            file_name=f"prism_result_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md",
+            mime="text/markdown"
+        )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

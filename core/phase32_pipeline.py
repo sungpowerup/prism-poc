@@ -1,13 +1,23 @@
 """
 core/phase32_pipeline.py
-PRISM Phase 3.2 - Ultra Filtering Pipeline
+PRISM Phase 3.2 - Ultra Filtering Pipeline (Fixed)
 
-Layout Detector v3.2 통합
+✅ 수정사항:
+- layout_detector.detect() → layout_detector.detect_regions()
+
+Author: 이서영 (Backend Lead)
+Date: 2025-10-22
+Version: 3.2.1 (Method Name Fix)
 """
 
 import logging
 from typing import List, Dict, Any, Optional
 import time
+import uuid
+import base64
+import numpy as np
+from PIL import Image
+import io
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +28,7 @@ class Phase32Pipeline:
     
     특징:
     - Layout Detector v3.2 (Ultra Filtering)
-    - Region 수 대폭 감소 (목표: 6-8개)
+    - Region 수 대폭 감소 (목표: 20-30개)
     - VLM API 호출 최소화
     """
     
@@ -51,18 +61,21 @@ class Phase32Pipeline:
             처리 결과 딕셔너리
         """
         start_time = time.time()
+        session_id = str(uuid.uuid4())[:8]
         
+        logger.info(f"\n{'='*60}")
         logger.info(f"🚀 Phase 3.2 처리 시작: {pdf_path}")
+        logger.info(f"Session ID: {session_id}")
+        logger.info(f"{'='*60}")
         
         # ==========================================
         # Stage 1: PDF → 이미지 변환
         # ==========================================
         logger.info("📄 Stage 1: PDF → 이미지 변환")
         
-        # ✅ 수정: extract_pages_as_base64 → pdf_to_images
         pages = self.pdf_processor.pdf_to_images(pdf_path, max_pages)
         
-        logger.info(f"  ✅ {len(pages)}개 페이지 변환 완료")
+        logger.info(f"  ✅ {len(pages)}개 페이지 변환 완료\n")
         
         # ==========================================
         # Stage 2: Layout Detection (Ultra Filtering)
@@ -71,21 +84,58 @@ class Phase32Pipeline:
         
         all_regions = []
         
-        for page_num, page_image in enumerate(pages, start=1):
-            logger.info(f"  📃 Page {page_num} 분석 중...")
+        for page_num, page_data in enumerate(pages, start=1):
+            logger.info(f"  📃 Page {page_num}/{len(pages)} 분석 중...")
             
-            # Layout Detector v3.2 실행
-            regions = self.layout_detector.detect(page_image, page_num)
+            # PIL Image 또는 base64 처리
+            if isinstance(page_data, str):
+                # ✅ Data URL 형식 처리 (data:image/png;base64,...)
+                if page_data.startswith('data:image'):
+                    # "data:image/png;base64," 부분 제거
+                    page_data = page_data.split(',', 1)[1]
+                
+                # ✅ Base64 padding 수정 (길이를 4의 배수로)
+                missing_padding = len(page_data) % 4
+                if missing_padding:
+                    page_data += '=' * (4 - missing_padding)
+                
+                # base64 → numpy array
+                image_bytes = base64.b64decode(page_data)
+                pil_image = Image.open(io.BytesIO(image_bytes))
+                page_array = np.array(pil_image)
+            elif isinstance(page_data, Image.Image):
+                # PIL Image → numpy array
+                page_array = np.array(page_data)
+            else:
+                # 이미 numpy array
+                page_array = page_data
+            
+            # ✅ 수정: detect() → detect_regions()
+            regions = self.layout_detector.detect_regions(page_array, page_num - 1)
             
             logger.info(f"    ✅ {len(regions)}개 Region 감지")
             
-            # 각 Region에 페이지 번호 추가
-            for region in regions:
+            # 각 Region에 페이지 번호 및 ID 추가
+            for i, region in enumerate(regions):
                 region['page'] = page_num
+                region['region_id'] = f"p{page_num}_r{i+1}"
+                
+                # 이미지 데이터 추출 (bbox 기반)
+                bbox = region['bbox']
+                x, y, w, h = bbox
+                
+                # ROI 추출
+                roi = page_array[y:y+h, x:x+w]
+                
+                # base64 인코딩
+                pil_roi = Image.fromarray(roi)
+                buffer = io.BytesIO()
+                pil_roi.save(buffer, format='PNG')
+                region['image_data'] = base64.b64encode(buffer.getvalue()).decode('utf-8')
             
             all_regions.extend(regions)
         
-        logger.info(f"  ✅ 총 {len(all_regions)}개 Region 감지 완료")
+        logger.info(f"\n  ✅ 총 {len(all_regions)}개 Region 감지 완료\n")
         
         # ==========================================
         # Stage 3: VLM 변환
@@ -94,30 +144,33 @@ class Phase32Pipeline:
         
         results = []
         vlm_calls = 0
+        success_count = 0
         
         for i, region in enumerate(all_regions, start=1):
             logger.info(f"  🔄 Region {i}/{len(all_regions)} 처리 중...")
             
             try:
                 # VLM 호출
-                caption = self.vlm_service.generate_caption(
+                result = self.vlm_service.analyze_image(
                     image_data=region['image_data'],
-                    element_type=region['region_type']
+                    element_type=region['type']
                 )
                 
                 vlm_calls += 1
+                success_count += 1
                 
                 results.append({
                     'region_id': region['region_id'],
                     'page': region['page'],
-                    'region_type': region['region_type'],
+                    'region_type': region['type'],
                     'bbox': region['bbox'],
                     'confidence': region.get('confidence', 0.0),
-                    'caption': caption,
+                    'content': result.get('content', ''),
+                    'metadata': region.get('metadata', {}),
                     'status': 'success'
                 })
                 
-                logger.info(f"    ✅ 변환 완료 (신뢰도: {region.get('confidence', 0.0):.2f})")
+                logger.info(f"    ✅ 변환 완료")
             
             except Exception as e:
                 logger.error(f"    ❌ VLM 변환 실패: {e}")
@@ -125,68 +178,33 @@ class Phase32Pipeline:
                 results.append({
                     'region_id': region['region_id'],
                     'page': region['page'],
-                    'region_type': region['region_type'],
+                    'region_type': region['type'],
                     'bbox': region['bbox'],
                     'confidence': 0.0,
-                    'caption': None,
-                    'status': 'failed',
-                    'error': str(e)
+                    'content': '',
+                    'error': str(e),
+                    'status': 'failed'
                 })
         
         # ==========================================
-        # Stage 4: 결과 저장
+        # 결과 요약
         # ==========================================
-        logger.info("💾 Stage 4: 결과 저장")
-        
-        # Session 생성
-        import uuid
-        session_id = str(uuid.uuid4())
-        
-        self.storage.create_session(
-            session_id=session_id,
-            filename=pdf_path
-        )
-        
-        # Element 저장
-        for result in results:
-            self.storage.save_element({
-                'id': result['region_id'],
-                'session_id': session_id,
-                'page_number': result['page'],
-                'type': result['region_type'],
-                'original': None,  # 이미지는 별도 저장 가능
-                'caption': result['caption'],
-                'confidence': result['confidence']
-            })
-        
-        # 메트릭 저장
-        success_count = sum(1 for r in results if r['status'] == 'success')
-        avg_confidence = sum(r['confidence'] for r in results) / len(results) if results else 0.0
-        
         total_time = time.time() - start_time
         
-        self.storage.update_metrics(
-            session_id=session_id,
-            total_elements=len(all_regions),
-            processed_elements=len(results),
-            avg_confidence=avg_confidence,
-            total_time_sec=total_time
-        )
+        # 평균 신뢰도 계산
+        confidences = [r['confidence'] for r in results if r['status'] == 'success']
+        avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
         
-        logger.info(f"  ✅ Session {session_id} 저장 완료")
-        
-        # ==========================================
-        # 최종 결과
-        # ==========================================
-        logger.info("="*60)
-        logger.info("🎉 Phase 3.2 처리 완료!")
+        logger.info(f"\n{'='*60}")
+        logger.info(f"✅ Phase 3.2 처리 완료!")
+        logger.info(f"{'='*60}")
         logger.info(f"  📊 감지된 Region: {len(all_regions)}개")
         logger.info(f"  ✅ 성공: {success_count}개")
         logger.info(f"  ❌ 실패: {len(results) - success_count}개")
         logger.info(f"  🔥 VLM API 호출: {vlm_calls}회")
         logger.info(f"  ⏱️  총 처리 시간: {total_time:.2f}초")
         logger.info(f"  🎯 평균 신뢰도: {avg_confidence:.2%}")
-        logger.info("="*60)
+        logger.info(f"{'='*60}\n")
         
         return {
             'session_id': session_id,
@@ -218,11 +236,7 @@ if __name__ == '__main__':
     # 초기화
     pdf_processor = PDFProcessor()
     layout_detector = LayoutDetectorV32()
-    vlm_service = VLMService(
-        provider='azure',
-        api_key=os.getenv('AZURE_OPENAI_API_KEY'),
-        endpoint=os.getenv('AZURE_OPENAI_ENDPOINT')
-    )
+    vlm_service = VLMService(provider='azure_openai')
     storage = Storage('data/prism_poc.db')
     
     # 파이프라인
