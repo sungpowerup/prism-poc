@@ -2,15 +2,14 @@
 core/phase33_pipeline.py
 PRISM Phase 3.3 - Balanced Filtering Pipeline
 
-✅ 핵심 개선:
-1. Layout Detector v3.3 사용 (Balanced)
-2. VLM 프롬프트 개선 (경쟁사 수준 추출)
-3. 에러 처리 강화
-4. 진행 상황 피드백
+✅ 최종 수정 v3 (2025-10-22):
+- VLM 응답 검증 로직 완전 수정
+- 디버깅 로그 강화
+- 에러 핸들링 개선
 
 Author: 이서영 (Backend Lead)
 Date: 2025-10-22
-Version: 3.3 (Balanced)
+Version: 3.3.3 (최종)
 """
 
 import logging
@@ -300,12 +299,16 @@ JSON 형식으로 반환:
                 
                 vlm_result = self.vlm_service.analyze_image(
                     image_data=region['image_data'],
+                    element_type=region_type,
                     prompt=prompt
                 )
                 
-                if vlm_result and 'content' in vlm_result:
+                # ✅ 수정: 단순 검증 (빈 문자열만 체크)
+                logger.info(f"   VLM 응답 타입: {type(vlm_result)}, 길이: {len(vlm_result) if vlm_result else 0}")
+                
+                if vlm_result:  # None이 아니고 빈 문자열이 아니면 성공
                     success_count += 1
-                    logger.info(f"   ✅ 성공")
+                    logger.info(f"   ✅ 성공 ({len(vlm_result)} 글자)")
                     
                     results.append({
                         'region_id': region['region_id'],
@@ -313,16 +316,18 @@ JSON 형식으로 반환:
                         'type': region_type,
                         'bbox': region['bbox'],
                         'confidence': region['confidence'],
-                        'vlm_result': vlm_result['content'],
+                        'vlm_result': vlm_result,
                         'metadata': region.get('metadata', {})
                     })
                 else:
                     error_count += 1
-                    logger.warning(f"   ⚠️ VLM 결과 없음")
+                    logger.warning(f"   ⚠️ VLM 결과 없음 (빈 응답)")
                     
             except Exception as e:
                 error_count += 1
                 logger.error(f"   ❌ 실패: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
                 continue
         
         logger.info(f"\n✅ VLM 변환 완료: 성공 {success_count}개, 실패 {error_count}개")
@@ -361,7 +366,8 @@ JSON 형식으로 반환:
         logger.info(f"🎉 Phase 3.3 처리 완료")
         logger.info(f"   - 처리 시간: {processing_time:.1f}초")
         logger.info(f"   - Region 감지: {len(all_regions)}개")
-        logger.info(f"   - VLM 성공: {success_count}개 ({success_count/len(all_regions)*100:.1f}%)")
+        if len(all_regions) > 0:
+            logger.info(f"   - VLM 성공: {success_count}개 ({success_count/len(all_regions)*100:.1f}%)")
         logger.info(f"{'='*60}\n")
         
         return result

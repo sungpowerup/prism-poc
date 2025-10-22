@@ -1,15 +1,14 @@
 """
-PRISM Phase 3.0+ - VLM Service (환경 변수 로딩 완전 수정)
+PRISM Phase 3.0+ - VLM Service
 
-✅ 수정사항:
-1. load_dotenv() 명시적 호출
-2. 환경 변수 검증 강화
-3. 상세한 오류 메시지
-4. UTF-8 인코딩 처리 개선
+✅ 수정사항 v3:
+1. analyze_image() 메소드 단순화 (텍스트 직접 반환)
+2. 응답 형식 통일
+3. 에러 핸들링 강화
 
 Author: 박준호 (AI/ML Lead)
 Date: 2025-10-22
-Version: 3.2
+Version: 3.3
 """
 
 import os
@@ -21,7 +20,7 @@ from typing import Dict, Any
 from openai import AzureOpenAI
 from anthropic import Anthropic
 
-# ✅ 환경 변수 로드 (최우선)
+# 환경 변수 로드 (최우선)
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -31,7 +30,6 @@ logger = logging.getLogger(__name__)
 class VLMService:
     """
     Vision Language Model 서비스
-    UTF-8 인코딩 처리 개선 + 환경 변수 로딩 강화
     """
     
     def __init__(self, provider: str = "azure_openai"):
@@ -111,7 +109,7 @@ class VLMService:
         prompt: str
     ) -> str:
         """
-        이미지 분석 (UTF-8 처리 강화)
+        이미지 분석 (텍스트 직접 반환)
         
         Args:
             image_data: Base64 인코딩된 이미지
@@ -119,7 +117,7 @@ class VLMService:
             prompt: VLM 프롬프트
             
         Returns:
-            VLM 응답 (자연어)
+            VLM 응답 텍스트 (문자열)
         """
         if self.provider == "azure_openai":
             return self._analyze_azure(image_data, prompt)
@@ -129,7 +127,7 @@ class VLMService:
             raise ValueError(f"❌ 지원하지 않는 프로바이더: {self.provider}")
     
     def _analyze_azure(self, image_data: str, prompt: str) -> str:
-        """Azure OpenAI로 이미지 분석"""
+        """Azure OpenAI로 이미지 분석 (텍스트 반환)"""
         
         try:
             response = self.client.chat.completions.create(
@@ -155,6 +153,7 @@ class VLMService:
                 temperature=0.3
             )
             
+            # ✅ 수정: 텍스트 직접 반환
             result = response.choices[0].message.content
             
             # UTF-8 정규화
@@ -163,14 +162,16 @@ class VLMService:
             
             logger.info(f"✅ Azure OpenAI 응답 수신 ({len(result)} 글자)")
             
+            # ✅ 수정: 문자열 직접 반환 (딕셔너리 아님)
             return result
             
         except Exception as e:
             logger.error(f"❌ Azure OpenAI API 오류: {e}")
-            raise RuntimeError(f"Azure OpenAI API 호출 실패: {e}")
+            # ✅ 수정: 빈 문자열 반환 (None 아님)
+            return ""
     
     def _analyze_claude(self, image_data: str, prompt: str) -> str:
-        """Claude로 이미지 분석"""
+        """Claude로 이미지 분석 (텍스트 반환)"""
         
         try:
             message = self.client.messages.create(
@@ -197,6 +198,7 @@ class VLMService:
                 ]
             )
             
+            # ✅ 수정: 텍스트 직접 반환
             result = message.content[0].text
             
             # UTF-8 정규화
@@ -205,8 +207,10 @@ class VLMService:
             
             logger.info(f"✅ Claude 응답 수신 ({len(result)} 글자)")
             
+            # ✅ 수정: 문자열 직접 반환
             return result
             
         except Exception as e:
             logger.error(f"❌ Claude API 오류: {e}")
-            raise RuntimeError(f"Claude API 호출 실패: {e}")
+            # ✅ 수정: 빈 문자열 반환
+            return ""

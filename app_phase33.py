@@ -8,9 +8,14 @@ PRISM Phase 3.3 - Balanced Filtering (Streamlit UI)
 3. 일반 텍스트 영역 감지
 4. 실시간 진행 상황 표시
 
+✅ 수정 v2 (2025-10-22):
+- VLM provider 이름 통일
+- 빈 결과 처리 로직 추가
+- 에러 핸들링 강화
+
 Author: 최동현 (Frontend Lead)
 Date: 2025-10-22
-Version: 3.3 (Balanced)
+Version: 3.3.2 (에러 수정)
 """
 
 import streamlit as st
@@ -37,7 +42,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Core 모듈 임포트 (수정: 올바른 경로)
+# Core 모듈 임포트
 try:
     from core.pdf_processor import PDFProcessor
     from core.layout_detector_v3 import LayoutDetectorV33
@@ -122,12 +127,19 @@ with st.sidebar:
     st.header("⚙️ 설정")
     
     # VLM 프로바이더 선택
-    vlm_provider = st.selectbox(
+    vlm_provider_display = st.selectbox(
         "VLM 프로바이더",
-        ["azure", "claude"],
+        ["Azure OpenAI", "Claude"],
         index=0,
         help="사용할 VLM API 프로바이더"
     )
+    
+    # Display 이름을 실제 provider 이름으로 변환
+    vlm_provider_map = {
+        "Azure OpenAI": "azure_openai",
+        "Claude": "claude"
+    }
+    vlm_provider = vlm_provider_map[vlm_provider_display]
     
     st.divider()
     
@@ -279,7 +291,12 @@ with tab1:
                     success_rate = (result['vlm_success'] / result['regions_detected'] * 100) if result['regions_detected'] > 0 else 0
                     st.metric("📊 성공률", f"{success_rate:.1f}%")
                 
-                st.info("💡 **결과 보기** 탭에서 상세 결과를 확인하세요!")
+                # ✅ 성공 여부에 따른 메시지
+                if result['vlm_success'] > 0:
+                    st.info("💡 **결과 보기** 탭에서 상세 결과를 확인하세요!")
+                else:
+                    st.warning("⚠️ VLM 변환에 실패했습니다. 로그를 확인하세요.")
+                    st.error(f"Region은 {result['regions_detected']}개 감지되었으나, VLM 변환이 모두 실패했습니다.")
                 
             except Exception as e:
                 logger.error(f"❌ 처리 실패: {e}")
@@ -298,111 +315,141 @@ with tab2:
     else:
         result = st.session_state['result']
         
-        # 전체 요약
-        st.subheader("📈 전체 요약")
-        
-        col1, col2, col3, col4, col5 = st.columns(5)
-        
-        with col1:
-            st.metric("📄 페이지", result['pages_processed'])
-        
-        with col2:
-            st.metric("🔍 Region", result['regions_detected'])
-        
-        with col3:
-            st.metric("✅ 성공", result['vlm_success'])
-        
-        with col4:
-            st.metric("❌ 실패", result['vlm_errors'])
-        
-        with col5:
-            success_rate = (result['vlm_success'] / result['regions_detected'] * 100) if result['regions_detected'] > 0 else 0
-            st.metric("📊 성공률", f"{success_rate:.1f}%")
-        
-        st.divider()
-        
-        # 페이지별 결과
-        st.subheader("📄 페이지별 결과")
-        
-        # 페이지 그룹핑
-        pages = {}
-        for item in result['results']:
-            page_num = item['page_num']
-            if page_num not in pages:
-                pages[page_num] = []
-            pages[page_num].append(item)
-        
-        # 페이지 선택
-        page_num = st.selectbox(
-            "페이지 선택",
-            options=sorted(pages.keys()),
-            format_func=lambda x: f"📄 페이지 {x}"
-        )
-        
-        # 선택된 페이지의 결과
-        page_results = pages[page_num]
-        
-        st.info(f"📊 페이지 {page_num}: **{len(page_results)}개** Region 추출")
-        
-        # Region 타입별 개수
-        type_counts = {}
-        for item in page_results:
-            region_type = item['type']
-            type_counts[region_type] = type_counts.get(region_type, 0) + 1
-        
-        st.write("**타입별 분포:**")
-        cols = st.columns(len(type_counts))
-        for i, (region_type, count) in enumerate(type_counts.items()):
-            with cols[i]:
-                st.metric(f"📌 {region_type}", f"{count}개")
-        
-        st.divider()
-        
-        # 각 Region 상세 보기
-        for i, item in enumerate(page_results):
-            with st.expander(f"🔍 Region {i+1}: {item['type']} (confidence: {item['confidence']:.2f})", expanded=(i==0)):
-                col1, col2 = st.columns([1, 2])
+        # ✅ 빈 결과 처리
+        if not result.get('results') or len(result['results']) == 0:
+            st.warning("⚠️ 추출된 결과가 없습니다.")
+            st.error(f"""
+            **문제 분석:**
+            - Region 감지: {result.get('regions_detected', 0)}개
+            - VLM 성공: {result.get('vlm_success', 0)}개
+            - VLM 실패: {result.get('vlm_errors', 0)}개
+            
+            **가능한 원인:**
+            1. VLM API 호출 실패 (API 키 확인 필요)
+            2. 프롬프트 응답 형식 오류
+            3. 네트워크 연결 문제
+            
+            **해결 방법:**
+            - 콘솔 로그 확인 (`logs/app.log`)
+            - 환경 변수 확인 (사이드바)
+            - VLM 프로바이더 변경 시도
+            """)
+        else:
+            # 전체 요약
+            st.subheader("📈 전체 요약")
+            
+            col1, col2, col3, col4, col5 = st.columns(5)
+            
+            with col1:
+                st.metric("📄 페이지", result['pages_processed'])
+            
+            with col2:
+                st.metric("🔍 Region", result['regions_detected'])
+            
+            with col3:
+                st.metric("✅ 성공", result['vlm_success'])
+            
+            with col4:
+                st.metric("❌ 실패", result['vlm_errors'])
+            
+            with col5:
+                success_rate = (result['vlm_success'] / result['regions_detected'] * 100) if result['regions_detected'] > 0 else 0
+                st.metric("📊 성공률", f"{success_rate:.1f}%")
+            
+            st.divider()
+            
+            # 페이지별 결과
+            st.subheader("📄 페이지별 결과")
+            
+            # 페이지 그룹핑
+            pages = {}
+            for item in result['results']:
+                page_num = item.get('page_num')
+                if page_num is not None:
+                    if page_num not in pages:
+                        pages[page_num] = []
+                    pages[page_num].append(item)
+            
+            # ✅ 페이지가 없을 경우 처리
+            if not pages:
+                st.warning("⚠️ 페이지별 결과가 없습니다.")
+            else:
+                # 페이지 선택
+                page_num = st.selectbox(
+                    "페이지 선택",
+                    options=sorted(pages.keys()),
+                    format_func=lambda x: f"📄 페이지 {x}"
+                )
                 
-                with col1:
-                    st.write("**메타데이터:**")
-                    st.json({
-                        "region_id": item['region_id'],
-                        "type": item['type'],
-                        "bbox": item['bbox'],
-                        "confidence": item['confidence'],
-                        "metadata": item.get('metadata', {})
-                    })
+                # 선택된 페이지의 결과
+                page_results = pages[page_num]
                 
-                with col2:
-                    st.write("**VLM 결과:**")
-                    try:
-                        # JSON 파싱 시도
-                        vlm_json = json.loads(item['vlm_result'])
-                        st.json(vlm_json)
-                    except:
-                        # 일반 텍스트
-                        st.code(item['vlm_result'])
-        
-        st.divider()
-        
-        # 다운로드 버튼
-        st.subheader("💾 결과 다운로드")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # JSON 다운로드
-            json_str = json.dumps(result, ensure_ascii=False, indent=2)
-            st.download_button(
-                label="📥 JSON 다운로드",
-                data=json_str,
-                file_name=f"prism_result_{result['session_id']}.json",
-                mime="application/json"
-            )
-        
-        with col2:
-            # Markdown 다운로드
-            md_content = f"""# PRISM Phase 3.3 - 처리 결과
+                st.info(f"📊 페이지 {page_num}: **{len(page_results)}개** Region 추출")
+                
+                # Region 타입별 개수
+                type_counts = {}
+                for item in page_results:
+                    region_type = item['type']
+                    type_counts[region_type] = type_counts.get(region_type, 0) + 1
+                
+                st.write("**타입별 분포:**")
+                cols = st.columns(len(type_counts))
+                for i, (region_type, count) in enumerate(type_counts.items()):
+                    with cols[i]:
+                        st.metric(f"📌 {region_type}", f"{count}개")
+                
+                st.divider()
+                
+                # 각 Region 상세 보기
+                for i, item in enumerate(page_results):
+                    with st.expander(f"🔍 Region {i+1}: {item['type']} (confidence: {item['confidence']:.2f})", expanded=(i==0)):
+                        col1, col2 = st.columns([1, 2])
+                        
+                        with col1:
+                            st.write("**메타데이터:**")
+                            st.json({
+                                "region_id": item['region_id'],
+                                "type": item['type'],
+                                "bbox": item['bbox'],
+                                "confidence": item['confidence'],
+                                "metadata": item.get('metadata', {})
+                            })
+                        
+                        with col2:
+                            st.write("**VLM 결과:**")
+                            vlm_result = item.get('vlm_result', '')
+                            
+                            if vlm_result:
+                                try:
+                                    # JSON 파싱 시도
+                                    vlm_json = json.loads(vlm_result)
+                                    st.json(vlm_json)
+                                except:
+                                    # 일반 텍스트
+                                    st.code(vlm_result)
+                            else:
+                                st.warning("VLM 결과 없음")
+            
+            st.divider()
+            
+            # 다운로드 버튼
+            st.subheader("💾 결과 다운로드")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # JSON 다운로드
+                json_str = json.dumps(result, ensure_ascii=False, indent=2)
+                st.download_button(
+                    label="📥 JSON 다운로드",
+                    data=json_str,
+                    file_name=f"prism_result_{result['session_id']}.json",
+                    mime="application/json"
+                )
+            
+            with col2:
+                # Markdown 다운로드
+                md_content = f"""# PRISM Phase 3.3 - 처리 결과
 
 ## 전체 요약
 - 파일명: {st.session_state.get('uploaded_file', 'unknown')}
@@ -416,28 +463,28 @@ with tab2:
 ## 상세 결과
 
 """
-            for item in result['results']:
-                md_content += f"""### {item['region_id']} - {item['type']}
+                for item in result.get('results', []):
+                    md_content += f"""### {item.get('region_id', 'N/A')} - {item.get('type', 'N/A')}
 
-**Confidence:** {item['confidence']:.2f}
+**Confidence:** {item.get('confidence', 0):.2f}
 
-**BBox:** {item['bbox']}
+**BBox:** {item.get('bbox', [])}
 
 **VLM 결과:**
 ```
-{item['vlm_result']}
+{item.get('vlm_result', 'N/A')}
 ```
 
 ---
 
 """
-            
-            st.download_button(
-                label="📥 Markdown 다운로드",
-                data=md_content,
-                file_name=f"prism_result_{result['session_id']}.md",
-                mime="text/markdown"
-            )
+                
+                st.download_button(
+                    label="📥 Markdown 다운로드",
+                    data=md_content,
+                    file_name=f"prism_result_{result['session_id']}.md",
+                    mime="text/markdown"
+                )
 
 # ========================================
 # Tab 3: 비교 분석
