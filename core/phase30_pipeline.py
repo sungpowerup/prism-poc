@@ -3,8 +3,8 @@ core/phase30_pipeline.py
 PRISM Phase 3.0 - Main Pipeline
 
 ✅ 최종 완벽 수정:
-1. VLM analyze_image() 파라미터: image_data (not image_base64)
-2. SectionChunker 메소드: chunk_extractions() (not chunk)
+1. VLM analyze_image() 파라미터: image_data + element_type 추가 ⭐
+2. SectionChunker 메소드: chunk_extractions()
 3. region_id 자동 생성
 4. all_extractions 데이터 구조 수정 (region_type 추가)
 
@@ -179,9 +179,10 @@ class Phase30Pipeline:
                     element_type = region['type']
                     prompt = ChartPrompts.get_prompt_for_type(element_type)
                     
-                    # ✅ 수정: VLM 호출 파라미터 (image_data)
+                    # ✅ 최종 수정: VLM 호출 파라미터에 element_type 추가 ⭐⭐⭐
                     content = self.vlm_service.analyze_image(
                         image_data=roi_base64,
+                        element_type=element_type,  # ⭐ 추가됨!
                         prompt=prompt
                     )
                     
@@ -211,6 +212,7 @@ class Phase30Pipeline:
                     
                 except Exception as e:
                     logger.error(f"  ❌ Region 처리 실패: {e}")
+                    logger.exception(e)  # 상세 스택트레이스
                     continue
         
         # Stage 4: Section-aware Chunking
