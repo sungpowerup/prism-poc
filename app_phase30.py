@@ -2,6 +2,10 @@
 app_phase30.py
 PRISM Phase 3.0 Streamlit 앱
 
+✅ 수정 완료:
+- region_id 안전 접근 (.get() 사용)
+- KeyError 방지
+
 실행: streamlit run app_phase30.py
 """
 
@@ -219,8 +223,8 @@ def process_pdf(uploaded_file, vlm_provider, max_pages, use_vlm_validation):
         status_text.text("🔄 문서 처리 중... (2~5분 소요)")
         progress_bar.progress(30)
         
-        result = pipeline.process_pdf(
-            str(pdf_path),
+        result = pipeline.process_document(
+            pdf_path=str(pdf_path),
             max_pages=max_pages
         )
         
@@ -310,15 +314,20 @@ def display_results(result):
         st.markdown("### 🎯 감지된 영역 상세")
         
         for i, region in enumerate(result['regions'], 1):
-            with st.expander(f"Region #{i}: {region['type'].upper()} (신뢰도: {region['confidence']:.2%})"):
+            # ✅ 수정: 안전한 키 접근
+            region_id = region.get('region_id', f'region_{i}')
+            region_type = region.get('type', 'unknown')
+            confidence = region.get('confidence', 0.0)
+            
+            with st.expander(f"Region #{i}: {region_type.upper()} (신뢰도: {confidence:.2%})"):
                 st.markdown(f"""
                 <div class="region-card">
-                    <strong>Region ID:</strong> {region['region_id']}<br>
-                    <strong>타입:</strong> {region['type']}<br>
-                    <strong>신뢰도:</strong> {region['confidence']:.2%}<br>
+                    <strong>Region ID:</strong> {region_id}<br>
+                    <strong>타입:</strong> {region_type}<br>
+                    <strong>신뢰도:</strong> {confidence:.2%}<br>
                     <strong>위치:</strong> x={region['bbox'][0]}, y={region['bbox'][1]}, 
                                       w={region['bbox'][2]}, h={region['bbox'][3]}<br>
-                    <strong>메타데이터:</strong> {json.dumps(region['metadata'], ensure_ascii=False)}
+                    <strong>메타데이터:</strong> {json.dumps(region.get('metadata', {}), ensure_ascii=False)}
                 </div>
                 """, unsafe_allow_html=True)
     
@@ -326,30 +335,39 @@ def display_results(result):
     with tab3:
         st.markdown("### 🧩 생성된 청크")
         
+        chunks = result.get('chunks', [])
+        
+        if not chunks:
+            st.warning("생성된 청크가 없습니다.")
+            return
+        
         # 필터
-        chunk_types = list(set([c['metadata']['chunk_type'] for c in result['chunks']]))
+        chunk_types = list(set([c.get('metadata', {}).get('chunk_type', 'unknown') for c in chunks]))
         selected_type = st.selectbox("청크 타입 필터", ['전체'] + chunk_types)
         
-        filtered_chunks = result['chunks']
+        filtered_chunks = chunks
         if selected_type != '전체':
-            filtered_chunks = [c for c in result['chunks'] if c['metadata']['chunk_type'] == selected_type]
+            filtered_chunks = [c for c in chunks if c.get('metadata', {}).get('chunk_type') == selected_type]
         
-        st.info(f"표시 중: {len(filtered_chunks)}/{len(result['chunks'])}개 청크")
+        st.info(f"표시 중: {len(filtered_chunks)}/{len(chunks)}개 청크")
         
         for i, chunk in enumerate(filtered_chunks, 1):
-            with st.expander(f"Chunk #{i}: {chunk['metadata']['chunk_type']} - {chunk['metadata'].get('section_path', 'N/A')}"):
+            chunk_type = chunk.get('metadata', {}).get('chunk_type', 'unknown')
+            section_path = chunk.get('metadata', {}).get('section_path', 'N/A')
+            
+            with st.expander(f"Chunk #{i}: {chunk_type} - {section_path}"):
                 st.markdown(f"""
                 <div class="chunk-card">
-                    <strong>ID:</strong> {chunk['chunk_id']}<br>
-                    <strong>타입:</strong> {chunk['metadata']['chunk_type']}<br>
-                    <strong>섹션 경로:</strong> {chunk['metadata'].get('section_path', 'N/A')}<br>
-                    <strong>페이지:</strong> {chunk['metadata']['page_number']}<br>
-                    <strong>글자 수:</strong> {chunk['metadata'].get('char_count', len(chunk['content']))}자
+                    <strong>ID:</strong> {chunk.get('chunk_id', f'chunk_{i}')}<br>
+                    <strong>타입:</strong> {chunk_type}<br>
+                    <strong>섹션 경로:</strong> {section_path}<br>
+                    <strong>페이지:</strong> {chunk.get('metadata', {}).get('page_number', 'N/A')}<br>
+                    <strong>글자 수:</strong> {chunk.get('metadata', {}).get('char_count', len(chunk.get('content', '')))}자
                 </div>
                 """, unsafe_allow_html=True)
                 
                 st.markdown("**내용:**")
-                st.code(chunk['content'], language='markdown')
+                st.code(chunk.get('content', ''), language='markdown')
     
     # Tab 4: 다운로드
     with tab4:
@@ -408,20 +426,24 @@ def generate_markdown(result):
     
     lines.append("## 🎯 감지된 영역\n")
     for i, region in enumerate(result['regions'], 1):
-        lines.append(f"### Region #{i}: {region['type']}\n")
-        lines.append(f"- **ID**: {region['region_id']}")
-        lines.append(f"- **신뢰도**: {region['confidence']:.2%}")
+        region_id = region.get('region_id', f'region_{i}')
+        region_type = region.get('type', 'unknown')
+        confidence = region.get('confidence', 0.0)
+        
+        lines.append(f"### Region #{i}: {region_type}\n")
+        lines.append(f"- **ID**: {region_id}")
+        lines.append(f"- **신뢰도**: {confidence:.2%}")
         lines.append(f"- **위치**: {region['bbox']}\n")
     
     lines.append("## 🧩 청크\n")
-    for i, chunk in enumerate(result['chunks'], 1):
+    for i, chunk in enumerate(result.get('chunks', []), 1):
         lines.append(f"### 청크 #{i}\n")
-        lines.append(f"- **ID**: {chunk['chunk_id']}")
-        lines.append(f"- **타입**: {chunk['metadata']['chunk_type']}")
-        lines.append(f"- **섹션**: {chunk['metadata'].get('section_path', 'N/A')}")
-        lines.append(f"- **페이지**: {chunk['metadata']['page_number']}\n")
+        lines.append(f"- **ID**: {chunk.get('chunk_id', f'chunk_{i}')}")
+        lines.append(f"- **타입**: {chunk.get('metadata', {}).get('chunk_type', 'unknown')}")
+        lines.append(f"- **섹션**: {chunk.get('metadata', {}).get('section_path', 'N/A')}")
+        lines.append(f"- **페이지**: {chunk.get('metadata', {}).get('page_number', 'N/A')}\n")
         lines.append("```")
-        lines.append(chunk['content'])
+        lines.append(chunk.get('content', ''))
         lines.append("```\n")
     
     return '\n'.join(lines)
