@@ -1,13 +1,12 @@
 """
 core/layout_detector_v34.py
-PRISM Phase 3.4 - Layout Detector v3.4 (Hybrid Detection)
+PRISM Phase 3.4.1 - Layout Detector v3.4.1 (Hybrid Detection - 과감지 방지)
 
-🔥 Phase 3.4 핵심 개선:
-1. ✅ TableDetector (신규): Hough Line + Text Grid 분석
-2. ✅ BarChartDetector (대폭 개선): Rectangle Clustering 완화
-3. ✅ MapDetector (신규): Contour + Region Names
-4. ✅ TextDetector (개선): 500x500px 블록, 병합 로직
-5. ✅ VLM Fallback: 낮은 신뢰도 → VLM 검증
+🔥 Phase 3.4.1 긴급 수정:
+1. ✅ 막대그래프 과감지 방지 (min_bar_area: 300 → 800)
+2. ✅ 표 페이지 전체 크기 제외 (max_page_ratio: 70%)
+3. ✅ 지도 감지 완화 (min_text_regions: 3 → 2)
+4. ✅ 막대그래프 필터 강화 (min_bar_width: 10 → 20, min_bar_height: 15)
 
 경쟁사 대비 목표:
 - 표 감지: 0% → 90%+
@@ -16,7 +15,7 @@ PRISM Phase 3.4 - Layout Detector v3.4 (Hybrid Detection)
 
 Author: 박준호 (AI/ML Lead) + 이서영 (Backend Lead)
 Date: 2025-10-22
-Version: 3.4 (Hybrid Detection)
+Version: 3.4.1 (긴급 수정)
 """
 
 import cv2
@@ -60,43 +59,45 @@ class LayoutDetectorV34:
             'min_saturation': 20,
         }
         
-        # ⭐ 표 파라미터 (Phase 3.4 개선)
+        # ⭐ 표 파라미터 (Phase 3.4.1 조정)
         self.table_params = {
             # Hough Line 파라미터
             'min_width': 100,
-            'max_width': 5000,
+            'max_width': 1800,           # 5000 → 1800 (페이지 전체 제외) ✅
             'min_height': 100,
-            'max_height': 10000,
+            'max_height': 2500,          # 10000 → 2500 (페이지 전체 제외) ✅
             'min_h_lines': 2,
             'min_v_lines': 2,
             
-            # ✅ 신규: Text Grid 파라미터
-            'grid_threshold': 0.7,       # 텍스트 정렬 임계값
-            'min_text_blocks': 6,        # 최소 텍스트 블록 수 (2x3 테이블)
-            'min_alignment_score': 0.6   # 정렬 점수
+            # ✅ Text Grid 파라미터
+            'grid_threshold': 0.7,
+            'min_text_blocks': 6,
+            'min_alignment_score': 0.7,  # 0.6 → 0.7 (더 엄격) ✅
+            'max_page_ratio': 0.7        # 신규: 페이지 대비 최대 70% ✅
         }
         
-        # ⭐ 막대그래프 파라미터 (Phase 3.4 대폭 완화)
+        # ⭐ 막대그래프 파라미터 (Phase 3.4.1 조정)
         self.bar_chart_params = {
             'min_bars': 2,              # 2개만 있어도 인정
-            'max_y_diff': 100,          # 50 → 100 (완화)
-            'min_bar_area': 300,        # 500 → 300 (더 완화)
-            'min_bar_width': 10,        # 신규
-            'max_aspect_ratio': 10.0,   # 신규 (세로로 긴 막대 허용)
-            'color_diversity': 0.3      # 신규 (색상 다양성 완화)
+            'max_y_diff': 80,           # 100 → 80 (적절히 조정)
+            'min_bar_area': 800,        # 300 → 800 (과감지 방지) ✅
+            'min_bar_width': 20,        # 10 → 20 (너무 작은 막대 제외) ✅
+            'min_bar_height': 15,       # 신규 (너무 낮은 막대 제외) ✅
+            'max_aspect_ratio': 8.0,    # 10 → 8 (적절히 조정)
+            'min_group_width': 150      # 신규 (전체 그래프 최소 너비) ✅
         }
         
-        # ⭐ Map 파라미터 (Phase 3.4 신규 알고리즘)
+        # ⭐ Map 파라미터 (Phase 3.4.1 완화)
         self.map_params = {
             'min_area': 30000,
-            'min_complexity': 10,        # 15 → 10 (완화)
+            'min_complexity': 10,
             'max_circularity': 0.7,
             'aspect_ratio_min': 0.5,
             'aspect_ratio_max': 2.0,
             
-            # ✅ 신규: 지역명 감지
-            'check_region_names': True,  # 한국 지역명 체크
-            'min_text_regions': 3        # 최소 텍스트 영역 수
+            # ✅ 지역명 감지 (완화)
+            'check_region_names': True,
+            'min_text_regions': 2        # 3 → 2 (완화) ✅
         }
         
         # ⭐ 일반 텍스트 영역 파라미터 (Phase 3.4 개선)
@@ -109,10 +110,10 @@ class LayoutDetectorV34:
             'merge_threshold': 0.3       # ✅ 신규: 인접 블록 병합
         }
         
-        logger.info("🚀 LayoutDetectorV34 초기화 완료 (Hybrid Detection)")
-        logger.info(f"   - 표 감지: Hough Line + Text Grid (2-Stage)")
-        logger.info(f"   - 막대그래프: Rectangle Clustering (대폭 완화)")
-        logger.info(f"   - 지도: Contour + Region Names (신규)")
+        logger.info("🚀 LayoutDetectorV34 초기화 완료 (Hybrid Detection v3.4.1)")
+        logger.info(f"   - 표 감지: Hough Line + Text Grid (페이지 전체 제외)")
+        logger.info(f"   - 막대그래프: Rectangle Clustering (과감지 방지)")
+        logger.info(f"   - 지도: Contour + Region Names (완화)")
         logger.info(f"   - 텍스트: {self.text_region_params['block_size']}x{self.text_region_params['block_size']}px 블록 (병합)")
     
     def detect_regions(self, image: np.ndarray, page_num: int = 0) -> List[Dict]:
@@ -412,16 +413,20 @@ class LayoutDetectorV34:
     
     def _detect_tables_by_text_grid(self, image: np.ndarray) -> List[Dict]:
         """
-        ⭐ Phase 3.4 신규: 텍스트 정렬 패턴 기반 표 감지
+        ⭐ Phase 3.4.1 Text Grid 기반 표 감지 (페이지 전체 제외)
         
         알고리즘:
-        1. 텍스트 블록 추출 (Connected Components)
+        1. Connected Components로 텍스트 블록 추출
         2. 수평/수직 정렬 분석
         3. 격자 구조 판별
+        4. ✅ 페이지 전체 크기 필터링 (신규)
         """
         tables = []
         
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+        
+        # 페이지 크기
+        page_height, page_width = gray.shape[:2]
         
         # 텍스트 블록 추출 (Thresholding)
         _, binary = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
@@ -461,7 +466,7 @@ class LayoutDetectorV34:
         
         logger.info(f"      Text Grid: {len(text_blocks)}개 블록, 정렬 점수: {alignment_score:.2f}")
         
-        # 정렬 점수 임계값
+        # ✅ 정렬 점수 임계값 (0.7)
         if alignment_score >= self.table_params['min_alignment_score']:
             # 전체 Bbox 계산
             all_x = [b['bbox'][0] for b in text_blocks]
@@ -472,6 +477,14 @@ class LayoutDetectorV34:
             x1, y1 = min(all_x), min(all_y)
             x2, y2 = max(all_x2), max(all_y2)
             w, h = x2 - x1, y2 - y1
+            
+            # ✅ 페이지 대비 비율 체크 (신규)
+            width_ratio = w / page_width
+            height_ratio = h / page_height
+            
+            if width_ratio > self.table_params['max_page_ratio'] or height_ratio > self.table_params['max_page_ratio']:
+                logger.info(f"      ⚠️ 페이지 전체 크기 제외: {width_ratio:.1%} x {height_ratio:.1%}")
+                return tables
             
             # 크기 체크
             if (self.table_params['min_width'] <= w <= self.table_params['max_width'] and
@@ -603,13 +616,13 @@ class LayoutDetectorV34:
     
     def _detect_bar_charts_v34(self, image: np.ndarray) -> List[Dict]:
         """
-        ⭐ Phase 3.4 막대그래프 감지 (대폭 완화)
+        ⭐ Phase 3.4.1 막대그래프 감지 (과감지 방지)
         
         개선사항:
-        1. 직사각형 클러스터링 완화 (min_area: 500 → 300)
-        2. Y축 정렬 완화 (max_y_diff: 50 → 100)
-        3. 최소 막대 수 완화 (3 → 2)
-        4. 세로로 긴 막대 허용 (aspect_ratio < 10)
+        1. 직사각형 클러스터링 적절히 조정
+        2. 최소 막대 크기 증가 (min_area: 300 → 800)
+        3. 최소 너비/높이 체크 추가
+        4. 전체 그래프 최소 너비 체크 (150px)
         """
         bar_charts = []
         
@@ -622,22 +635,26 @@ class LayoutDetectorV34:
         
         contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        # 직사각형 후보 추출 (완화된 기준)
+        # 직사각형 후보 추출
         rectangles = []
         for contour in contours:
             area = cv2.contourArea(contour)
             
-            # ✅ 최소 면적 완화 (500 → 300)
+            # ✅ 최소 면적 체크 (800px)
             if area < self.bar_chart_params['min_bar_area']:
                 continue
             
             x, y, w, h = cv2.boundingRect(contour)
             
-            # ✅ 최소 너비 체크 (신규)
+            # ✅ 최소 너비 체크
             if w < self.bar_chart_params['min_bar_width']:
                 continue
             
-            # ✅ Aspect ratio 체크 (세로로 긴 막대 허용)
+            # ✅ 최소 높이 체크 (신규)
+            if h < self.bar_chart_params['min_bar_height']:
+                continue
+            
+            # ✅ Aspect ratio 체크
             aspect_ratio = h / w if w > 0 else 0
             if aspect_ratio > self.bar_chart_params['max_aspect_ratio']:
                 continue
@@ -648,22 +665,22 @@ class LayoutDetectorV34:
                 'bottom_y': y + h
             })
         
-        # ✅ 최소 막대 수 완화 (3 → 2)
+        # ✅ 최소 막대 수 체크
         if len(rectangles) < self.bar_chart_params['min_bars']:
             return bar_charts
         
-        # Y축 정렬 분석 (완화)
+        # Y축 정렬 분석
         bottom_ys = [r['bottom_y'] for r in rectangles]
         bottom_ys_sorted = sorted(bottom_ys)
         
-        # 클러스터링 (완화된 임계값)
+        # 클러스터링
         aligned_groups = []
         current_group = [rectangles[0]]
         
         for i, rect in enumerate(rectangles[1:], start=1):
             y_diff = abs(rect['bottom_y'] - current_group[0]['bottom_y'])
             
-            # ✅ Y축 차이 완화 (50 → 100)
+            # ✅ Y축 차이 체크 (80px)
             if y_diff <= self.bar_chart_params['max_y_diff']:
                 current_group.append(rect)
             else:
@@ -685,6 +702,10 @@ class LayoutDetectorV34:
             x1, y1 = min(all_x), min(all_y)
             x2, y2 = max(all_x2), max(all_y2)
             w, h = x2 - x1, y2 - y1
+            
+            # ✅ 전체 그래프 최소 너비 체크 (신규)
+            if w < self.bar_chart_params['min_group_width']:
+                continue
             
             area = w * h
             if area >= self.min_region_size:
