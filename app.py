@@ -38,9 +38,9 @@ logger = logging.getLogger(__name__)
 # Core 모듈 임포트
 try:
     from core.pdf_processor_v40 import PDFProcessorV40
-    from core.vlm_service_v40 import VLMServiceV40
+    from core.vlm_service import VLMServiceV41
     from core.storage import Storage
-    from core.phase40_pipeline import Phase40Pipeline
+    from core.pipeline import Phase41Pipeline
     
     logger.info("✅ 모든 core 모듈 임포트 성공")
 except Exception as e:
@@ -227,9 +227,9 @@ if uploaded_file is not None:
             # 서비스 초기화
             with st.spinner("서비스 초기화 중..."):
                 pdf_processor = PDFProcessorV40()
-                vlm_service = VLMServiceV40(provider=vlm_provider)
+                vlm_service = VLMServiceV41(provider=vlm_provider)
                 storage = Storage()
-                pipeline = Phase40Pipeline(pdf_processor, vlm_service, storage)
+                pipeline = Phase41Pipeline(pdf_processor, vlm_service, storage)
             
             logger.info("✅ 모든 core 모듈 임포트 성공")
             

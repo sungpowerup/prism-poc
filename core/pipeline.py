@@ -1,333 +1,407 @@
 """
-PRISM Phase 2.5 - Enhanced Pipeline (Phase 2.5 Extractor 호환)
+core/phase41_pipeline.py
+PRISM Phase 4.1 - Accurate Pipeline (정확도 개선)
 
-개선 사항:
-- extract_full_page() → extract() 메서드명 변경 대응
-- Phase 2.5 개선 프롬프트 적용
+✅ Phase 4.1 개선사항:
+1. 정확도 최우선 프롬프트 적용
+2. 백분율 합계 검증
+3. Temperature 낮춤 (0.3 → 0.1)
+4. 재시도 로직 추가 (백분율 오류 시)
 
-Author: 이서영 (Backend Lead) + 박준호 (AI/ML Lead)
-Date: 2025-10-17
+Author: 박준호 (AI/ML Lead), 이서영 (Backend Lead)
+Date: 2025-10-23
+Version: 4.1
 """
 
-import os
+import logging
+from typing import List, Dict, Any, Optional
 import time
-from pathlib import Path
-from typing import List, Dict, Optional
-from PIL import Image
-import fitz  # PyMuPDF
+import uuid
 
-from models.layout_detector import LayoutDetector, DocumentElement, ElementType, BoundingBox
-from core.claude_full_page_extractor import ClaudeFullPageExtractor, PageContent
-from core.intelligent_chunker import IntelligentChunker
-from core.document_analyzer import DocumentAnalyzer
+logger = logging.getLogger(__name__)
 
 
-class Phase2Pipeline:
+class Phase41Pipeline:
     """
-    PRISM Phase 2.5 파이프라인 (Enhanced Chart Extraction)
+    Phase 4.1 처리 파이프라인 (정확도 개선)
     
-    처리 단계:
-    1. ⭐ Claude Vision으로 전체 페이지 분석 (개선된 프롬프트)
-    2. 텍스트, 표, 차트, 그래프, 이미지 동시 추출
-    3. Intelligent Chunking
+    특징:
+    - 원본 텍스트 100% 충실도
+    - 백분율 합계 자동 검증
+    - 오류 감지 시 재시도
     """
     
-    def __init__(
-        self,
-        azure_endpoint: Optional[str] = None,
-        azure_api_key: Optional[str] = None,
-        chunk_size: int = 512,
-        chunk_overlap: int = 50,
-        use_full_claude_vision: bool = True
-    ):
+    def __init__(self, pdf_processor, vlm_service, storage):
         """
         Args:
-            azure_endpoint: Azure OpenAI 엔드포인트 (선택)
-            azure_api_key: Azure OpenAI API 키 (선택)
-            chunk_size: 청크 크기
-            chunk_overlap: 청크 오버랩
-            use_full_claude_vision: 전체 페이지 Claude Vision 사용 여부
+            pdf_processor: PDFProcessor 인스턴스
+            vlm_service: VLMService 인스턴스 (v4.1)
+            storage: Storage 인스턴스
         """
-        print("Initializing PRISM Phase 2.5 Pipeline (Enhanced Chart Extraction)...")
+        self.pdf_processor = pdf_processor
+        self.vlm_service = vlm_service
+        self.storage = storage
         
-        # Azure OpenAI 설정 저장
-        self.azure_endpoint = azure_endpoint
-        self.azure_api_key = azure_api_key
-        
-        # 1. Layout Detector (참고용)
-        self.layout_detector = LayoutDetector()
-        
-        # 2. ⭐ Claude Full Page Extractor (Phase 2.5 개선)
-        self.use_full_claude_vision = use_full_claude_vision
-        if use_full_claude_vision:
-            self.claude_extractor = ClaudeFullPageExtractor(
-                azure_endpoint=azure_endpoint,
-                azure_api_key=azure_api_key
-            )
-            if self.claude_extractor.client:
-                print("✅ Phase 2.5 Enhanced Claude Vision enabled")
-            else:
-                print("⚠️  Claude Vision unavailable, falling back to OCR")
-                self.use_full_claude_vision = False
-        
-        # 3. Intelligent Chunker
-        self.chunker = IntelligentChunker(
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap
-        )
-        
-        # 4. Document Analyzer
-        self.analyzer = DocumentAnalyzer()
-        
-        print("✅ Phase 2.5 Pipeline initialized")
+        # ✅ Phase 4.1: 정확도 최우선 프롬프트
+        self.prompt = """당신은 전문 문서 분석가입니다. 이 문서 페이지를 **완벽한 정확도**로 분석하세요.
 
-    def _convert_page_to_chunks(
-        self,
-        page_content: PageContent
-    ) -> List[Dict]:
-        """
-        PageContent를 청크 리스트로 변환
-        
-        Args:
-            page_content: Claude가 추출한 페이지 내용
-            
-        Returns:
-            청크 리스트
-        """
-        chunks = []
-        chunk_counter = 1
-        
-        page_num = page_content.page_num
-        
-        # 1. 텍스트 청크
-        for text_block in page_content.text_blocks:
-            chunk_id = f"chunk_{page_num:03d}_{chunk_counter:03d}"
-            chunks.append({
-                "chunk_id": chunk_id,
-                "type": "text",
-                "content": text_block.text,
-                "page_num": page_num,
-                "metadata": {
-                    "section_title": "",
-                    "section_type": "text",
-                    "confidence": text_block.confidence
-                }
-            })
-            chunk_counter += 1
-        
-        # 2. 표 청크
-        for table in page_content.tables:
-            chunk_id = f"table_{page_num:03d}_{chunk_counter:03d}"
-            chunks.append({
-                "chunk_id": chunk_id,
-                "type": "table",
-                "content": table.markdown,
-                "page_num": page_num,
-                "metadata": {
-                    "caption": table.caption,
-                    "confidence": table.confidence
-                }
-            })
-            chunk_counter += 1
-        
-        # 3. ⭐ 차트 청크 (Phase 2.5 - 데이터 포인트 포함)
-        for chart in page_content.charts:
-            chunk_id = f"chart_{page_num:03d}_{chunk_counter:03d}"
-            
-            # 차트 내용 포맷팅
-            content_lines = [
-                f"[차트: {chart.title}]",
-                f"타입: {chart.type}",
-                f"설명: {chart.description}",
-                "데이터:"
-            ]
-            
-            # ⭐ 데이터 포인트 추가
-            if chart.data_points:
-                # 그룹 데이터 여부 확인
-                if chart.data_points and isinstance(chart.data_points[0], dict):
-                    first_point = chart.data_points[0]
-                    if 'category' in first_point and 'values' in first_point:
-                        # 그룹 데이터 (예: 입장료 - 전체/팬/일반)
-                        content_lines.append("")
-                        for group in chart.data_points:
-                            content_lines.append(f"[{group['category']}]")
-                            for value in group['values']:
-                                unit = value.get('unit', '')
-                                content_lines.append(f"  - {value['label']}: {value['value']}{unit}")
-                            content_lines.append("")
-                    else:
-                        # 단순 데이터 (예: 남성 45.2%, 여성 54.8%)
-                        for point in chart.data_points:
-                            label = point.get('label', '')
-                            value = point.get('value', '')
-                            unit = point.get('unit', '')
-                            content_lines.append(f"  - {label}: {value}{unit}")
-            else:
-                content_lines.append("  - (데이터 없음)")
-            
-            content = "\n".join(content_lines)
-            
-            chunks.append({
-                "chunk_id": chunk_id,
-                "type": "chart",
-                "content": content,
-                "page_num": page_num,
-                "metadata": {
-                    "chart_type": chart.type,
-                    "title": chart.title,
-                    "description": chart.description,
-                    "data_points": chart.data_points,
-                    "confidence": chart.confidence
-                }
-            })
-            chunk_counter += 1
-        
-        # 4. 이미지/다이어그램 청크
-        for figure in page_content.figures:
-            chunk_id = f"figure_{page_num:03d}_{chunk_counter:03d}"
-            chunks.append({
-                "chunk_id": chunk_id,
-                "type": "figure",
-                "content": f"[이미지: {figure.type}]\n{figure.description}",
-                "page_num": page_num,
-                "metadata": {
-                    "figure_type": figure.type,
-                    "description": figure.description,
-                    "confidence": figure.confidence
-                }
-            })
-            chunk_counter += 1
-        
-        return chunks
+🎯 **Phase 4.1 핵심 원칙: 100% 원본 충실도**
 
-    def process(
-        self,
-        pdf_path: str,
-        max_pages: Optional[int] = None
-    ) -> Dict:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## ⚠️ 절대 준수 사항 (CRITICAL)
+
+### 1. 텍스트/숫자 변경 금지
+- 원본 텍스트를 **정확히 그대로** 추출
+- 숫자 반올림 금지 (52.5% ≠ 53%)
+- 단어 추가/변경 금지 (수도권 ≠ 수도권 지역)
+
+### 2. 지역명/용어 변경 금지
+- 원본: "강원/제주권" → 출력: "강원/제주권" ✅
+- 원본: "강원/제주권" → 출력: "강원권", "제주권" ❌ (분리 금지)
+
+### 3. 백분율 합계 검증
+- 동일한 차트 내 백분율 합계 = 100% (오차 ±1%)
+- 합계가 맞지 않으면 다시 확인
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## 📋 분석 요구사항
+
+### 1. 페이지 구조 파악
+- 제목, 섹션, 서브섹션 식별
+- 계층 구조 유지
+
+### 2. 텍스트 내용 추출
+- 모든 텍스트를 정확히 추출 (한 글자도 빠짐없이)
+- 맥락을 유지하며 작성
+- 원본 표현 그대로 사용
+
+### 3. 시각 요소 분석
+
+#### 차트 (원그래프, 막대그래프, 선그래프 등)
+```markdown
+**차트 형태:** [형태]
+**제목:** [원본 그대로]
+**데이터:**
+- [항목명 그대로]: [숫자 정확히]% 또는 [단위]
+- ...
+
+**백분율 검증:** 합계 [XX.X]%
+**해석:** [1~2문장]
+```
+
+#### 지도 차트 특별 처리
+```
+⚠️ 지역명과 수치를 절대 변경하지 말고 그대로 추출
+
+✅ 올바른 예:
+원본: "강원/제주 4.7%"
+출력: 강원/제주권: 4.7%
+
+❌ 잘못된 예:
+원본: "강원/제주 4.7%"
+출력: 강원권 + 제주권 분리 (금지)
+```
+
+#### 표 (Table)
+```markdown
+| 헤더1 | 헤더2 |
+|-------|-------|
+| 값1   | 값2   |
+
+- 모든 셀 정확히 추출
+- 숫자는 소수점 이하까지
+```
+
+### 4. 데이터 해석
+- 숫자의 의미 설명 (1~2문장)
+- 주요 인사이트 제시
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## 📝 출력 형식
+
+```markdown
+### [섹션 제목 - 원본 그대로]
+
+[텍스트 내용]
+
+#### [서브섹션 제목]
+
+**차트 형태:** [...]
+**제목:** [...]
+**데이터:**
+- [항목]: [값]
+...
+
+**백분율 검증:** 합계 XX.X%
+**해석:** [...]
+```
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## ✅ 체크리스트
+
+- [ ] 모든 텍스트를 원본 그대로 추출
+- [ ] 모든 숫자를 정확히 추출 (소수점 포함)
+- [ ] 지역명/용어를 변경하지 않음
+- [ ] 백분율 합계가 100% (±1%)
+- [ ] 추측하지 않고 보이는 대로만 작성
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+## 🚫 절대 금지
+
+❌ 숫자 반올림
+❌ 단어 추가/변경
+❌ 지역명 분리
+❌ 데이터 누락
+❌ 추측
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+이제 페이지를 분석하세요. **정확도 최우선!**
+"""
+    
+    def process_pdf(
+        self, 
+        pdf_path: str, 
+        max_pages: int = 20,
+        progress_callback: Optional[callable] = None
+    ) -> Dict[str, Any]:
         """
-        PDF 문서 처리 (Phase 2.5)
+        PDF 처리 메인 함수 (Phase 4.1 - 정확도 개선)
         
         Args:
             pdf_path: PDF 파일 경로
             max_pages: 최대 처리 페이지 수
-            
+            progress_callback: 진행 상황 콜백 함수
+        
         Returns:
             처리 결과 딕셔너리
         """
-        print("\n" + "="*60)
-        print("PRISM Phase 2.5 - Document Processing")
-        print("="*60)
-        
         start_time = time.time()
+        session_id = str(uuid.uuid4())[:8]
         
-        # 1. PDF 열기
-        doc = fitz.open(pdf_path)
-        total_pages = len(doc)
+        logger.info(f"\n{'='*60}")
+        logger.info(f"🎯 Phase 4.1 처리 시작 (정확도 최우선): {pdf_path}")
+        logger.info(f"Session ID: {session_id}")
+        logger.info(f"{'='*60}")
         
-        if max_pages:
-            total_pages = min(total_pages, max_pages)
+        # ========================================
+        # Stage 1: PDF → 고해상도 이미지 변환
+        # ========================================
+        if progress_callback:
+            progress_callback("📄 PDF 변환 중 (고해상도)...", 0)
         
-        print(f"\n📄 문서: {Path(pdf_path).name}")
-        print(f"📊 총 페이지: {total_pages}")
+        logger.info("\n[Stage 1] PDF → 고해상도 이미지 변환 (300 DPI)")
+        images = self.pdf_processor.pdf_to_images(pdf_path, max_pages=max_pages, dpi=300)
+        logger.info(f"✅ {len(images)}개 페이지 변환 완료")
         
-        all_chunks = []
-        stats = {
-            'total_pages': total_pages,
-            'text_chunks': 0,
-            'table_chunks': 0,
-            'chart_chunks': 0,
-            'figure_chunks': 0
-        }
+        if not images:
+            logger.error("❌ PDF 변환 실패")
+            return {
+                'status': 'error',
+                'error': 'PDF 변환 실패',
+                'session_id': session_id
+            }
         
-        # 2. 페이지별 처리
-        for page_num in range(total_pages):
-            print(f"\n{'='*60}")
-            print(f"📄 Processing Page {page_num + 1}/{total_pages}")
-            print(f"{'='*60}")
+        # ========================================
+        # Stage 2: VLM 전체 페이지 분석 (정확도 최우선)
+        # ========================================
+        results = []
+        success_count = 0
+        error_count = 0
+        retry_count = 0  # ✅ Phase 4.1: 재시도 횟수
+        
+        for page_num, img_data in enumerate(images):
+            if progress_callback:
+                progress = int((page_num / len(images)) * 90)
+                progress_callback(f"🎯 페이지 {page_num + 1}/{len(images)} 정확 분석 중...", progress)
             
-            # 2.1 페이지를 이미지로 변환
-            page = doc[page_num]
-            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            logger.info(f"\n[Stage 2] 페이지 {page_num + 1} - VLM 정확 분석")
             
-            # 2.2 ⭐ Claude Vision으로 전체 페이지 추출 (Phase 2.5 개선)
-            if self.use_full_claude_vision:
-                # ✅ 수정: extract_full_page() → extract()
-                page_content = self.claude_extractor.extract(img, page_num + 1)
-                
-                if page_content:
-                    # PageContent → 청크 변환
-                    page_chunks = self._convert_page_to_chunks(page_content)
-                    all_chunks.extend(page_chunks)
+            # ✅ Phase 4.1: 재시도 로직 (최대 2회)
+            max_retries = 2
+            attempt = 0
+            vlm_result = None
+            
+            while attempt <= max_retries:
+                try:
+                    logger.info(f"   시도 {attempt + 1}/{max_retries + 1}...")
                     
-                    # 통계 업데이트
-                    for chunk in page_chunks:
-                        chunk_type = chunk['type']
-                        if chunk_type == 'text':
-                            stats['text_chunks'] += 1
-                        elif chunk_type == 'table':
-                            stats['table_chunks'] += 1
-                        elif chunk_type == 'chart':
-                            stats['chart_chunks'] += 1
-                        elif chunk_type == 'figure':
-                            stats['figure_chunks'] += 1
-                else:
-                    print(f"⚠️  Page {page_num + 1} extraction failed")
+                    # VLM 호출
+                    vlm_result = self.vlm_service.analyze_page(
+                        image_data=img_data,
+                        prompt=self.prompt
+                    )
+                    
+                    if vlm_result and len(vlm_result.strip()) > 0:
+                        # 백분율 검증
+                        is_valid = self._validate_result(vlm_result)
+                        
+                        if is_valid:
+                            success_count += 1
+                            logger.info(f"   ✅ 성공 ({len(vlm_result)} 글자)")
+                            
+                            results.append({
+                                'page_num': page_num + 1,
+                                'content': vlm_result,
+                                'char_count': len(vlm_result),
+                                'retries': attempt
+                            })
+                            break  # 성공 시 루프 탈출
+                        else:
+                            logger.warning(f"   ⚠️ 백분율 검증 실패 (재시도 {attempt + 1})")
+                            attempt += 1
+                            retry_count += 1
+                    else:
+                        logger.warning(f"   ⚠️ VLM 결과 없음 (재시도 {attempt + 1})")
+                        attempt += 1
+                        retry_count += 1
+                
+                except Exception as e:
+                    logger.error(f"   ❌ VLM 호출 실패: {e}")
+                    attempt += 1
+                    retry_count += 1
+            
+            # 최대 재시도 후에도 실패
+            if attempt > max_retries and (not vlm_result or len(vlm_result.strip()) == 0):
+                error_count += 1
+                logger.error(f"   ❌ 페이지 {page_num + 1} 처리 실패 (최대 재시도 초과)")
         
-        doc.close()
+        logger.info(f"\n✅ VLM 분석 완료: 성공 {success_count}개, 실패 {error_count}개, 재시도 {retry_count}회")
         
-        # 3. 통계 계산
+        # ========================================
+        # Stage 3: Markdown 통합
+        # ========================================
+        if progress_callback:
+            progress_callback("📝 Markdown 생성 중...", 95)
+        
+        logger.info(f"\n[Stage 3] Markdown 통합")
+        
+        # 전체 Markdown 생성
+        full_markdown = self._generate_markdown(results)
+        
+        logger.info(f"✅ Markdown 생성 완료 ({len(full_markdown)} 글자)")
+        
+        # ========================================
+        # Stage 4: 결과 저장
+        # ========================================
+        if progress_callback:
+            progress_callback("💾 저장 중...", 98)
+        
         end_time = time.time()
-        stats['processing_time'] = end_time - start_time
-        stats['total_chunks'] = len(all_chunks)
+        processing_time = end_time - start_time
         
-        # 4. 결과 반환
         result = {
-            'chunks': all_chunks,
-            'statistics': stats
+            'status': 'success',
+            'session_id': session_id,
+            'processing_time': processing_time,
+            'pages_processed': len(images),
+            'pages_success': success_count,
+            'pages_error': error_count,
+            'retry_count': retry_count,  # ✅ Phase 4.1: 재시도 횟수 추가
+            'total_chars': len(full_markdown),
+            'markdown': full_markdown,
+            'page_results': results
         }
         
-        print("\n" + "="*60)
-        print("✅ Processing Complete")
-        print("="*60)
-        print(f"⏱️  총 처리 시간: {stats['processing_time']:.1f}초")
-        print(f"📊 총 청크: {stats['total_chunks']}개")
-        print(f"   - 텍스트: {stats['text_chunks']}개")
-        print(f"   - 표: {stats['table_chunks']}개")
-        print(f"   - 차트: {stats['chart_chunks']}개")
-        print(f"   - 이미지: {stats['figure_chunks']}개")
+        # DB 저장
+        try:
+            self.storage.save_session(result)
+            logger.info("✅ DB 저장 완료")
+        except Exception as e:
+            logger.error(f"⚠️ DB 저장 실패: {e}")
+        
+        if progress_callback:
+            progress_callback("✅ 완료!", 100)
+        
+        logger.info(f"\n{'='*60}")
+        logger.info(f"🎉 Phase 4.1 처리 완료 (정확도 최우선)")
+        logger.info(f"   - 처리 시간: {processing_time:.1f}초")
+        logger.info(f"   - 페이지 성공: {success_count}/{len(images)}")
+        logger.info(f"   - 재시도 횟수: {retry_count}회")
+        logger.info(f"   - 총 글자 수: {len(full_markdown):,}")
+        logger.info(f"{'='*60}\n")
         
         return result
-
-
-# ============================================================
-# 테스트 코드
-# ============================================================
-
-if __name__ == "__main__":
-    print("\n" + "="*60)
-    print("PRISM Phase 2.5 - Pipeline Test")
-    print("="*60 + "\n")
     
-    pipeline = Phase2Pipeline()
+    def _validate_result(self, text: str) -> bool:
+        """
+        VLM 결과 검증 (Phase 4.1)
+        
+        Args:
+            text: VLM 응답 텍스트
+        
+        Returns:
+            검증 성공 여부
+        """
+        import re
+        
+        # 백분율 패턴 찾기
+        percentage_pattern = r'(\d+\.?\d*)%'
+        percentages = re.findall(percentage_pattern, text)
+        
+        if not percentages:
+            # 백분율이 없으면 검증 통과 (텍스트만 있는 페이지)
+            return True
+        
+        # 숫자로 변환
+        values = [float(p) for p in percentages]
+        
+        # 연속된 백분율 그룹 찾기
+        valid_groups = 0
+        for i in range(len(values)):
+            group_sum = values[i]
+            for j in range(i+1, min(i+10, len(values))):
+                group_sum += values[j]
+                
+                # 합계가 99~101% 사이면 유효한 그룹
+                if 99.0 <= group_sum <= 101.0:
+                    valid_groups += 1
+                    logger.info(f"   ✅ 백분율 그룹 검증: {values[i:j+1]} = {group_sum:.1f}%")
+                    break
+                
+                # 합계가 105%를 초과하면 그룹 종료
+                if group_sum > 105.0:
+                    break
+        
+        # 유효한 그룹이 하나라도 있으면 통과
+        if valid_groups > 0:
+            return True
+        
+        # 백분율이 3개 미만이면 통과 (단일 수치일 수 있음)
+        if len(values) < 3:
+            return True
+        
+        logger.warning(f"   ⚠️ 백분율 검증 실패: 유효한 그룹 없음 ({values})")
+        return False
     
-    # 테스트 PDF 경로
-    test_pdf = "input/test_parser_02.pdf"
-    
-    if Path(test_pdf).exists():
-        print(f"✅ Test PDF found: {test_pdf}")
-        result = pipeline.process(test_pdf, max_pages=3)
+    def _generate_markdown(self, results: List[Dict[str, Any]]) -> str:
+        """
+        페이지별 결과를 하나의 Markdown으로 통합
         
-        # 결과 저장
-        output_dir = Path("output")
-        output_dir.mkdir(exist_ok=True)
+        Args:
+            results: 페이지별 VLM 결과 리스트
         
-        import json
-        with open(output_dir / "test_phase25_result.json", "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
+        Returns:
+            통합된 Markdown 문자열
+        """
+        markdown_parts = []
         
-        print(f"\n✅ Results saved to: output/test_phase25_result.json")
-    else:
-        print(f"❌ Test PDF not found: {test_pdf}")
+        for result in results:
+            page_num = result['page_num']
+            content = result['content']
+            retries = result.get('retries', 0)
+            
+            # 재시도 정보 (디버그용 - 실제 출력에는 제외 가능)
+            if retries > 0:
+                logger.info(f"   페이지 {page_num}: {retries}회 재시도 후 성공")
+            
+            # 페이지 내용
+            markdown_parts.append(content)
+            markdown_parts.append("\n\n")
+        
+        return "".join(markdown_parts).strip()
