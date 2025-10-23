@@ -1,25 +1,23 @@
 """
-app_phase40_fixed.py
-PRISM Phase 4.0 - Streamlit UI (다운로드 새로고침 문제 해결)
+app.py
+PRISM Phase 4.2 - Streamlit UI (멀티스텝 검증)
 
-✅ 개선사항:
-1. 세션 상태에 결과 저장 → 다운로드 후에도 유지
-2. 결과 표시 로직 개선
+✅ Phase 4.2 개선사항:
+1. 2-Pass 처리 표시
+2. 품질 점수 표시
+3. 신뢰도 표시
 
-Author: 최동현 (Frontend Lead), 황태민 (DevOps Lead)
+Author: 최동현 (Frontend Lead)
 Date: 2025-10-23
-Version: 4.0.1
+Version: 4.2
 """
 
 import streamlit as st
 import sys
 from pathlib import Path
 import logging
-from datetime import datetime
 import json
-import base64
 from dotenv import load_dotenv
-import os
 
 # 환경 변수 로드
 load_dotenv()
@@ -38,11 +36,11 @@ logger = logging.getLogger(__name__)
 # Core 모듈 임포트
 try:
     from core.pdf_processor_v40 import PDFProcessorV40
-    from core.vlm_service import VLMServiceV41
+    from core.vlm_service import VLMServiceV42
     from core.storage import Storage
-    from core.pipeline import Phase41Pipeline
+    from core.pipeline import Phase42Pipeline
     
-    logger.info("✅ 모든 core 모듈 임포트 성공")
+    logger.info("✅ Phase 4.2 모듈 임포트 성공")
 except Exception as e:
     logger.error(f"❌ 모듈 임포트 실패: {e}")
     st.error(f"모듈 임포트 실패: {e}")
@@ -58,8 +56,8 @@ if 'processing_result' not in st.session_state:
 # 페이지 설정
 # ============================================================
 st.set_page_config(
-    page_title="PRISM Phase 4.0 - VLM-First",
-    page_icon="🚀",
+    page_title="PRISM Phase 4.2 - Multipass VLM",
+    page_icon="🎯",
     layout="wide"
 )
 
@@ -75,36 +73,25 @@ st.markdown("""
         text-align: center;
         margin-bottom: 1rem;
     }
-    .sub-header {
-        font-size: 1.2rem;
-        color: #555;
-        text-align: center;
-        margin-bottom: 2rem;
-    }
     .phase-badge {
         display: inline-block;
         padding: 0.3rem 0.8rem;
-        background-color: #1e88e5;
+        background-color: #ff6b35;
         color: white;
         border-radius: 20px;
         font-size: 0.9rem;
         font-weight: bold;
         margin-left: 1rem;
     }
-    .success-box {
-        padding: 1rem;
-        background-color: #d4edda;
-        border-left: 5px solid #28a745;
-        border-radius: 5px;
-        margin: 1rem 0;
+    .quality-score {
+        font-size: 3rem;
+        font-weight: bold;
+        text-align: center;
     }
-    .warning-box {
-        padding: 1rem;
-        background-color: #fff3cd;
-        border-left: 5px solid #ffc107;
-        border-radius: 5px;
-        margin: 1rem 0;
-    }
+    .quality-excellent { color: #28a745; }
+    .quality-good { color: #5cb85c; }
+    .quality-fair { color: #f0ad4e; }
+    .quality-poor { color: #d9534f; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -113,40 +100,41 @@ st.markdown("""
 # ============================================================
 st.markdown("""
 <div class='main-header'>
-    🚀 PRISM Phase 4.0
-    <span class='phase-badge'>VLM-First</span>
-</div>
-<div class='sub-header'>
-    차세대 지능형 문서 이해 플랫폼 | 완전 재설계
+    🎯 PRISM Phase 4.2
+    <span class='phase-badge'>Multipass VLM</span>
 </div>
 """, unsafe_allow_html=True)
 
 # ============================================================
-# Phase 4.0 소개
+# Phase 4.2 소개
 # ============================================================
-with st.expander("📚 Phase 4.0 주요 개선사항", expanded=False):
+with st.expander("📚 Phase 4.2 주요 개선사항", expanded=False):
     st.markdown("""
-    ### 🔥 Phase 4.0: VLM-First 완전 재설계
+    ### 🔥 Phase 4.2: VLM 멀티스텝 검증
     
     #### 핵심 전략
-    1. **Layout Detection 제거** - 불필요한 복잡성 제거
-    2. **페이지 전체 VLM 처리** - 맥락 유지
-    3. **자연어 출력** - LLM이 이해하기 쉬운 형식
-    4. **Markdown 생성** - 경쟁사 수준 품질
-    5. **범용성 우선** - 모든 문서 대응
+    1. **2-Pass Processing** - 구조 파악 → 정밀 추출
+    2. **강화된 프롬프팅** - 지도 차트 특수 처리
+    3. **자동 품질 검증** - 신뢰도 기반 재시도
+    4. **자동 청킹** - RAG 최적화
+    5. **범용성 확보** - 하드코딩 제거
     
-    #### 경쟁사 대비 목표
-    - **Phase 3.5**: 35/100 (37%)
-    - **Phase 4.0 목표**: 90/100 (95%) ✅
+    #### Phase 4.1 문제점 해결
+    - ❌ Phase 4.1: 권역 데이터 33% 정확도 (4개 오류)
+    - ✅ Phase 4.2: 100% 정확도 목표
     
-    #### 주요 차이점
-    | 항목 | Phase 3.5 | Phase 4.0 |
-    |------|----------|----------|
-    | Layout Detection | ✅ 복잡 | ❌ 최소화 |
-    | 처리 단위 | Region별 | 페이지 전체 |
-    | 출력 형식 | JSON | 자연어 (Markdown) |
-    | 맥락 유지 | ❌ 손실 | ✅ 유지 |
-    | 범용성 | ⚠️ 제한적 | ✅ 범용 |
+    #### 2-Pass 처리 방식
+    ```
+    Pass 1: 구조 파악
+    ├─ 차트 종류 감지
+    ├─ 지도 차트 여부 확인
+    └─ 복잡도 평가
+    
+    Pass 2: 정밀 추출
+    ├─ Pass 1 정보 활용
+    ├─ 맞춤형 프롬프트
+    └─ 품질 검증
+    ```
     """)
 
 # ============================================================
@@ -154,14 +142,12 @@ with st.expander("📚 Phase 4.0 주요 개선사항", expanded=False):
 # ============================================================
 st.sidebar.header("⚙️ 설정")
 
-# VLM 프로바이더 선택
 vlm_provider = st.sidebar.selectbox(
     "VLM 프로바이더",
     ["azure_openai", "claude"],
     index=0
 )
 
-# 최대 페이지 수
 max_pages = st.sidebar.slider(
     "최대 페이지 수",
     min_value=1,
@@ -170,22 +156,20 @@ max_pages = st.sidebar.slider(
     step=1
 )
 
-# DPI 설정
 dpi = st.sidebar.slider(
     "이미지 해상도 (DPI)",
     min_value=150,
     max_value=300,
     value=300,
-    step=50,
-    help="높을수록 품질 좋지만 처리 시간 증가"
+    step=50
 )
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("""
-### 💡 사용 팁
-- **고해상도 권장**: 300 DPI (최고 품질)
-- **빠른 테스트**: 150 DPI
-- **대용량 문서**: 페이지 수 제한
+### 💡 Phase 4.2 특징
+- **2-Pass 처리**: 구조→추출
+- **품질 검증**: 자동 재시도
+- **청킹 자동화**: RAG 최적화
 """)
 
 # ============================================================
@@ -200,12 +184,10 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file is not None:
-    # 파일 정보 표시
     file_size = len(uploaded_file.getvalue()) / (1024 * 1024)
     st.info(f"📄 **파일명**: {uploaded_file.name} | **크기**: {file_size:.2f} MB")
     
-    # 처리 버튼
-    if st.button("🚀 Phase 4.0 처리 시작", use_container_width=True):
+    if st.button("🚀 Phase 4.2 처리 시작", use_container_width=True):
         
         # 임시 파일 저장
         temp_path = Path("temp") / uploaded_file.name
@@ -224,17 +206,13 @@ if uploaded_file is not None:
         
         # 처리 시작
         try:
-            # 서비스 초기화
-            with st.spinner("서비스 초기화 중..."):
+            with st.spinner("Phase 4.2 서비스 초기화 중..."):
                 pdf_processor = PDFProcessorV40()
-                vlm_service = VLMServiceV41(provider=vlm_provider)
+                vlm_service = VLMServiceV42(provider=vlm_provider)
                 storage = Storage()
-                pipeline = Phase41Pipeline(pdf_processor, vlm_service, storage)
+                pipeline = Phase42Pipeline(pdf_processor, vlm_service, storage)
             
-            logger.info("✅ 모든 core 모듈 임포트 성공")
-            
-            # 처리 실행
-            logger.info(f"🚀 Phase 4.0 처리 시작: {uploaded_file.name}")
+            logger.info(f"🚀 Phase 4.2 처리 시작: {uploaded_file.name}")
             
             result = pipeline.process_pdf(
                 str(temp_path),
@@ -242,7 +220,7 @@ if uploaded_file is not None:
                 progress_callback=update_progress
             )
             
-            # ✅ 세션 상태에 결과 저장 (다운로드 후에도 유지)
+            # 세션 상태에 결과 저장
             st.session_state['processing_result'] = result
             
         except Exception as e:
@@ -252,25 +230,69 @@ if uploaded_file is not None:
             logger.error(traceback.format_exc())
         
         finally:
-            # 임시 파일 삭제
             if temp_path.exists():
                 temp_path.unlink()
 
 # ============================================================
-# 결과 표시 (세션 상태에서 로드)
+# 결과 표시
 # ============================================================
 if st.session_state['processing_result'] is not None:
     result = st.session_state['processing_result']
     
-    # 처리 완료
     if result['status'] == 'success':
         st.success("✅ 처리 완료!")
         
-        # 결과 표시
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # 품질 점수 (Phase 4.2 신규)
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        quality_score = result.get('quality_score', 0)
+        avg_confidence = result.get('avg_confidence', 0)
+        
+        # 품질 등급
+        if quality_score >= 90:
+            quality_class = "quality-excellent"
+            quality_label = "우수"
+        elif quality_score >= 75:
+            quality_class = "quality-good"
+            quality_label = "양호"
+        elif quality_score >= 60:
+            quality_class = "quality-fair"
+            quality_label = "보통"
+        else:
+            quality_class = "quality-poor"
+            quality_label = "개선 필요"
+        
+        st.markdown("---")
+        st.header("🎯 Phase 4.2 품질 평가")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown(f"""
+            <div class='quality-score {quality_class}'>
+                {quality_score:.1f}/100
+            </div>
+            <div style='text-align: center; font-size: 1.2rem; color: #666;'>
+                품질 등급: <strong>{quality_label}</strong>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        with col2:
+            st.markdown(f"""
+            <div style='padding: 20px;'>
+                <h4>신뢰도 지표</h4>
+                <p>평균 신뢰도: <strong>{avg_confidence:.2%}</strong></p>
+                <p>낮은 신뢰도 페이지: <strong>{result.get('low_confidence_count', 0)}개</strong></p>
+                <p>재시도 횟수: <strong>{result.get('retry_count', 0)}회</strong></p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # 통계
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         st.markdown("---")
         st.header("📊 처리 결과")
         
-        # 통계
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
@@ -286,21 +308,24 @@ if st.session_state['processing_result'] is not None:
             success_rate = result['pages_success'] / result['pages_processed'] * 100
             st.metric("성공률", f"{success_rate:.0f}%")
         
-        # Markdown 내용 표시
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # Markdown 내용
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         st.markdown("---")
-        st.header("📝 추출된 내용 (Markdown)")
+        st.header("📝 추출된 내용")
         
         with st.expander("전체 내용 보기", expanded=True):
             st.markdown(result['markdown'])
         
-        # 다운로드 버튼
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # 다운로드
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         st.markdown("---")
         st.header("💾 다운로드")
         
         col1, col2 = st.columns(2)
         
         with col1:
-            # Markdown 다운로드
             st.download_button(
                 label="📝 Markdown 다운로드",
                 data=result['markdown'],
@@ -310,7 +335,6 @@ if st.session_state['processing_result'] is not None:
             )
         
         with col2:
-            # JSON 다운로드
             json_data = json.dumps(result, indent=2, ensure_ascii=False)
             st.download_button(
                 label="📋 JSON 다운로드",
@@ -324,25 +348,17 @@ if st.session_state['processing_result'] is not None:
         st.error(f"❌ 처리 실패: {result.get('error', '알 수 없는 오류')}")
 
 else:
-    # 안내 메시지
     if uploaded_file is None:
         st.info("👆 PDF 파일을 업로드하여 시작하세요")
         
         st.markdown("""
-        ### 📖 사용 방법
+        ### 📖 Phase 4.2 특징
         
-        1. **PDF 업로드**: 상단에서 PDF 파일 선택
-        2. **설정 조정**: 사이드바에서 옵션 변경 (선택)
-        3. **처리 시작**: "처리 시작" 버튼 클릭
-        4. **결과 확인**: Markdown 형식으로 추출된 내용 확인
-        5. **다운로드**: Markdown 또는 JSON 파일 다운로드
-        
-        ### ✨ Phase 4.0 특징
-        
-        - ✅ **완벽한 맥락 유지** - 페이지 전체를 한번에 분석
-        - ✅ **자연어 설명** - LLM이 이해하기 쉬운 형식
-        - ✅ **높은 정확도** - 경쟁사 수준 (95%+)
-        - ✅ **범용성** - 모든 문서 유형 대응
+        - ✅ **2-Pass 처리** - 구조 파악 후 정밀 추출
+        - ✅ **멀티스텝 검증** - 품질 기반 자동 재시도
+        - ✅ **강화된 정확도** - 지도 차트 특수 처리
+        - ✅ **자동 청킹** - RAG 최적화
+        - ✅ **품질 점수** - 실시간 평가
         """)
 
 # ============================================================
@@ -351,9 +367,9 @@ else:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #888; font-size: 0.9rem;'>
-    <strong>PRISM Phase 4.0 - VLM-First 완전 재설계</strong><br>
-    🎯 Layout Detection 제거 | 페이지 전체 분석 | 자연어 출력 | 범용성 우선<br>
-    목표: 경쟁사 대비 95% 품질 달성<br>
+    <strong>PRISM Phase 4.2 - Multipass VLM Verification</strong><br>
+    🎯 2-Pass Processing | 품질 기반 검증 | 자동 청킹 | 범용성 확보<br>
+    목표: 경쟁사 수준 달성 (90/100점)<br>
     Powered by Claude 3.5 Sonnet & Azure OpenAI GPT-4 Vision
 </div>
 """, unsafe_allow_html=True)
