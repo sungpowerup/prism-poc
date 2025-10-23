@@ -1,16 +1,16 @@
 """
 core/pipeline.py
-PRISM Phase 4.2 - Pipeline (멀티스텝 검증 및 청킹)
+PRISM Phase 4.3 - Pipeline (지능형 분할 처리)
 
-✅ Phase 4.2 개선사항:
-1. 2-Pass VLM 처리
-2. 자동 품질 검증
-3. 재시도 로직 강화
-4. 청킹 자동 생성
+✅ Phase 4.3 개선사항:
+1. 3-Step 처리 (구조→전략→검증)
+2. 복잡도 기반 전략 분기
+3. 강화된 품질 검증
+4. 상세한 품질 메트릭
 
 Author: 이서영 (Backend Lead), 박준호 (AI/ML Lead)
 Date: 2025-10-23
-Version: 4.2
+Version: 4.3
 """
 
 import logging
@@ -22,21 +22,22 @@ import re
 logger = logging.getLogger(__name__)
 
 
-class Phase42Pipeline:
+class Phase43Pipeline:
     """
-    Phase 4.2 처리 파이프라인
+    Phase 4.3 처리 파이프라인
     
     특징:
-    - 2-Pass 멀티스텝 처리
-    - 자동 품질 검증
-    - 강화된 재시도
+    - 3-Step 지능형 처리
+    - 복잡도 기반 전략 분기
+    - 강화된 검증
+    - 상세한 품질 메트릭
     """
     
     def __init__(self, pdf_processor, vlm_service, storage):
         """
         Args:
             pdf_processor: PDFProcessor 인스턴스
-            vlm_service: VLMServiceV42 인스턴스
+            vlm_service: VLMServiceV43 인스턴스
             storage: Storage 인스턴스
         """
         self.pdf_processor = pdf_processor
@@ -50,7 +51,7 @@ class Phase42Pipeline:
         progress_callback: Optional[callable] = None
     ) -> Dict[str, Any]:
         """
-        PDF 처리 메인 함수 (Phase 4.2)
+        PDF 처리 메인 함수 (Phase 4.3)
         
         Args:
             pdf_path: PDF 파일 경로
@@ -64,7 +65,7 @@ class Phase42Pipeline:
         session_id = str(uuid.uuid4())[:8]
         
         logger.info(f"\n{'='*60}")
-        logger.info(f"🚀 Phase 4.2 처리 시작: {pdf_path}")
+        logger.info(f"🚀 Phase 4.3 처리 시작: {pdf_path}")
         logger.info(f"Session ID: {session_id}")
         logger.info(f"{'='*60}")
         
@@ -87,111 +88,70 @@ class Phase42Pipeline:
             }
         
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # Stage 2: 2-Pass VLM 분석
+        # Stage 2: 3-Step 지능형 분석
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         results = []
         success_count = 0
         error_count = 0
-        retry_count = 0
-        low_confidence_count = 0
+        
+        strategy_counts = {'simple': 0, 'complex': 0}
+        validation_issues = []
         
         for page_num, img_data in enumerate(images):
             if progress_callback:
                 progress = int((page_num / len(images)) * 90)
                 progress_callback(
-                    f"🎯 페이지 {page_num + 1}/{len(images)} 2-Pass 분석 중...",
+                    f"🎯 페이지 {page_num + 1}/{len(images)} 3-Step 분석 중...",
                     progress
                 )
             
-            logger.info(f"\n[Stage 2] 페이지 {page_num + 1} - 2-Pass VLM 분석")
+            logger.info(f"\n[Stage 2] 페이지 {page_num + 1} - 3-Step 지능형 분석")
             
-            # 재시도 로직 (최대 3회)
-            max_retries = 3
-            attempt = 0
-            best_result = None
-            best_confidence = 0.0
-            
-            while attempt < max_retries:
-                try:
-                    logger.info(f"   시도 {attempt + 1}/{max_retries}...")
-                    
-                    # 2-Pass VLM 호출
-                    vlm_result = self.vlm_service.analyze_page_multipass(
-                        image_data=img_data,
-                        page_num=page_num + 1
-                    )
-                    
-                    content = vlm_result.get('content', '')
-                    confidence = vlm_result.get('confidence', 0.0)
-                    
-                    if not content:
-                        logger.warning(f"   ⚠️ VLM 결과 없음")
-                        attempt += 1
-                        retry_count += 1
-                        continue
-                    
-                    # 품질 검증
-                    is_valid, error_msg = self._validate_quality(content)
-                    
-                    if is_valid and confidence >= 0.8:
-                        # 성공!
-                        success_count += 1
-                        logger.info(f"   ✅ 성공 ({len(content)} 글자, 신뢰도: {confidence:.2f})")
-                        
-                        results.append({
-                            'page_num': page_num + 1,
-                            'content': content,
-                            'confidence': confidence,
-                            'pass1_structure': vlm_result.get('pass1_structure', {}),
-                            'retries': attempt
-                        })
-                        break  # 성공 시 루프 탈출
-                    
-                    else:
-                        # 품질 문제 - 재시도
-                        if confidence < 0.8:
-                            logger.warning(f"   ⚠️ 낮은 신뢰도: {confidence:.2f}")
-                            low_confidence_count += 1
-                        
-                        if error_msg:
-                            logger.warning(f"   ⚠️ 품질 문제: {error_msg}")
-                        
-                        # 최고 점수 저장
-                        if confidence > best_confidence:
-                            best_result = vlm_result
-                            best_confidence = confidence
-                        
-                        attempt += 1
-                        retry_count += 1
+            try:
+                # 3-Step VLM 호출
+                vlm_result = self.vlm_service.analyze_page_intelligent(
+                    image_data=img_data,
+                    page_num=page_num + 1
+                )
                 
-                except Exception as e:
-                    logger.error(f"   ❌ VLM 호출 실패: {e}")
-                    attempt += 1
-                    retry_count += 1
-            
-            # 최대 재시도 후에도 실패 → 최선의 결과 사용
-            if attempt >= max_retries and best_result:
-                logger.warning(f"   ⚠️ 최대 재시도 초과, 최선 결과 사용 (신뢰도: {best_confidence:.2f})")
+                content = vlm_result.get('content', '')
+                confidence = vlm_result.get('confidence', 0.0)
+                strategy = vlm_result.get('strategy', 'unknown')
+                structure = vlm_result.get('structure', {})
+                
+                if not content:
+                    logger.warning(f"   ⚠️ VLM 결과 없음")
+                    error_count += 1
+                    continue
+                
+                # 성공!
                 success_count += 1
+                strategy_counts[strategy] = strategy_counts.get(strategy, 0) + 1
+                
+                logger.info(f"   ✅ 성공 ({len(content)} 글자, 신뢰도: {confidence:.2f}, 전략: {strategy})")
+                
+                # 검증 이슈 체크
+                if '⚠️ **품질 이슈:**' in content:
+                    validation_issues.append(f"페이지 {page_num + 1}")
                 
                 results.append({
                     'page_num': page_num + 1,
-                    'content': best_result.get('content', ''),
-                    'confidence': best_confidence,
-                    'pass1_structure': best_result.get('pass1_structure', {}),
-                    'retries': attempt,
-                    'warning': 'low_confidence'
+                    'content': content,
+                    'confidence': confidence,
+                    'strategy': strategy,
+                    'structure': structure
                 })
-            
-            elif attempt >= max_retries:
+                
+            except Exception as e:
+                logger.error(f"   ❌ 처리 실패: {e}")
                 error_count += 1
-                logger.error(f"   ❌ 페이지 {page_num + 1} 처리 완전 실패")
         
         logger.info(f"\n✅ VLM 분석 완료:")
         logger.info(f"   - 성공: {success_count}개")
         logger.info(f"   - 실패: {error_count}개")
-        logger.info(f"   - 재시도: {retry_count}회")
-        logger.info(f"   - 낮은 신뢰도: {low_confidence_count}개")
+        logger.info(f"   - 전략: Simple {strategy_counts.get('simple', 0)}개, Complex {strategy_counts.get('complex', 0)}개")
+        if validation_issues:
+            logger.info(f"   - 검증 이슈: {', '.join(validation_issues)}")
         
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         # Stage 3: Markdown 통합
@@ -201,20 +161,21 @@ class Phase42Pipeline:
         
         logger.info(f"\n[Stage 3] Markdown 통합")
         
-        # 전체 Markdown 생성
         full_markdown = self._generate_markdown(results)
         
         logger.info(f"✅ Markdown 생성 완료 ({len(full_markdown)} 글자)")
         
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # Stage 4: 품질 점수 계산
+        # Stage 4: 상세 품질 분석
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        avg_confidence = sum(r.get('confidence', 0.0) for r in results) / len(results) if results else 0.0
-        quality_score = self._calculate_quality_score(results, full_markdown)
+        quality_metrics = self._analyze_quality(results, full_markdown)
         
-        logger.info(f"\n[품질 점수]")
-        logger.info(f"   - 평균 신뢰도: {avg_confidence:.2f}")
-        logger.info(f"   - 품질 점수: {quality_score:.1f}/100")
+        logger.info(f"\n[품질 분석]")
+        logger.info(f"   - 평균 신뢰도: {quality_metrics['avg_confidence']:.2f}")
+        logger.info(f"   - 품질 점수: {quality_metrics['quality_score']:.1f}/100")
+        logger.info(f"   - 원본 충실도: {quality_metrics['fidelity_score']:.1f}/100")
+        logger.info(f"   - 청킹 품질: {quality_metrics['chunking_score']:.1f}/100")
+        logger.info(f"   - RAG 적합도: {quality_metrics['rag_score']:.1f}/100")
         
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         # Stage 5: 결과 저장
@@ -232,19 +193,19 @@ class Phase42Pipeline:
             'pages_processed': len(images),
             'pages_success': success_count,
             'pages_error': error_count,
-            'retry_count': retry_count,
-            'low_confidence_count': low_confidence_count,
-            'avg_confidence': avg_confidence,
-            'quality_score': quality_score,
-            'total_chars': len(full_markdown),
+            'strategy_simple': strategy_counts.get('simple', 0),
+            'strategy_complex': strategy_counts.get('complex', 0),
+            'validation_issues': len(validation_issues),
             'markdown': full_markdown,
-            'page_results': results
+            'page_results': results,
+            **quality_metrics
         }
         
         # DB 저장
         try:
-            self.storage.save_session(result)
-            logger.info("✅ DB 저장 완료")
+            if hasattr(self.storage, 'save_session'):
+                self.storage.save_session(result)
+                logger.info("✅ DB 저장 완료")
         except Exception as e:
             logger.error(f"⚠️ DB 저장 실패: {e}")
         
@@ -252,110 +213,192 @@ class Phase42Pipeline:
             progress_callback("✅ 완료!", 100)
         
         logger.info(f"\n{'='*60}")
-        logger.info(f"🎉 Phase 4.2 처리 완료")
+        logger.info(f"🎉 Phase 4.3 처리 완료")
         logger.info(f"   - 처리 시간: {processing_time:.1f}초")
         logger.info(f"   - 페이지 성공: {success_count}/{len(images)}")
-        logger.info(f"   - 평균 신뢰도: {avg_confidence:.2f}")
-        logger.info(f"   - 품질 점수: {quality_score:.1f}/100")
+        logger.info(f"   - 품질 점수: {quality_metrics['quality_score']:.1f}/100")
         logger.info(f"   - 총 글자 수: {len(full_markdown):,}")
         logger.info(f"{'='*60}\n")
         
         return result
     
-    def _validate_quality(self, content: str) -> tuple[bool, Optional[str]]:
-        """
-        품질 검증
-        
-        Returns:
-            (is_valid, error_message)
-        """
-        # 1. 최소 길이 확인
-        if len(content) < 100:
-            return False, "내용이 너무 짧음"
-        
-        # 2. 백분율 검증
-        percentages = re.findall(r'(\d+\.?\d*)%', content)
-        
-        if len(percentages) >= 3:
-            values = [float(p) for p in percentages]
-            
-            # 연속된 백분율 그룹 찾기
-            valid_groups = 0
-            for i in range(len(values)):
-                group_sum = values[i]
-                for j in range(i+1, min(i+10, len(values))):
-                    group_sum += values[j]
-                    
-                    if 99.0 <= group_sum <= 101.0:
-                        valid_groups += 1
-                        break
-                    
-                    if group_sum > 105.0:
-                        break
-            
-            # 백분율이 있는데 유효한 그룹이 없으면 문제
-            if valid_groups == 0 and len(values) >= 3:
-                return False, f"백분율 합계 검증 실패 (합계: {sum(values):.1f}%)"
-        
-        # 3. 숫자 패턴 확인 (최소한의 데이터 존재)
-        numbers = re.findall(r'\d+\.?\d*', content)
-        if len(numbers) < 5:
-            return False, "숫자 데이터 부족"
-        
-        return True, None
-    
-    def _calculate_quality_score(self, results: List[Dict], markdown: str) -> float:
-        """
-        품질 점수 계산 (0~100)
-        
-        기준:
-        - 평균 신뢰도: 40%
-        - 청킹 품질: 30%
-        - 데이터 밀도: 30%
-        """
-        if not results:
-            return 0.0
-        
-        # 1. 평균 신뢰도 (40점)
-        avg_confidence = sum(r.get('confidence', 0.0) for r in results) / len(results)
-        confidence_score = avg_confidence * 40
-        
-        # 2. 청킹 품질 (30점)
-        sections = markdown.split('---')
-        chunking_score = min(len(sections) * 5, 30)  # 섹션당 5점, 최대 30점
-        
-        # 3. 데이터 밀도 (30점)
-        numbers = re.findall(r'\d+\.?\d*', markdown)
-        data_density = min(len(numbers) / 50 * 30, 30)  # 숫자 50개당 30점
-        
-        total_score = confidence_score + chunking_score + data_density
-        
-        return min(total_score, 100.0)
-    
     def _generate_markdown(self, results: List[Dict[str, Any]]) -> str:
-        """
-        페이지별 결과를 하나의 Markdown으로 통합
-        
-        Args:
-            results: 페이지별 VLM 결과 리스트
-        
-        Returns:
-            통합된 Markdown 문자열
-        """
+        """페이지별 결과를 하나의 Markdown으로 통합"""
         markdown_parts = []
         
         for result in results:
             page_num = result['page_num']
             content = result['content']
-            confidence = result.get('confidence', 0.0)
-            retries = result.get('retries', 0)
             
-            # 디버그 정보 (주석 처리 가능)
-            if retries > 0:
-                logger.info(f"   페이지 {page_num}: {retries}회 재시도, 신뢰도 {confidence:.2f}")
-            
-            # 페이지 내용 추가
             markdown_parts.append(content)
             markdown_parts.append("\n\n")
         
         return "".join(markdown_parts).strip()
+    
+    def _analyze_quality(self, results: List[Dict], markdown: str) -> Dict[str, float]:
+        """상세 품질 분석 (Phase 4.3)"""
+        
+        if not results:
+            return {
+                'avg_confidence': 0.0,
+                'quality_score': 0.0,
+                'fidelity_score': 0.0,
+                'chunking_score': 0.0,
+                'rag_score': 0.0
+            }
+        
+        # 1. 평균 신뢰도
+        avg_confidence = sum(r.get('confidence', 0.0) for r in results) / len(results)
+        
+        # 2. 원본 충실도 (Fidelity)
+        fidelity_score = self._calculate_fidelity(markdown)
+        
+        # 3. 청킹 품질
+        chunking_score = self._calculate_chunking_quality(markdown)
+        
+        # 4. RAG 적합도
+        rag_score = self._calculate_rag_suitability(markdown)
+        
+        # 5. 종합 품질 점수
+        quality_score = (
+            avg_confidence * 30 +  # 신뢰도 30%
+            fidelity_score * 30 +  # 원본 충실도 30%
+            chunking_score * 20 +  # 청킹 품질 20%
+            rag_score * 20         # RAG 적합도 20%
+        )
+        
+        return {
+            'avg_confidence': avg_confidence,
+            'quality_score': min(quality_score, 100.0),
+            'fidelity_score': fidelity_score,
+            'chunking_score': chunking_score,
+            'rag_score': rag_score
+        }
+    
+    def _calculate_fidelity(self, markdown: str) -> float:
+        """원본 충실도 계산 (Phase 4.4: 더 엄격한 기준)"""
+        score = 100.0
+        
+        # 1. 반복 패턴 감지 (환각) - 더 엄격하게!
+        lines = markdown.split('\n')
+        line_counts = {}
+        for line in lines:
+            clean = line.strip()
+            # 🔧 버그 수정: 길이 체크 먼저!
+            if len(clean) > 5 and (clean.startswith('- ') or (len(clean) > 0 and clean[0].isdigit())):
+                line_counts[clean] = line_counts.get(clean, 0) + 1
+        
+        # 🔥 Phase 4.4: 더 엄격한 기준
+        max_repeat = max(line_counts.values()) if line_counts else 1
+        if max_repeat >= 20:
+            score -= 90  # 치명적! (기존 50 → 90)
+        elif max_repeat >= 10:
+            score -= 60  # 심각 (기존 30 → 60)
+        elif max_repeat >= 5:
+            score -= 30  # 문제 (기존 10 → 30)
+        elif max_repeat >= 3:
+            score -= 10  # 경미
+        
+        # 2. "읽기 불가" 개수 (약간 감점)
+        unreadable = markdown.count('읽기 불가') + markdown.count('[불명확]')
+        score -= min(20, unreadable * 2)
+        
+        # 3. 백분율 검증
+        percentages = re.findall(r'(\d+\.?\d*)%', markdown)
+        if len(percentages) >= 3:
+            values = [float(p) for p in percentages]
+            
+            valid_group = False
+            for i in range(len(values)):
+                group_sum = values[i]
+                for j in range(i+1, min(i+10, len(values))):
+                    group_sum += values[j]
+                    if 99.0 <= group_sum <= 101.0:
+                        valid_group = True
+                        break
+                if valid_group:
+                    break
+            
+            if not valid_group and len(values) >= 5:
+                score -= 10
+        
+        return max(0.0, score)
+    
+    def _calculate_chunking_quality(self, markdown: str) -> float:
+        """청킹 품질 계산"""
+        score = 0.0
+        
+        # 1. 섹션 구분 (`---`)
+        sections = markdown.split('---')
+        section_count = len(sections)
+        
+        if section_count >= 3:
+            score += 40
+        elif section_count >= 2:
+            score += 30
+        elif section_count >= 1:
+            score += 20
+        
+        # 2. 섹션 헤더 (`####`)
+        headers = re.findall(r'^####\s+(.+)$', markdown, re.MULTILINE)
+        header_count = len(headers)
+        
+        if header_count >= 5:
+            score += 30
+        elif header_count >= 3:
+            score += 20
+        elif header_count >= 1:
+            score += 10
+        
+        # 3. 균형잡힌 섹션 크기
+        if section_count > 1:
+            section_lengths = [len(s) for s in sections]
+            avg_len = sum(section_lengths) / len(section_lengths)
+            
+            # 섹션 크기가 비슷하면 가산점
+            variance = sum((l - avg_len) ** 2 for l in section_lengths) / len(section_lengths)
+            if variance < (avg_len ** 2) * 0.5:  # 분산이 작으면
+                score += 30
+            elif variance < (avg_len ** 2) * 1.0:
+                score += 20
+        
+        return min(100.0, score)
+    
+    def _calculate_rag_suitability(self, markdown: str) -> float:
+        """RAG 적합도 계산"""
+        score = 100.0
+        
+        # 1. 불필요한 중복 (감점)
+        lines = markdown.split('\n')
+        line_counts = {}
+        for line in lines:
+            clean = line.strip()
+            if len(clean) > 5:
+                line_counts[clean] = line_counts.get(clean, 0) + 1
+        
+        # 중복이 많으면 RAG 품질 저하
+        max_repeat = max(line_counts.values()) if line_counts else 1
+        if max_repeat >= 50:
+            score -= 80
+        elif max_repeat >= 20:
+            score -= 50
+        elif max_repeat >= 10:
+            score -= 30
+        
+        # 2. 자연어 설명 비율 (가산점)
+        total_lines = len([l for l in lines if l.strip()])
+        data_lines = len([l for l in lines if l.strip().startswith('- ')])
+        
+        if total_lines > 0:
+            description_ratio = 1.0 - (data_lines / total_lines)
+            if description_ratio >= 0.3:  # 30% 이상 자연어
+                score += 20
+            elif description_ratio >= 0.2:
+                score += 10
+        
+        # 3. 숫자 데이터 밀도 (적당히)
+        numbers = re.findall(r'\d+\.?\d*', markdown)
+        if 10 <= len(numbers) <= 200:
+            score += 10
+        
+        return max(0.0, min(100.0, score))

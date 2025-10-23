@@ -1,15 +1,16 @@
 """
 app.py
-PRISM Phase 4.2 - Streamlit UI (멀티스텝 검증)
+PRISM Phase 4.3 - Streamlit UI (지능형 분할 처리)
 
-✅ Phase 4.2 개선사항:
-1. 2-Pass 처리 표시
-2. 품질 점수 표시
-3. 신뢰도 표시
+✅ Phase 4.3 개선사항:
+1. 3-Step 처리 표시
+2. 상세 품질 메트릭
+3. 전략별 통계
+4. 6개 항목 평가
 
 Author: 최동현 (Frontend Lead)
 Date: 2025-10-23
-Version: 4.2
+Version: 4.3
 """
 
 import streamlit as st
@@ -36,11 +37,11 @@ logger = logging.getLogger(__name__)
 # Core 모듈 임포트
 try:
     from core.pdf_processor_v40 import PDFProcessorV40
-    from core.vlm_service import VLMServiceV42
+    from core.vlm_service import VLMServiceV43
     from core.storage import Storage
-    from core.pipeline import Phase42Pipeline
+    from core.pipeline import Phase43Pipeline
     
-    logger.info("✅ Phase 4.2 모듈 임포트 성공")
+    logger.info("✅ Phase 4.3 모듈 임포트 성공")
 except Exception as e:
     logger.error(f"❌ 모듈 임포트 실패: {e}")
     st.error(f"모듈 임포트 실패: {e}")
@@ -56,7 +57,7 @@ if 'processing_result' not in st.session_state:
 # 페이지 설정
 # ============================================================
 st.set_page_config(
-    page_title="PRISM Phase 4.2 - Multipass VLM",
+    page_title="PRISM Phase 4.3 - Intelligent Processing",
     page_icon="🎯",
     layout="wide"
 )
@@ -92,6 +93,13 @@ st.markdown("""
     .quality-good { color: #5cb85c; }
     .quality-fair { color: #f0ad4e; }
     .quality-poor { color: #d9534f; }
+    
+    .metric-card {
+        background: #f8f9fa;
+        border-radius: 10px;
+        padding: 15px;
+        margin: 10px 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -100,40 +108,44 @@ st.markdown("""
 # ============================================================
 st.markdown("""
 <div class='main-header'>
-    🎯 PRISM Phase 4.2
-    <span class='phase-badge'>Multipass VLM</span>
+    🎯 PRISM Phase 4.3
+    <span class='phase-badge'>Intelligent Processing</span>
 </div>
 """, unsafe_allow_html=True)
 
 # ============================================================
-# Phase 4.2 소개
+# Phase 4.3 소개
 # ============================================================
-with st.expander("📚 Phase 4.2 주요 개선사항", expanded=False):
+with st.expander("📚 Phase 4.3 주요 개선사항", expanded=False):
     st.markdown("""
-    ### 🔥 Phase 4.2: VLM 멀티스텝 검증
+    ### 🔥 Phase 4.3: 지능형 분할 처리
     
     #### 핵심 전략
-    1. **2-Pass Processing** - 구조 파악 → 정밀 추출
-    2. **강화된 프롬프팅** - 지도 차트 특수 처리
-    3. **자동 품질 검증** - 신뢰도 기반 재시도
-    4. **자동 청킹** - RAG 최적화
-    5. **범용성 확보** - 하드코딩 제거
+    1. **3-Step Processing** - 구조 분석 → 전략 분기 → 검증
+    2. **복잡도 기반 전략** - Simple vs Complex
+    3. **영역별 독립 처리** - 다이어그램 중복 방지
+    4. **환각 방지** - 읽기 불가 명시
+    5. **상세 품질 메트릭** - 6개 항목 평가
     
-    #### Phase 4.1 문제점 해결
-    - ❌ Phase 4.1: 권역 데이터 33% 정확도 (4개 오류)
-    - ✅ Phase 4.2: 100% 정확도 목표
+    #### Phase 4.2 문제점 해결
+    - ❌ Phase 4.2: 정류장 443개 중복 (환각)
+    - ✅ Phase 4.3: 영역별 독립 처리 + 환각 방지
     
-    #### 2-Pass 처리 방식
+    #### 3-Step 처리 방식
     ```
-    Pass 1: 구조 파악
-    ├─ 차트 종류 감지
-    ├─ 지도 차트 여부 확인
-    └─ 복잡도 평가
+    Step 1: 구조 분석
+    ├─ 요소 감지
+    ├─ 복잡도 판단
+    └─ 전략 결정
     
-    Pass 2: 정밀 추출
-    ├─ Pass 1 정보 활용
-    ├─ 맞춤형 프롬프트
-    └─ 품질 검증
+    Step 2: 전략 실행
+    ├─ Simple: 단일 VLM
+    └─ Complex: 분할 정복
+    
+    Step 3: 검증
+    ├─ 환각 탐지
+    ├─ 품질 평가
+    └─ 이슈 명시
     ```
     """)
 
@@ -166,10 +178,11 @@ dpi = st.sidebar.slider(
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("""
-### 💡 Phase 4.2 특징
-- **2-Pass 처리**: 구조→추출
-- **품질 검증**: 자동 재시도
-- **청킹 자동화**: RAG 최적화
+### 💡 Phase 4.3 특징
+- **3-Step 처리**: 분석→전략→검증
+- **복잡도 판단**: 자동 전략 분기
+- **환각 방지**: 읽기 불가 명시
+- **상세 평가**: 6개 항목 메트릭
 """)
 
 # ============================================================
@@ -187,7 +200,7 @@ if uploaded_file is not None:
     file_size = len(uploaded_file.getvalue()) / (1024 * 1024)
     st.info(f"📄 **파일명**: {uploaded_file.name} | **크기**: {file_size:.2f} MB")
     
-    if st.button("🚀 Phase 4.2 처리 시작", use_container_width=True):
+    if st.button("🚀 Phase 4.3 처리 시작", use_container_width=True):
         
         # 임시 파일 저장
         temp_path = Path("temp") / uploaded_file.name
@@ -206,13 +219,13 @@ if uploaded_file is not None:
         
         # 처리 시작
         try:
-            with st.spinner("Phase 4.2 서비스 초기화 중..."):
+            with st.spinner("Phase 4.3 서비스 초기화 중..."):
                 pdf_processor = PDFProcessorV40()
-                vlm_service = VLMServiceV42(provider=vlm_provider)
+                vlm_service = VLMServiceV43(provider=vlm_provider)
                 storage = Storage()
-                pipeline = Phase42Pipeline(pdf_processor, vlm_service, storage)
+                pipeline = Phase43Pipeline(pdf_processor, vlm_service, storage)
             
-            logger.info(f"🚀 Phase 4.2 처리 시작: {uploaded_file.name}")
+            logger.info(f"🚀 Phase 4.3 처리 시작: {uploaded_file.name}")
             
             result = pipeline.process_pdf(
                 str(temp_path),
@@ -243,49 +256,76 @@ if st.session_state['processing_result'] is not None:
         st.success("✅ 처리 완료!")
         
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # 품질 점수 (Phase 4.2 신규)
+        # 6개 항목 종합 평가 (Phase 4.3 신규)
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        quality_score = result.get('quality_score', 0)
-        avg_confidence = result.get('avg_confidence', 0)
-        
-        # 품질 등급
-        if quality_score >= 90:
-            quality_class = "quality-excellent"
-            quality_label = "우수"
-        elif quality_score >= 75:
-            quality_class = "quality-good"
-            quality_label = "양호"
-        elif quality_score >= 60:
-            quality_class = "quality-fair"
-            quality_label = "보통"
-        else:
-            quality_class = "quality-poor"
-            quality_label = "개선 필요"
-        
         st.markdown("---")
-        st.header("🎯 Phase 4.2 품질 평가")
+        st.header("📊 6개 항목 종합 평가")
+        
+        quality_score = result.get('quality_score', 0)
+        fidelity_score = result.get('fidelity_score', 0)
+        chunking_score = result.get('chunking_score', 0)
+        rag_score = result.get('rag_score', 0)
+        avg_confidence = result.get('avg_confidence', 0)
         
         col1, col2 = st.columns(2)
         
         with col1:
+            # 종합 점수
+            if quality_score >= 90:
+                quality_class = "quality-excellent"
+                quality_label = "우수"
+            elif quality_score >= 75:
+                quality_class = "quality-good"
+                quality_label = "양호"
+            elif quality_score >= 60:
+                quality_class = "quality-fair"
+                quality_label = "보통"
+            else:
+                quality_class = "quality-poor"
+                quality_label = "개선 필요"
+            
             st.markdown(f"""
             <div class='quality-score {quality_class}'>
                 {quality_score:.1f}/100
             </div>
             <div style='text-align: center; font-size: 1.2rem; color: #666;'>
-                품질 등급: <strong>{quality_label}</strong>
+                종합 품질: <strong>{quality_label}</strong>
             </div>
             """, unsafe_allow_html=True)
         
         with col2:
-            st.markdown(f"""
-            <div style='padding: 20px;'>
-                <h4>신뢰도 지표</h4>
-                <p>평균 신뢰도: <strong>{avg_confidence:.2%}</strong></p>
-                <p>낮은 신뢰도 페이지: <strong>{result.get('low_confidence_count', 0)}개</strong></p>
-                <p>재시도 횟수: <strong>{result.get('retry_count', 0)}회</strong></p>
+            st.markdown("""
+            <div class='metric-card'>
+                <h4>📋 항목별 점수</h4>
             </div>
             """, unsafe_allow_html=True)
+            
+            st.metric("1️⃣ 원본 충실도", f"{fidelity_score:.1f}/100")
+            st.metric("2️⃣ 신뢰도", f"{avg_confidence:.2%}")
+            st.metric("3️⃣ 청킹 품질", f"{chunking_score:.1f}/100")
+            st.metric("4️⃣ RAG 적합도", f"{rag_score:.1f}/100")
+        
+        # 상세 메트릭
+        st.markdown("---")
+        st.subheader("📈 상세 메트릭")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            strategy_simple = result.get('strategy_simple', 0)
+            strategy_complex = result.get('strategy_complex', 0)
+            st.metric("Simple 전략", f"{strategy_simple}개")
+        
+        with col2:
+            st.metric("Complex 전략", f"{strategy_complex}개")
+        
+        with col3:
+            validation_issues = result.get('validation_issues', 0)
+            st.metric("검증 이슈", f"{validation_issues}개")
+        
+        with col4:
+            processing_time = result.get('processing_time', 0)
+            st.metric("처리 시간", f"{processing_time:.1f}초")
         
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         # 통계
@@ -296,17 +336,21 @@ if st.session_state['processing_result'] is not None:
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            st.metric("처리 시간", f"{result['processing_time']:.1f}초")
+            pages_success = result.get('pages_success', 0)
+            pages_processed = result.get('pages_processed', 0)
+            st.metric("페이지 수", f"{pages_success}/{pages_processed}")
         
         with col2:
-            st.metric("페이지 수", f"{result['pages_success']}/{result['pages_processed']}")
+            total_chars = result.get('total_chars', len(result.get('markdown', '')))
+            st.metric("총 글자 수", f"{total_chars:,}")
         
         with col3:
-            st.metric("총 글자 수", f"{result['total_chars']:,}")
+            success_rate = pages_success / pages_processed * 100 if pages_processed > 0 else 0
+            st.metric("성공률", f"{success_rate:.0f}%")
         
         with col4:
-            success_rate = result['pages_success'] / result['pages_processed'] * 100
-            st.metric("성공률", f"{success_rate:.0f}%")
+            pages_error = result.get('pages_error', 0)
+            st.metric("오류 페이지", f"{pages_error}개")
         
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         # Markdown 내용
@@ -314,8 +358,10 @@ if st.session_state['processing_result'] is not None:
         st.markdown("---")
         st.header("📝 추출된 내용")
         
+        markdown_content = result.get('markdown', '')
+        
         with st.expander("전체 내용 보기", expanded=True):
-            st.markdown(result['markdown'])
+            st.markdown(markdown_content)
         
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         # 다운로드
@@ -328,7 +374,7 @@ if st.session_state['processing_result'] is not None:
         with col1:
             st.download_button(
                 label="📝 Markdown 다운로드",
-                data=result['markdown'],
+                data=markdown_content,
                 file_name=f"prism_result_{result['session_id']}.md",
                 mime="text/markdown",
                 use_container_width=True
@@ -352,13 +398,14 @@ else:
         st.info("👆 PDF 파일을 업로드하여 시작하세요")
         
         st.markdown("""
-        ### 📖 Phase 4.2 특징
+        ### 📖 Phase 4.3 특징
         
-        - ✅ **2-Pass 처리** - 구조 파악 후 정밀 추출
-        - ✅ **멀티스텝 검증** - 품질 기반 자동 재시도
-        - ✅ **강화된 정확도** - 지도 차트 특수 처리
-        - ✅ **자동 청킹** - RAG 최적화
-        - ✅ **품질 점수** - 실시간 평가
+        - ✅ **3-Step 처리** - 구조 분석 → 전략 분기 → 검증
+        - ✅ **지능형 전략** - 복잡도 자동 판단
+        - ✅ **환각 방지** - 읽기 불가 명시
+        - ✅ **영역별 처리** - 다이어그램 독립 추출
+        - ✅ **상세 평가** - 6개 항목 메트릭
+        - ✅ **경쟁사 수준** - 95/100 목표
         """)
 
 # ============================================================
@@ -367,9 +414,9 @@ else:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #888; font-size: 0.9rem;'>
-    <strong>PRISM Phase 4.2 - Multipass VLM Verification</strong><br>
-    🎯 2-Pass Processing | 품질 기반 검증 | 자동 청킹 | 범용성 확보<br>
-    목표: 경쟁사 수준 달성 (90/100점)<br>
+    <strong>PRISM Phase 4.3 - Intelligent Processing</strong><br>
+    🎯 3-Step Processing | 복잡도 판단 | 영역별 처리 | 환각 방지 | 상세 평가<br>
+    목표: 경쟁사 수준 달성 (95/100점)<br>
     Powered by Claude 3.5 Sonnet & Azure OpenAI GPT-4 Vision
 </div>
 """, unsafe_allow_html=True)
