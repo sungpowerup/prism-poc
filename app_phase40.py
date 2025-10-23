@@ -1,10 +1,14 @@
 """
-app_phase40.py
-PRISM Phase 4.0 - Streamlit UI (VLM-First)
+app_phase40_fixed.py
+PRISM Phase 4.0 - Streamlit UI (다운로드 새로고침 문제 해결)
 
-Author: 최동현 (Frontend Lead)
+✅ 개선사항:
+1. 세션 상태에 결과 저장 → 다운로드 후에도 유지
+2. 결과 표시 로직 개선
+
+Author: 최동현 (Frontend Lead), 황태민 (DevOps Lead)
 Date: 2025-10-23
-Version: 4.0
+Version: 4.0.1
 """
 
 import streamlit as st
@@ -43,6 +47,12 @@ except Exception as e:
     logger.error(f"❌ 모듈 임포트 실패: {e}")
     st.error(f"모듈 임포트 실패: {e}")
     st.stop()
+
+# ============================================================
+# 세션 상태 초기화
+# ============================================================
+if 'processing_result' not in st.session_state:
+    st.session_state['processing_result'] = None
 
 # ============================================================
 # 페이지 설정
@@ -232,67 +242,9 @@ if uploaded_file is not None:
                 progress_callback=update_progress
             )
             
-            # 처리 완료
-            if result['status'] == 'success':
-                st.success("✅ 처리 완료!")
-                
-                # 결과 표시
-                st.markdown("---")
-                st.header("📊 처리 결과")
-                
-                # 통계
-                col1, col2, col3, col4 = st.columns(4)
-                
-                with col1:
-                    st.metric("처리 시간", f"{result['processing_time']:.1f}초")
-                
-                with col2:
-                    st.metric("페이지 수", f"{result['pages_success']}/{result['pages_processed']}")
-                
-                with col3:
-                    st.metric("총 글자 수", f"{result['total_chars']:,}")
-                
-                with col4:
-                    success_rate = result['pages_success'] / result['pages_processed'] * 100
-                    st.metric("성공률", f"{success_rate:.0f}%")
-                
-                # Markdown 내용 표시
-                st.markdown("---")
-                st.header("📝 추출된 내용 (Markdown)")
-                
-                with st.expander("전체 내용 보기", expanded=True):
-                    st.markdown(result['markdown'])
-                
-                # 다운로드 버튼
-                st.markdown("---")
-                st.header("💾 다운로드")
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    # Markdown 다운로드
-                    st.download_button(
-                        label="📝 Markdown 다운로드",
-                        data=result['markdown'],
-                        file_name=f"prism_result_{result['session_id']}.md",
-                        mime="text/markdown",
-                        use_container_width=True
-                    )
-                
-                with col2:
-                    # JSON 다운로드
-                    json_data = json.dumps(result, indent=2, ensure_ascii=False)
-                    st.download_button(
-                        label="📋 JSON 다운로드",
-                        data=json_data,
-                        file_name=f"prism_result_{result['session_id']}.json",
-                        mime="application/json",
-                        use_container_width=True
-                    )
+            # ✅ 세션 상태에 결과 저장 (다운로드 후에도 유지)
+            st.session_state['processing_result'] = result
             
-            else:
-                st.error(f"❌ 처리 실패: {result.get('error', '알 수 없는 오류')}")
-        
         except Exception as e:
             st.error(f"❌ 처리 중 오류 발생: {e}")
             logger.error(f"처리 오류: {e}")
@@ -304,26 +256,94 @@ if uploaded_file is not None:
             if temp_path.exists():
                 temp_path.unlink()
 
+# ============================================================
+# 결과 표시 (세션 상태에서 로드)
+# ============================================================
+if st.session_state['processing_result'] is not None:
+    result = st.session_state['processing_result']
+    
+    # 처리 완료
+    if result['status'] == 'success':
+        st.success("✅ 처리 완료!")
+        
+        # 결과 표시
+        st.markdown("---")
+        st.header("📊 처리 결과")
+        
+        # 통계
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("처리 시간", f"{result['processing_time']:.1f}초")
+        
+        with col2:
+            st.metric("페이지 수", f"{result['pages_success']}/{result['pages_processed']}")
+        
+        with col3:
+            st.metric("총 글자 수", f"{result['total_chars']:,}")
+        
+        with col4:
+            success_rate = result['pages_success'] / result['pages_processed'] * 100
+            st.metric("성공률", f"{success_rate:.0f}%")
+        
+        # Markdown 내용 표시
+        st.markdown("---")
+        st.header("📝 추출된 내용 (Markdown)")
+        
+        with st.expander("전체 내용 보기", expanded=True):
+            st.markdown(result['markdown'])
+        
+        # 다운로드 버튼
+        st.markdown("---")
+        st.header("💾 다운로드")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Markdown 다운로드
+            st.download_button(
+                label="📝 Markdown 다운로드",
+                data=result['markdown'],
+                file_name=f"prism_result_{result['session_id']}.md",
+                mime="text/markdown",
+                use_container_width=True
+            )
+        
+        with col2:
+            # JSON 다운로드
+            json_data = json.dumps(result, indent=2, ensure_ascii=False)
+            st.download_button(
+                label="📋 JSON 다운로드",
+                data=json_data,
+                file_name=f"prism_result_{result['session_id']}.json",
+                mime="application/json",
+                use_container_width=True
+            )
+    
+    else:
+        st.error(f"❌ 처리 실패: {result.get('error', '알 수 없는 오류')}")
+
 else:
     # 안내 메시지
-    st.info("👆 PDF 파일을 업로드하여 시작하세요")
-    
-    st.markdown("""
-    ### 📖 사용 방법
-    
-    1. **PDF 업로드**: 상단에서 PDF 파일 선택
-    2. **설정 조정**: 사이드바에서 옵션 변경 (선택)
-    3. **처리 시작**: "처리 시작" 버튼 클릭
-    4. **결과 확인**: Markdown 형식으로 추출된 내용 확인
-    5. **다운로드**: Markdown 또는 JSON 파일 다운로드
-    
-    ### ✨ Phase 4.0 특징
-    
-    - ✅ **완벽한 맥락 유지** - 페이지 전체를 한번에 분석
-    - ✅ **자연어 설명** - LLM이 이해하기 쉬운 형식
-    - ✅ **높은 정확도** - 경쟁사 수준 (95%+)
-    - ✅ **범용성** - 모든 문서 유형 대응
-    """)
+    if uploaded_file is None:
+        st.info("👆 PDF 파일을 업로드하여 시작하세요")
+        
+        st.markdown("""
+        ### 📖 사용 방법
+        
+        1. **PDF 업로드**: 상단에서 PDF 파일 선택
+        2. **설정 조정**: 사이드바에서 옵션 변경 (선택)
+        3. **처리 시작**: "처리 시작" 버튼 클릭
+        4. **결과 확인**: Markdown 형식으로 추출된 내용 확인
+        5. **다운로드**: Markdown 또는 JSON 파일 다운로드
+        
+        ### ✨ Phase 4.0 특징
+        
+        - ✅ **완벽한 맥락 유지** - 페이지 전체를 한번에 분석
+        - ✅ **자연어 설명** - LLM이 이해하기 쉬운 형식
+        - ✅ **높은 정확도** - 경쟁사 수준 (95%+)
+        - ✅ **범용성** - 모든 문서 유형 대응
+        """)
 
 # ============================================================
 # 푸터

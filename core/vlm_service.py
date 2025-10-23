@@ -1,14 +1,16 @@
 """
-PRISM Phase 3.0+ - VLM Service
+core/vlm_service_v41_accurate.py
+PRISM Phase 4.1 - VLM Service (데이터 정확도 개선)
 
-✅ 수정사항 v3:
-1. analyze_image() 메소드 단순화 (텍스트 직접 반환)
-2. 응답 형식 통일
-3. 에러 핸들링 강화
+✅ Phase 4.1 개선사항:
+1. **완전한 원본 충실도** - 텍스트/숫자 변경 금지
+2. **OCR 수준 정확도** - 보이는 그대로 추출
+3. **백분율 합계 검증** - 자동 오류 감지
+4. **지도/복잡한 차트 특별 처리**
 
 Author: 박준호 (AI/ML Lead)
-Date: 2025-10-22
-Version: 3.3
+Date: 2025-10-23
+Version: 4.1
 """
 
 import os
@@ -16,7 +18,7 @@ import base64
 import json
 import time
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, List
 from openai import AzureOpenAI
 from anthropic import Anthropic
 
@@ -27,9 +29,14 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 
-class VLMService:
+class VLMServiceV41:
     """
-    Vision Language Model 서비스
+    Vision Language Model 서비스 v4.1
+    
+    Phase 4.1 특징:
+    - 완전한 원본 충실도 (텍스트/숫자 변경 금지)
+    - OCR 수준 정확도
+    - 백분율 합계 검증
     """
     
     def __init__(self, provider: str = "azure_openai"):
@@ -37,7 +44,7 @@ class VLMService:
         VLM 서비스 초기화
         
         Args:
-            provider: 'azure_openai', 'claude', 'ollama'
+            provider: 'azure_openai', 'claude'
         """
         self.provider = provider
         
@@ -100,24 +107,22 @@ class VLMService:
         else:
             raise ValueError(f"❌ 지원하지 않는 프로바이더: {provider}")
         
-        logger.info(f"✅ VLM Service 초기화 완료: {provider}")
+        logger.info(f"✅ VLM Service v4.1 초기화 완료: {provider}")
     
-    def analyze_image(
+    def analyze_page(
         self,
         image_data: str,
-        element_type: str,
         prompt: str
     ) -> str:
         """
-        이미지 분석 (텍스트 직접 반환)
+        페이지 전체 분석 (Phase 4.1 - 정확도 개선)
         
         Args:
             image_data: Base64 인코딩된 이미지
-            element_type: 'pie_chart', 'bar_chart', 'table', 'map', 'header'
             prompt: VLM 프롬프트
             
         Returns:
-            VLM 응답 텍스트 (문자열)
+            VLM 응답 텍스트 (자연어 설명)
         """
         if self.provider == "azure_openai":
             return self._analyze_azure(image_data, prompt)
@@ -127,7 +132,7 @@ class VLMService:
             raise ValueError(f"❌ 지원하지 않는 프로바이더: {self.provider}")
     
     def _analyze_azure(self, image_data: str, prompt: str) -> str:
-        """Azure OpenAI로 이미지 분석 (텍스트 반환)"""
+        """Azure OpenAI로 페이지 분석 (정확도 최우선)"""
         
         try:
             response = self.client.chat.completions.create(
@@ -149,11 +154,11 @@ class VLMService:
                         ]
                     }
                 ],
-                max_tokens=500,
-                temperature=0.3
+                max_tokens=4000,
+                temperature=0.1  # ✅ Phase 4.1: 정확도를 위해 낮춤 (0.3 → 0.1)
             )
             
-            # ✅ 수정: 텍스트 직접 반환
+            # 텍스트 직접 반환
             result = response.choices[0].message.content
             
             # UTF-8 정규화
@@ -162,21 +167,23 @@ class VLMService:
             
             logger.info(f"✅ Azure OpenAI 응답 수신 ({len(result)} 글자)")
             
-            # ✅ 수정: 문자열 직접 반환 (딕셔너리 아님)
+            # ✅ Phase 4.1: 백분율 합계 검증
+            self._validate_percentages(result)
+            
             return result
             
         except Exception as e:
             logger.error(f"❌ Azure OpenAI API 오류: {e}")
-            # ✅ 수정: 빈 문자열 반환 (None 아님)
             return ""
     
     def _analyze_claude(self, image_data: str, prompt: str) -> str:
-        """Claude로 이미지 분석 (텍스트 반환)"""
+        """Claude로 페이지 분석 (정확도 최우선)"""
         
         try:
             message = self.client.messages.create(
                 model=self.model,
-                max_tokens=500,
+                max_tokens=4000,
+                temperature=0.1,  # ✅ Phase 4.1: 정확도를 위해 낮춤
                 messages=[
                     {
                         "role": "user",
@@ -198,7 +205,7 @@ class VLMService:
                 ]
             )
             
-            # ✅ 수정: 텍스트 직접 반환
+            # 텍스트 직접 반환
             result = message.content[0].text
             
             # UTF-8 정규화
@@ -207,10 +214,54 @@ class VLMService:
             
             logger.info(f"✅ Claude 응답 수신 ({len(result)} 글자)")
             
-            # ✅ 수정: 문자열 직접 반환
+            # ✅ Phase 4.1: 백분율 합계 검증
+            self._validate_percentages(result)
+            
             return result
             
         except Exception as e:
             logger.error(f"❌ Claude API 오류: {e}")
-            # ✅ 수정: 빈 문자열 반환
             return ""
+    
+    def _validate_percentages(self, text: str) -> None:
+        """
+        백분율 합계 검증 (Phase 4.1)
+        
+        Args:
+            text: VLM 응답 텍스트
+        """
+        import re
+        
+        # 백분율 패턴 찾기
+        percentage_pattern = r'(\d+\.?\d*)%'
+        percentages = re.findall(percentage_pattern, text)
+        
+        if not percentages:
+            return
+        
+        # 숫자로 변환
+        values = [float(p) for p in percentages]
+        
+        # 합계 계산 (연속된 백분율 그룹 찾기)
+        # 예: 성별(남 45.2% + 여 54.8% = 100%)
+        for i in range(len(values)):
+            group_sum = values[i]
+            for j in range(i+1, min(i+6, len(values))):  # 최대 6개까지 그룹
+                group_sum += values[j]
+                
+                # 합계가 99~101% 사이면 유효한 그룹
+                if 99.0 <= group_sum <= 101.0:
+                    logger.info(f"✅ 백분율 그룹 검증 성공: {values[i:j+1]} (합계: {group_sum:.1f}%)")
+                    break
+                
+                # 합계가 101%를 초과하면 그룹 종료
+                if group_sum > 101.0:
+                    break
+        
+        # 전체 합계 검증 (모든 백분율이 한 그룹인 경우)
+        total = sum(values)
+        if 99.0 <= total <= 101.0:
+            logger.info(f"✅ 전체 백분율 합계 검증 성공: {total:.1f}%")
+        elif len(values) >= 3 and total > 105.0:
+            # 여러 차트가 섞여있을 수 있으므로 경고만
+            logger.warning(f"⚠️ 백분율 합계 높음: {total:.1f}% (여러 차트 혼재 가능)")
