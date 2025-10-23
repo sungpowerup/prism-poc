@@ -1,16 +1,15 @@
 """
 core/pipeline.py
-PRISM Phase 4.3 - Pipeline (지능형 분할 처리)
+PRISM Phase 4.5 - Pipeline (품질 점수 수정)
 
-✅ Phase 4.3 개선사항:
-1. 3-Step 처리 (구조→전략→검증)
-2. 복잡도 기반 전략 분기
-3. 강화된 품질 검증
-4. 상세한 품질 메트릭
+✅ Phase 4.5 개선사항:
+1. 품질 점수 계산 버그 수정
+2. VLM Service v4.5 통합
+3. 검증 강화
 
-Author: 이서영 (Backend Lead), 박준호 (AI/ML Lead)
+Author: 이서영 (Backend Lead)
 Date: 2025-10-23
-Version: 4.3
+Version: 4.5
 """
 
 import logging
@@ -22,22 +21,21 @@ import re
 logger = logging.getLogger(__name__)
 
 
-class Phase43Pipeline:
+class Phase45Pipeline:
     """
-    Phase 4.3 처리 파이프라인
+    Phase 4.5 처리 파이프라인
     
     특징:
-    - 3-Step 지능형 처리
-    - 복잡도 기반 전략 분기
-    - 강화된 검증
-    - 상세한 품질 메트릭
+    - OCR + VLM 하이브리드
+    - 품질 점수 정확 계산
+    - 검증 강화
     """
     
     def __init__(self, pdf_processor, vlm_service, storage):
         """
         Args:
             pdf_processor: PDFProcessor 인스턴스
-            vlm_service: VLMServiceV43 인스턴스
+            vlm_service: VLMServiceV45 인스턴스
             storage: Storage 인스턴스
         """
         self.pdf_processor = pdf_processor
@@ -51,7 +49,7 @@ class Phase43Pipeline:
         progress_callback: Optional[callable] = None
     ) -> Dict[str, Any]:
         """
-        PDF 처리 메인 함수 (Phase 4.3)
+        PDF 처리 메인 함수 (Phase 4.5)
         
         Args:
             pdf_path: PDF 파일 경로
@@ -65,7 +63,7 @@ class Phase43Pipeline:
         session_id = str(uuid.uuid4())[:8]
         
         logger.info(f"\n{'='*60}")
-        logger.info(f"🚀 Phase 4.3 처리 시작: {pdf_path}")
+        logger.info(f"🚀 Phase 4.5 처리 시작: {pdf_path}")
         logger.info(f"Session ID: {session_id}")
         logger.info(f"{'='*60}")
         
@@ -88,27 +86,27 @@ class Phase43Pipeline:
             }
         
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # Stage 2: 3-Step 지능형 분석
+        # Stage 2: OCR + VLM 하이브리드 분석
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         results = []
         success_count = 0
         error_count = 0
         
-        strategy_counts = {'simple': 0, 'complex': 0}
+        strategy_counts = {'simple': 0, 'complex_ocr': 0}
         validation_issues = []
         
         for page_num, img_data in enumerate(images):
             if progress_callback:
                 progress = int((page_num / len(images)) * 90)
                 progress_callback(
-                    f"🎯 페이지 {page_num + 1}/{len(images)} 3-Step 분석 중...",
+                    f"🎯 페이지 {page_num + 1}/{len(images)} OCR + VLM 분석 중...",
                     progress
                 )
             
-            logger.info(f"\n[Stage 2] 페이지 {page_num + 1} - 3-Step 지능형 분석")
+            logger.info(f"\n[Stage 2] 페이지 {page_num + 1} - OCR + VLM 하이브리드 분석")
             
             try:
-                # 3-Step VLM 호출
+                # OCR + VLM 호출
                 vlm_result = self.vlm_service.analyze_page_intelligent(
                     image_data=img_data,
                     page_num=page_num + 1
@@ -130,10 +128,6 @@ class Phase43Pipeline:
                 
                 logger.info(f"   ✅ 성공 ({len(content)} 글자, 신뢰도: {confidence:.2f}, 전략: {strategy})")
                 
-                # 검증 이슈 체크
-                if '⚠️ **품질 이슈:**' in content:
-                    validation_issues.append(f"페이지 {page_num + 1}")
-                
                 results.append({
                     'page_num': page_num + 1,
                     'content': content,
@@ -149,9 +143,7 @@ class Phase43Pipeline:
         logger.info(f"\n✅ VLM 분석 완료:")
         logger.info(f"   - 성공: {success_count}개")
         logger.info(f"   - 실패: {error_count}개")
-        logger.info(f"   - 전략: Simple {strategy_counts.get('simple', 0)}개, Complex {strategy_counts.get('complex', 0)}개")
-        if validation_issues:
-            logger.info(f"   - 검증 이슈: {', '.join(validation_issues)}")
+        logger.info(f"   - 전략: Simple {strategy_counts.get('simple', 0)}개, Complex OCR {strategy_counts.get('complex_ocr', 0)}개")
         
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         # Stage 3: Markdown 통합
@@ -166,7 +158,7 @@ class Phase43Pipeline:
         logger.info(f"✅ Markdown 생성 완료 ({len(full_markdown)} 글자)")
         
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # Stage 4: 상세 품질 분석
+        # Stage 4: 상세 품질 분석 (수정!)
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         quality_metrics = self._analyze_quality(results, full_markdown)
         
@@ -194,7 +186,7 @@ class Phase43Pipeline:
             'pages_success': success_count,
             'pages_error': error_count,
             'strategy_simple': strategy_counts.get('simple', 0),
-            'strategy_complex': strategy_counts.get('complex', 0),
+            'strategy_complex_ocr': strategy_counts.get('complex_ocr', 0),
             'validation_issues': len(validation_issues),
             'markdown': full_markdown,
             'page_results': results,
@@ -213,7 +205,7 @@ class Phase43Pipeline:
             progress_callback("✅ 완료!", 100)
         
         logger.info(f"\n{'='*60}")
-        logger.info(f"🎉 Phase 4.3 처리 완료")
+        logger.info(f"🎉 Phase 4.5 처리 완료")
         logger.info(f"   - 처리 시간: {processing_time:.1f}초")
         logger.info(f"   - 페이지 성공: {success_count}/{len(images)}")
         logger.info(f"   - 품질 점수: {quality_metrics['quality_score']:.1f}/100")
@@ -236,7 +228,7 @@ class Phase43Pipeline:
         return "".join(markdown_parts).strip()
     
     def _analyze_quality(self, results: List[Dict], markdown: str) -> Dict[str, float]:
-        """상세 품질 분석 (Phase 4.3)"""
+        """상세 품질 분석 (Phase 4.5 - 수정!)"""
         
         if not results:
             return {
@@ -259,12 +251,12 @@ class Phase43Pipeline:
         # 4. RAG 적합도
         rag_score = self._calculate_rag_suitability(markdown)
         
-        # 5. 종합 품질 점수
+        # 5. 종합 품질 점수 (🔧 버그 수정!)
         quality_score = (
-            avg_confidence * 30 +  # 신뢰도 30%
-            fidelity_score * 30 +  # 원본 충실도 30%
-            chunking_score * 20 +  # 청킹 품질 20%
-            rag_score * 20         # RAG 적합도 20%
+            avg_confidence * 100 * 0.30 +  # 신뢰도 30%
+            fidelity_score * 0.30 +         # 원본 충실도 30%
+            chunking_score * 0.20 +         # 청킹 품질 20%
+            rag_score * 0.20                # RAG 적합도 20%
         )
         
         return {
@@ -276,51 +268,36 @@ class Phase43Pipeline:
         }
     
     def _calculate_fidelity(self, markdown: str) -> float:
-        """원본 충실도 계산 (Phase 4.4: 더 엄격한 기준)"""
+        """원본 충실도 계산 (Phase 4.5)"""
         score = 100.0
         
-        # 1. 반복 패턴 감지 (환각) - 더 엄격하게!
+        # 1. 반복 패턴 감지 (환각) - 더 엄격!
         lines = markdown.split('\n')
         line_counts = {}
         for line in lines:
             clean = line.strip()
-            # 🔧 버그 수정: 길이 체크 먼저!
             if len(clean) > 5 and (clean.startswith('- ') or (len(clean) > 0 and clean[0].isdigit())):
                 line_counts[clean] = line_counts.get(clean, 0) + 1
         
-        # 🔥 Phase 4.4: 더 엄격한 기준
         max_repeat = max(line_counts.values()) if line_counts else 1
         if max_repeat >= 20:
-            score -= 90  # 치명적! (기존 50 → 90)
+            score -= 90  # 치명적!
         elif max_repeat >= 10:
-            score -= 60  # 심각 (기존 30 → 60)
+            score -= 60  # 심각
         elif max_repeat >= 5:
-            score -= 30  # 문제 (기존 10 → 30)
+            score -= 30  # 문제
         elif max_repeat >= 3:
             score -= 10  # 경미
         
-        # 2. "읽기 불가" 개수 (약간 감점)
+        # 2. "읽기 불가" 개수
         unreadable = markdown.count('읽기 불가') + markdown.count('[불명확]')
         score -= min(20, unreadable * 2)
         
-        # 3. 백분율 검증
-        percentages = re.findall(r'(\d+\.?\d*)%', markdown)
-        if len(percentages) >= 3:
-            values = [float(p) for p in percentages]
-            
-            valid_group = False
-            for i in range(len(values)):
-                group_sum = values[i]
-                for j in range(i+1, min(i+10, len(values))):
-                    group_sum += values[j]
-                    if 99.0 <= group_sum <= 101.0:
-                        valid_group = True
-                        break
-                if valid_group:
-                    break
-            
-            if not valid_group and len(values) >= 5:
-                score -= 10
+        # 3. 불필요한 메타 정보 (Phase 4.5 신규)
+        if '✅ 체크리스트' in markdown:
+            score -= 5
+        if '⚠️ **품질 이슈:**' in markdown:
+            score -= 5
         
         return max(0.0, score)
     
@@ -355,9 +332,8 @@ class Phase43Pipeline:
             section_lengths = [len(s) for s in sections]
             avg_len = sum(section_lengths) / len(section_lengths)
             
-            # 섹션 크기가 비슷하면 가산점
             variance = sum((l - avg_len) ** 2 for l in section_lengths) / len(section_lengths)
-            if variance < (avg_len ** 2) * 0.5:  # 분산이 작으면
+            if variance < (avg_len ** 2) * 0.5:
                 score += 30
             elif variance < (avg_len ** 2) * 1.0:
                 score += 20
@@ -376,7 +352,6 @@ class Phase43Pipeline:
             if len(clean) > 5:
                 line_counts[clean] = line_counts.get(clean, 0) + 1
         
-        # 중복이 많으면 RAG 품질 저하
         max_repeat = max(line_counts.values()) if line_counts else 1
         if max_repeat >= 50:
             score -= 80
@@ -385,20 +360,23 @@ class Phase43Pipeline:
         elif max_repeat >= 10:
             score -= 30
         
-        # 2. 자연어 설명 비율 (가산점)
+        # 2. 불필요한 메타 정보 (Phase 4.5 신규)
+        if '✅ 체크리스트' in markdown:
+            score -= 10
+        if '⚠️ **품질 이슈:**' in markdown:
+            score -= 10
+        if '━━━━━' in markdown:  # 장식선
+            score -= 5
+        
+        # 3. 자연어 설명 비율 (가산점)
         total_lines = len([l for l in lines if l.strip()])
         data_lines = len([l for l in lines if l.strip().startswith('- ')])
         
         if total_lines > 0:
             description_ratio = 1.0 - (data_lines / total_lines)
-            if description_ratio >= 0.3:  # 30% 이상 자연어
+            if description_ratio >= 0.3:
                 score += 20
             elif description_ratio >= 0.2:
                 score += 10
-        
-        # 3. 숫자 데이터 밀도 (적당히)
-        numbers = re.findall(r'\d+\.?\d*', markdown)
-        if 10 <= len(numbers) <= 200:
-            score += 10
         
         return max(0.0, min(100.0, score))

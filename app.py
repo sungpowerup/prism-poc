@@ -1,16 +1,15 @@
 """
 app.py
-PRISM Phase 4.3 - Streamlit UI (지능형 분할 처리)
+PRISM Phase 4.5 - Streamlit UI (OCR + VLM 하이브리드)
 
-✅ Phase 4.3 개선사항:
-1. 3-Step 처리 표시
-2. 상세 품질 메트릭
-3. 전략별 통계
-4. 6개 항목 평가
+✅ Phase 4.5 개선사항:
+1. OCR + VLM 하이브리드 처리
+2. 품질 점수 정확 표시
+3. 경쟁사 수준 목표 (95/100)
 
 Author: 최동현 (Frontend Lead)
 Date: 2025-10-23
-Version: 4.3
+Version: 4.5
 """
 
 import streamlit as st
@@ -37,11 +36,11 @@ logger = logging.getLogger(__name__)
 # Core 모듈 임포트
 try:
     from core.pdf_processor_v40 import PDFProcessorV40
-    from core.vlm_service import VLMServiceV43
+    from core.vlm_service import VLMServiceV45
     from core.storage import Storage
-    from core.pipeline import Phase43Pipeline
+    from core.pipeline import Phase45Pipeline
     
-    logger.info("✅ Phase 4.3 모듈 임포트 성공")
+    logger.info("✅ Phase 4.5 모듈 임포트 성공")
 except Exception as e:
     logger.error(f"❌ 모듈 임포트 실패: {e}")
     st.error(f"모듈 임포트 실패: {e}")
@@ -57,7 +56,7 @@ if 'processing_result' not in st.session_state:
 # 페이지 설정
 # ============================================================
 st.set_page_config(
-    page_title="PRISM Phase 4.3 - Intelligent Processing",
+    page_title="PRISM Phase 4.5 - OCR + VLM Hybrid",
     page_icon="🎯",
     layout="wide"
 )
@@ -108,44 +107,51 @@ st.markdown("""
 # ============================================================
 st.markdown("""
 <div class='main-header'>
-    🎯 PRISM Phase 4.3
-    <span class='phase-badge'>Intelligent Processing</span>
+    🎯 PRISM Phase 4.5
+    <span class='phase-badge'>OCR + VLM Hybrid</span>
 </div>
 """, unsafe_allow_html=True)
 
 # ============================================================
-# Phase 4.3 소개
+# Phase 4.5 소개
 # ============================================================
-with st.expander("📚 Phase 4.3 주요 개선사항", expanded=False):
+with st.expander("📚 Phase 4.5 주요 개선사항", expanded=False):
     st.markdown("""
-    ### 🔥 Phase 4.3: 지능형 분할 처리
+    ### 🔥 Phase 4.5: OCR + VLM 하이브리드
     
-    #### 핵심 전략
-    1. **3-Step Processing** - 구조 분석 → 전략 분기 → 검증
-    2. **복잡도 기반 전략** - Simple vs Complex
-    3. **영역별 독립 처리** - 다이어그램 중복 방지
-    4. **환각 방지** - 읽기 불가 명시
-    5. **상세 품질 메트릭** - 6개 항목 평가
+    #### 핵심 개선
+    1. **OCR 텍스트 추출** - 정류장 이름 정확 인식
+    2. **VLM 구조 이해** - 다이어그램 개수 정확 감지
+    3. **하이브리드 통합** - OCR + VLM 장점 결합
+    4. **환각 방지** - OCR 텍스트 기반 검증
+    5. **품질 점수 수정** - 정확한 계산 로직
+    6. **RAG 최적화** - 불필요 내용 제거
     
-    #### Phase 4.2 문제점 해결
-    - ❌ Phase 4.2: 정류장 443개 중복 (환각)
-    - ✅ Phase 4.3: 영역별 독립 처리 + 환각 방지
+    #### Phase 4.4 문제점 해결
+    - ❌ Phase 4.4: 다이어그램 1 환각 (30% 정확도)
+    - ✅ Phase 4.5: OCR + VLM으로 95% 목표
     
-    #### 3-Step 처리 방식
+    #### 처리 방식
     ```
-    Step 1: 구조 분석
-    ├─ 요소 감지
+    Step 1: OCR 텍스트 추출
+    ├─ Tesseract OCR
+    ├─ 정류장 이름 추출
+    └─ VLM에 전달
+    
+    Step 2: VLM 구조 분석
+    ├─ 다이어그램 개수 정확 감지
     ├─ 복잡도 판단
     └─ 전략 결정
     
-    Step 2: 전략 실행
-    ├─ Simple: 단일 VLM
-    └─ Complex: 분할 정복
+    Step 3: OCR + VLM 통합
+    ├─ OCR 텍스트 우선 사용
+    ├─ VLM으로 구조 이해
+    └─ 하이브리드 추출
     
-    Step 3: 검증
+    Step 4: 검증
+    ├─ OCR 매칭 확인
     ├─ 환각 탐지
-    ├─ 품질 평가
-    └─ 이슈 명시
+    └─ 품질 평가
     ```
     """)
 
@@ -178,11 +184,12 @@ dpi = st.sidebar.slider(
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("""
-### 💡 Phase 4.3 특징
-- **3-Step 처리**: 분석→전략→검증
-- **복잡도 판단**: 자동 전략 분기
-- **환각 방지**: 읽기 불가 명시
-- **상세 평가**: 6개 항목 메트릭
+### 💡 Phase 4.5 특징
+- **OCR + VLM**: 하이브리드 처리
+- **환각 방지**: OCR 텍스트 검증
+- **다이어그램 정확 감지**: 3개 모두 추출
+- **품질 점수 수정**: 정확한 계산
+- **경쟁사 수준**: 95/100 목표
 """)
 
 # ============================================================
@@ -200,7 +207,7 @@ if uploaded_file is not None:
     file_size = len(uploaded_file.getvalue()) / (1024 * 1024)
     st.info(f"📄 **파일명**: {uploaded_file.name} | **크기**: {file_size:.2f} MB")
     
-    if st.button("🚀 Phase 4.3 처리 시작", use_container_width=True):
+    if st.button("🚀 Phase 4.5 처리 시작", use_container_width=True):
         
         # 임시 파일 저장
         temp_path = Path("temp") / uploaded_file.name
@@ -219,13 +226,13 @@ if uploaded_file is not None:
         
         # 처리 시작
         try:
-            with st.spinner("Phase 4.3 서비스 초기화 중..."):
+            with st.spinner("Phase 4.5 서비스 초기화 중..."):
                 pdf_processor = PDFProcessorV40()
-                vlm_service = VLMServiceV43(provider=vlm_provider)
+                vlm_service = VLMServiceV45(provider=vlm_provider)
                 storage = Storage()
-                pipeline = Phase43Pipeline(pdf_processor, vlm_service, storage)
+                pipeline = Phase45Pipeline(pdf_processor, vlm_service, storage)
             
-            logger.info(f"🚀 Phase 4.3 처리 시작: {uploaded_file.name}")
+            logger.info(f"🚀 Phase 4.5 처리 시작: {uploaded_file.name}")
             
             result = pipeline.process_pdf(
                 str(temp_path),
@@ -256,10 +263,10 @@ if st.session_state['processing_result'] is not None:
         st.success("✅ 처리 완료!")
         
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # 6개 항목 종합 평가 (Phase 4.3 신규)
+        # 종합 평가
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         st.markdown("---")
-        st.header("📊 6개 항목 종합 평가")
+        st.header("📊 종합 평가")
         
         quality_score = result.get('quality_score', 0)
         fidelity_score = result.get('fidelity_score', 0)
@@ -273,7 +280,7 @@ if st.session_state['processing_result'] is not None:
             # 종합 점수
             if quality_score >= 90:
                 quality_class = "quality-excellent"
-                quality_label = "우수"
+                quality_label = "우수 (경쟁사 수준)"
             elif quality_score >= 75:
                 quality_class = "quality-good"
                 quality_label = "양호"
@@ -290,6 +297,26 @@ if st.session_state['processing_result'] is not None:
             </div>
             <div style='text-align: center; font-size: 1.2rem; color: #666;'>
                 종합 품질: <strong>{quality_label}</strong>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # 경쟁사 대비
+            competitor_score = 95.0
+            gap = quality_score - competitor_score
+            
+            if gap >= 0:
+                gap_color = "green"
+                gap_icon = "✅"
+            else:
+                gap_color = "red"
+                gap_icon = "⚠️"
+            
+            st.markdown(f"""
+            <div style='text-align: center; margin-top: 20px;'>
+                {gap_icon} <strong>경쟁사 대비:</strong> 
+                <span style='color: {gap_color}; font-size: 1.2rem;'>
+                    {gap:+.1f}점
+                </span>
             </div>
             """, unsafe_allow_html=True)
         
@@ -313,11 +340,11 @@ if st.session_state['processing_result'] is not None:
         
         with col1:
             strategy_simple = result.get('strategy_simple', 0)
-            strategy_complex = result.get('strategy_complex', 0)
+            strategy_complex = result.get('strategy_complex_ocr', 0)
             st.metric("Simple 전략", f"{strategy_simple}개")
         
         with col2:
-            st.metric("Complex 전략", f"{strategy_complex}개")
+            st.metric("Complex OCR 전략", f"{strategy_complex}개")
         
         with col3:
             validation_issues = result.get('validation_issues', 0)
@@ -398,13 +425,13 @@ else:
         st.info("👆 PDF 파일을 업로드하여 시작하세요")
         
         st.markdown("""
-        ### 📖 Phase 4.3 특징
+        ### 📖 Phase 4.5 특징
         
-        - ✅ **3-Step 처리** - 구조 분석 → 전략 분기 → 검증
-        - ✅ **지능형 전략** - 복잡도 자동 판단
-        - ✅ **환각 방지** - 읽기 불가 명시
-        - ✅ **영역별 처리** - 다이어그램 독립 추출
-        - ✅ **상세 평가** - 6개 항목 메트릭
+        - ✅ **OCR + VLM** - 하이브리드 처리
+        - ✅ **환각 방지** - OCR 텍스트 검증
+        - ✅ **다이어그램 정확 감지** - 3개 모두 추출
+        - ✅ **품질 점수 수정** - 정확한 계산
+        - ✅ **RAG 최적화** - 불필요 내용 제거
         - ✅ **경쟁사 수준** - 95/100 목표
         """)
 
@@ -414,9 +441,9 @@ else:
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #888; font-size: 0.9rem;'>
-    <strong>PRISM Phase 4.3 - Intelligent Processing</strong><br>
-    🎯 3-Step Processing | 복잡도 판단 | 영역별 처리 | 환각 방지 | 상세 평가<br>
+    <strong>PRISM Phase 4.5 - OCR + VLM Hybrid</strong><br>
+    🎯 OCR 텍스트 추출 | VLM 구조 이해 | 하이브리드 통합 | 환각 방지<br>
     목표: 경쟁사 수준 달성 (95/100점)<br>
-    Powered by Claude 3.5 Sonnet & Azure OpenAI GPT-4 Vision
+    Powered by Tesseract OCR & Azure OpenAI GPT-4 Vision
 </div>
 """, unsafe_allow_html=True)
