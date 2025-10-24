@@ -1,449 +1,547 @@
 """
-app.py
-PRISM Phase 4.5 - Streamlit UI (OCR + VLM 하이브리드)
+app_v50.py
+PRISM Phase 5.0 - Streamlit App (범용 문서 처리)
 
-✅ Phase 4.5 개선사항:
-1. OCR + VLM 하이브리드 처리
-2. 품질 점수 정확 표시
-3. 경쟁사 수준 목표 (95/100)
+✅ Phase 5.0 핵심:
+1. 문서 타입 자동 인식 UI
+2. 5가지 체크리스트 시각화
+3. 실시간 진행 상황 표시
 
 Author: 최동현 (Frontend Lead)
-Date: 2025-10-23
-Version: 4.5
+Date: 2025-10-24
+Version: 5.0
 """
 
 import streamlit as st
+import os
 import sys
+import time
 from pathlib import Path
-import logging
-import json
 from dotenv import load_dotenv
 
 # 환경 변수 로드
 load_dotenv()
 
-# 프로젝트 루트 추가
+# 프로젝트 루트를 Python 경로에 추가
 project_root = Path(__file__).parent
-sys.path.insert(0, str(project_root))
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
-# 로깅 설정
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+from core.pdf_processor import PDFProcessor
+from core.storage import Storage
 
-# Core 모듈 임포트
+# Phase 5.0 임포트
 try:
-    from core.pdf_processor_v40 import PDFProcessorV40
-    from core.vlm_service import VLMServiceV45
-    from core.storage import Storage
-    from core.pipeline import Phase45Pipeline
-    
-    logger.info("✅ Phase 4.5 모듈 임포트 성공")
-except Exception as e:
-    logger.error(f"❌ 모듈 임포트 실패: {e}")
-    st.error(f"모듈 임포트 실패: {e}")
-    st.stop()
+    from core.document_classifier import DocumentClassifierV50
+    from core.vlm_service import VLMServiceV50
+    from core.pipeline import Phase50Pipeline
+    PHASE_50_AVAILABLE = True
+except ImportError as e:
+    PHASE_50_AVAILABLE = False
+    IMPORT_ERROR = str(e)
 
-# ============================================================
-# 세션 상태 초기화
-# ============================================================
-if 'processing_result' not in st.session_state:
-    st.session_state['processing_result'] = None
-
-# ============================================================
 # 페이지 설정
-# ============================================================
 st.set_page_config(
-    page_title="PRISM Phase 4.5 - OCR + VLM Hybrid",
+    page_title="PRISM Phase 5.0 - 범용 문서 처리",
     page_icon="🎯",
     layout="wide"
 )
 
-# ============================================================
-# 스타일
-# ============================================================
+# 커스텀 CSS
 st.markdown("""
 <style>
     .main-header {
-        font-size: 2.5rem;
-        font-weight: bold;
-        color: #1e88e5;
-        text-align: center;
-        margin-bottom: 1rem;
-    }
-    .phase-badge {
-        display: inline-block;
-        padding: 0.3rem 0.8rem;
-        background-color: #ff6b35;
-        color: white;
-        border-radius: 20px;
-        font-size: 0.9rem;
-        font-weight: bold;
-        margin-left: 1rem;
-    }
-    .quality-score {
         font-size: 3rem;
         font-weight: bold;
-        text-align: center;
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 0.5rem;
     }
-    .quality-excellent { color: #28a745; }
-    .quality-good { color: #5cb85c; }
-    .quality-fair { color: #f0ad4e; }
-    .quality-poor { color: #d9534f; }
-    
+    .sub-header {
+        font-size: 1.2rem;
+        color: #666;
+        margin-bottom: 2rem;
+    }
     .metric-card {
         background: #f8f9fa;
+        padding: 1.5rem;
         border-radius: 10px;
-        padding: 15px;
-        margin: 10px 0;
+        border-left: 4px solid #667eea;
+        margin-bottom: 1rem;
+    }
+    .success-box {
+        background: #d4edda;
+        border: 1px solid #c3e6cb;
+        color: #155724;
+        padding: 1rem;
+        border-radius: 5px;
+        margin: 1rem 0;
+    }
+    .warning-box {
+        background: #fff3cd;
+        border: 1px solid #ffeeba;
+        color: #856404;
+        padding: 1rem;
+        border-radius: 5px;
+        margin: 1rem 0;
+    }
+    .error-box {
+        background: #f8d7da;
+        border: 1px solid #f5c6cb;
+        color: #721c24;
+        padding: 1rem;
+        border-radius: 5px;
+        margin: 1rem 0;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# ============================================================
-# 헤더
-# ============================================================
-st.markdown("""
-<div class='main-header'>
-    🎯 PRISM Phase 4.5
-    <span class='phase-badge'>OCR + VLM Hybrid</span>
-</div>
-""", unsafe_allow_html=True)
-
-# ============================================================
-# Phase 4.5 소개
-# ============================================================
-with st.expander("📚 Phase 4.5 주요 개선사항", expanded=False):
-    st.markdown("""
-    ### 🔥 Phase 4.5: OCR + VLM 하이브리드
-    
-    #### 핵심 개선
-    1. **OCR 텍스트 추출** - 정류장 이름 정확 인식
-    2. **VLM 구조 이해** - 다이어그램 개수 정확 감지
-    3. **하이브리드 통합** - OCR + VLM 장점 결합
-    4. **환각 방지** - OCR 텍스트 기반 검증
-    5. **품질 점수 수정** - 정확한 계산 로직
-    6. **RAG 최적화** - 불필요 내용 제거
-    
-    #### Phase 4.4 문제점 해결
-    - ❌ Phase 4.4: 다이어그램 1 환각 (30% 정확도)
-    - ✅ Phase 4.5: OCR + VLM으로 95% 목표
-    
-    #### 처리 방식
-    ```
-    Step 1: OCR 텍스트 추출
-    ├─ Tesseract OCR
-    ├─ 정류장 이름 추출
-    └─ VLM에 전달
-    
-    Step 2: VLM 구조 분석
-    ├─ 다이어그램 개수 정확 감지
-    ├─ 복잡도 판단
-    └─ 전략 결정
-    
-    Step 3: OCR + VLM 통합
-    ├─ OCR 텍스트 우선 사용
-    ├─ VLM으로 구조 이해
-    └─ 하이브리드 추출
-    
-    Step 4: 검증
-    ├─ OCR 매칭 확인
-    ├─ 환각 탐지
-    └─ 품질 평가
-    ```
-    """)
-
-# ============================================================
-# 사이드바 - 설정
-# ============================================================
-st.sidebar.header("⚙️ 설정")
-
-vlm_provider = st.sidebar.selectbox(
-    "VLM 프로바이더",
-    ["azure_openai", "claude"],
-    index=0
-)
-
-max_pages = st.sidebar.slider(
-    "최대 페이지 수",
-    min_value=1,
-    max_value=50,
-    value=20,
-    step=1
-)
-
-dpi = st.sidebar.slider(
-    "이미지 해상도 (DPI)",
-    min_value=150,
-    max_value=300,
-    value=300,
-    step=50
-)
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("""
-### 💡 Phase 4.5 특징
-- **OCR + VLM**: 하이브리드 처리
-- **환각 방지**: OCR 텍스트 검증
-- **다이어그램 정확 감지**: 3개 모두 추출
-- **품질 점수 수정**: 정확한 계산
-- **경쟁사 수준**: 95/100 목표
-""")
-
-# ============================================================
-# 메인 영역 - PDF 업로드
-# ============================================================
-st.header("📁 PDF 업로드")
-
-uploaded_file = st.file_uploader(
-    "PDF 파일을 선택하세요",
-    type=['pdf'],
-    help="최대 200MB까지 업로드 가능"
-)
-
-if uploaded_file is not None:
-    file_size = len(uploaded_file.getvalue()) / (1024 * 1024)
-    st.info(f"📄 **파일명**: {uploaded_file.name} | **크기**: {file_size:.2f} MB")
-    
-    if st.button("🚀 Phase 4.5 처리 시작", use_container_width=True):
+# 서비스 초기화
+@st.cache_resource
+def init_services():
+    """서비스 초기화"""
+    try:
+        # VLM 프로바이더 확인
+        provider = "azure_openai"
         
-        # 임시 파일 저장
-        temp_path = Path("temp") / uploaded_file.name
-        temp_path.parent.mkdir(exist_ok=True)
+        azure_key = os.getenv("AZURE_OPENAI_API_KEY")
+        azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
         
-        with open(temp_path, "wb") as f:
-            f.write(uploaded_file.getvalue())
+        if not azure_key or not azure_endpoint:
+            provider = "claude"
+            claude_key = os.getenv("ANTHROPIC_API_KEY")
+            if not claude_key:
+                raise ValueError("Azure OpenAI 또는 Claude API 키가 필요합니다")
         
-        # 진행 상황 표시
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        def update_progress(message: str, progress: int):
-            progress_bar.progress(progress)
-            status_text.text(message)
-        
-        # 처리 시작
-        try:
-            with st.spinner("Phase 4.5 서비스 초기화 중..."):
-                pdf_processor = PDFProcessorV40()
-                vlm_service = VLMServiceV45(provider=vlm_provider)
-                storage = Storage()
-                pipeline = Phase45Pipeline(pdf_processor, vlm_service, storage)
-            
-            logger.info(f"🚀 Phase 4.5 처리 시작: {uploaded_file.name}")
-            
-            result = pipeline.process_pdf(
-                str(temp_path),
-                max_pages=max_pages,
-                progress_callback=update_progress
-            )
-            
-            # 세션 상태에 결과 저장
-            st.session_state['processing_result'] = result
-            
-        except Exception as e:
-            st.error(f"❌ 처리 중 오류 발생: {e}")
-            logger.error(f"처리 오류: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-        
-        finally:
-            if temp_path.exists():
-                temp_path.unlink()
+        return {
+            'pdf_processor': PDFProcessor(),
+            'storage': Storage(),
+            'vlm_service': VLMServiceV50(provider=provider),
+            'provider': provider
+        }
+    except Exception as e:
+        st.error(f"❌ 서비스 초기화 실패: {e}")
+        return None
 
-# ============================================================
-# 결과 표시
-# ============================================================
-if st.session_state['processing_result'] is not None:
-    result = st.session_state['processing_result']
+# 세션 상태 초기화
+if 'step' not in st.session_state:
+    st.session_state.step = 1
+if 'uploaded_file' not in st.session_state:
+    st.session_state.uploaded_file = None
+if 'processing_result' not in st.session_state:
+    st.session_state.processing_result = None
+if 'progress' not in st.session_state:
+    st.session_state.progress = 0
+if 'progress_text' not in st.session_state:
+    st.session_state.progress_text = ""
+
+def main():
+    """메인 함수"""
     
-    if result['status'] == 'success':
-        st.success("✅ 처리 완료!")
+    # 헤더
+    st.markdown('<div class="main-header">🎯 PRISM Phase 5.0</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">범용 문서 처리 시스템 - 모든 문서 타입 지원</div>', unsafe_allow_html=True)
+    
+    # Phase 5.0 체크
+    if not PHASE_50_AVAILABLE:
+        st.markdown(f"""
+        <div class="error-box">
+            <h3>❌ Phase 5.0 모듈을 찾을 수 없습니다</h3>
+            <p>오류: {IMPORT_ERROR}</p>
+            <p>필요한 파일:</p>
+            <ul>
+                <li>document_classifier.py</li>
+                <li>vlm_service.py</li>
+                <li>pipeline.py</li>
+            </ul>
+        </div>
+        """, unsafe_allow_html=True)
+        st.stop()
+    
+    # 서비스 초기화
+    services = init_services()
+    if not services:
+        st.stop()
+    
+    # 사이드바
+    with st.sidebar:
+        st.header("📋 Phase 5.0 특징")
         
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # 종합 평가
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        st.markdown("""
+        ### ✅ 지원 문서 타입
+        
+        1. **텍스트 문서**
+           - 공공기관 사규
+           - 계약서
+           - 보고서
+        
+        2. **다이어그램**
+           - 버스 노선도
+           - 플로우차트
+           - 조직도
+        
+        3. **기술 도면**
+           - 인테리어 평면도
+           - 건축 설계도
+        
+        4. **이미지 콘텐츠**
+           - 패션 사진
+           - 제품 사진
+        
+        5. **차트/통계**
+           - 막대/원형/선 차트
+           - 표/테이블
+        
+        6. **복합 문서**
+           - 혼합 타입
+        """)
+        
         st.markdown("---")
-        st.header("📊 종합 평가")
+        st.markdown(f"**🤖 VLM 프로바이더**: {services['provider']}")
+        st.markdown("**📦 버전**: 5.0")
+    
+    # 메인 영역
+    if st.session_state.step == 1:
+        show_upload_step(services)
+    elif st.session_state.step == 2:
+        show_processing_step(services)
+    elif st.session_state.step == 3:
+        show_results_step()
+
+def show_upload_step(services):
+    """Step 1: 파일 업로드"""
+    
+    st.header("📤 Step 1: PDF 파일 업로드")
+    
+    # 파일 업로더
+    uploaded_file = st.file_uploader(
+        "PDF 파일을 선택하세요",
+        type=['pdf'],
+        help="모든 문서 타입을 지원합니다 (사규, 노선도, 도면, 패션, 통계 등)"
+    )
+    
+    if uploaded_file:
+        st.session_state.uploaded_file = uploaded_file
         
-        quality_score = result.get('quality_score', 0)
-        fidelity_score = result.get('fidelity_score', 0)
-        chunking_score = result.get('chunking_score', 0)
-        rag_score = result.get('rag_score', 0)
-        avg_confidence = result.get('avg_confidence', 0)
-        
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         
         with col1:
-            # 종합 점수
-            if quality_score >= 90:
-                quality_class = "quality-excellent"
-                quality_label = "우수 (경쟁사 수준)"
-            elif quality_score >= 75:
-                quality_class = "quality-good"
-                quality_label = "양호"
-            elif quality_score >= 60:
-                quality_class = "quality-fair"
-                quality_label = "보통"
-            else:
-                quality_class = "quality-poor"
-                quality_label = "개선 필요"
-            
-            st.markdown(f"""
-            <div class='quality-score {quality_class}'>
-                {quality_score:.1f}/100
-            </div>
-            <div style='text-align: center; font-size: 1.2rem; color: #666;'>
-                종합 품질: <strong>{quality_label}</strong>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            # 경쟁사 대비
-            competitor_score = 95.0
-            gap = quality_score - competitor_score
-            
-            if gap >= 0:
-                gap_color = "green"
-                gap_icon = "✅"
-            else:
-                gap_color = "red"
-                gap_icon = "⚠️"
-            
-            st.markdown(f"""
-            <div style='text-align: center; margin-top: 20px;'>
-                {gap_icon} <strong>경쟁사 대비:</strong> 
-                <span style='color: {gap_color}; font-size: 1.2rem;'>
-                    {gap:+.1f}점
-                </span>
-            </div>
-            """, unsafe_allow_html=True)
+            st.metric("📄 파일명", uploaded_file.name)
+        with col2:
+            file_size = uploaded_file.size / 1024 / 1024
+            st.metric("📊 파일 크기", f"{file_size:.2f} MB")
+        with col3:
+            st.metric("🎯 버전", "Phase 5.0")
+        
+        st.markdown("---")
+        
+        # 처리 옵션
+        st.subheader("⚙️ 처리 옵션")
+        
+        max_pages = st.slider(
+            "최대 페이지 수",
+            min_value=1,
+            max_value=50,
+            value=20,
+            help="처리할 최대 페이지 수"
+        )
+        
+        st.markdown("""
+        <div class="success-box">
+            <strong>✅ Phase 5.0은 문서 타입을 자동으로 판별합니다</strong><br>
+            하드코딩 없이 모든 문서를 지능적으로 처리합니다.
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # 처리 시작 버튼
+        if st.button("🚀 처리 시작", type="primary", use_container_width=True):
+            st.session_state.max_pages = max_pages
+            st.session_state.step = 2
+            st.rerun()
+    else:
+        st.info("👆 PDF 파일을 업로드하세요")
+        
+        # 예시
+        st.markdown("---")
+        st.subheader("📝 지원 문서 예시")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.markdown("""
+            **텍스트 문서**
+            - 공공기관 사규
+            - 계약서
+            - 보고서
+            """)
         
         with col2:
             st.markdown("""
-            <div class='metric-card'>
-                <h4>📋 항목별 점수</h4>
+            **다이어그램**
+            - 버스 노선도
+            - 플로우차트
+            - 조직도
+            """)
+        
+        with col3:
+            st.markdown("""
+            **기타**
+            - 인테리어 도면
+            - 패션 사진
+            - 통계 차트
+            """)
+
+def show_processing_step(services):
+    """Step 2: 처리 중"""
+    
+    st.header("⚙️ Step 2: 문서 처리 중")
+    
+    # 진행 상황 표시
+    progress_placeholder = st.empty()
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    def update_progress(message, progress):
+        """진행 상황 업데이트"""
+        st.session_state.progress = progress
+        st.session_state.progress_text = message
+        progress_bar.progress(progress)
+        status_text.text(message)
+    
+    # 처리 시작
+    try:
+        # 임시 파일 저장
+        temp_pdf_path = Path("temp") / st.session_state.uploaded_file.name
+        temp_pdf_path.parent.mkdir(exist_ok=True)
+        
+        with open(temp_pdf_path, "wb") as f:
+            f.write(st.session_state.uploaded_file.getbuffer())
+        
+        # Pipeline 생성
+        pipeline = Phase50Pipeline(
+            pdf_processor=services['pdf_processor'],
+            vlm_service=services['vlm_service'],
+            storage=services['storage']
+        )
+        
+        # 처리 시작
+        with st.spinner("🎯 Phase 5.0 범용 분석 중..."):
+            result = pipeline.process_pdf(
+                pdf_path=str(temp_pdf_path),
+                max_pages=st.session_state.max_pages,
+                progress_callback=update_progress
+            )
+        
+        # 임시 파일 삭제
+        if temp_pdf_path.exists():
+            temp_pdf_path.unlink()
+        
+        if result['status'] == 'success':
+            st.session_state.processing_result = result
+            st.session_state.step = 3
+            st.rerun()
+        else:
+            st.error(f"❌ 처리 실패: {result.get('error', 'Unknown error')}")
+            if st.button("🔙 돌아가기"):
+                st.session_state.step = 1
+                st.rerun()
+    
+    except Exception as e:
+        st.error(f"❌ 처리 중 오류 발생: {e}")
+        if st.button("🔙 돌아가기"):
+            st.session_state.step = 1
+            st.rerun()
+
+def show_results_step():
+    """Step 3: 결과 표시"""
+    
+    result = st.session_state.processing_result
+    
+    st.header("✅ Step 3: 처리 결과")
+    
+    # 요약 메트릭
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    with col1:
+        st.metric("📄 처리 페이지", f"{result['pages_success']}/{result['pages_total']}")
+    with col2:
+        st.metric("⏱️ 처리 시간", f"{result['processing_time']:.1f}초")
+    with col3:
+        st.metric("🎯 종합 품질", f"{result['overall_score']:.0f}/100")
+    with col4:
+        st.metric("📊 총 글자", f"{len(result['markdown']):,}")
+    with col5:
+        doc_types = result.get('doc_type_counts', {})
+        main_type = max(doc_types, key=doc_types.get) if doc_types else 'mixed'
+        st.metric("📋 문서 타입", main_type)
+    
+    st.markdown("---")
+    
+    # 탭
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📊 5가지 체크리스트",
+        "📝 Markdown 결과",
+        "🔍 페이지별 상세",
+        "📈 통계"
+    ])
+    
+    # Tab 1: 5가지 체크리스트
+    with tab1:
+        st.subheader("📊 5가지 체크리스트 점수")
+        
+        checklist_scores = [
+            ("1️⃣ 원본 충실도", result.get('fidelity_score', 0), 95),
+            ("2️⃣ 청킹 품질", result.get('chunking_score', 0), 90),
+            ("3️⃣ RAG 적합도", result.get('rag_score', 0), 95),
+            ("4️⃣ 범용성", result.get('universality_score', 0), 100),
+            ("5️⃣ 경쟁사 대비", result.get('competitive_score', 0), 95)
+        ]
+        
+        for name, score, target in checklist_scores:
+            col1, col2 = st.columns([3, 1])
+            
+            with col1:
+                st.markdown(f"**{name}**")
+                st.progress(score / 100)
+            
+            with col2:
+                if score >= target:
+                    st.markdown(f"<div style='color: green; font-size: 1.5rem; font-weight: bold;'>{score:.0f}/100 ✅</div>", unsafe_allow_html=True)
+                elif score >= target * 0.8:
+                    st.markdown(f"<div style='color: orange; font-size: 1.5rem; font-weight: bold;'>{score:.0f}/100 ⚠️</div>", unsafe_allow_html=True)
+                else:
+                    st.markdown(f"<div style='color: red; font-size: 1.5rem; font-weight: bold;'>{score:.0f}/100 ❌</div>", unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        # 종합 평가
+        overall = result.get('overall_score', 0)
+        if overall >= 85:
+            st.markdown("""
+            <div class="success-box">
+                <h3>🎉 우수!</h3>
+                <p>모든 체크리스트를 만족합니다. 경쟁사 수준 이상의 품질입니다.</p>
             </div>
             """, unsafe_allow_html=True)
-            
-            st.metric("1️⃣ 원본 충실도", f"{fidelity_score:.1f}/100")
-            st.metric("2️⃣ 신뢰도", f"{avg_confidence:.2%}")
-            st.metric("3️⃣ 청킹 품질", f"{chunking_score:.1f}/100")
-            st.metric("4️⃣ RAG 적합도", f"{rag_score:.1f}/100")
+        elif overall >= 70:
+            st.markdown("""
+            <div class="warning-box">
+                <h3>⚠️ 양호</h3>
+                <p>대부분의 체크리스트를 만족하지만, 일부 개선이 필요합니다.</p>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div class="error-box">
+                <h3>❌ 개선 필요</h3>
+                <p>여러 체크리스트에서 개선이 필요합니다.</p>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    # Tab 2: Markdown 결과
+    with tab2:
+        st.subheader("📝 Markdown 결과")
         
-        # 상세 메트릭
-        st.markdown("---")
-        st.subheader("📈 상세 메트릭")
+        markdown = result['markdown']
         
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            strategy_simple = result.get('strategy_simple', 0)
-            strategy_complex = result.get('strategy_complex_ocr', 0)
-            st.metric("Simple 전략", f"{strategy_simple}개")
-        
-        with col2:
-            st.metric("Complex OCR 전략", f"{strategy_complex}개")
-        
-        with col3:
-            validation_issues = result.get('validation_issues', 0)
-            st.metric("검증 이슈", f"{validation_issues}개")
-        
-        with col4:
-            processing_time = result.get('processing_time', 0)
-            st.metric("처리 시간", f"{processing_time:.1f}초")
-        
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # 통계
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        st.markdown("---")
-        st.header("📊 처리 결과")
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            pages_success = result.get('pages_success', 0)
-            pages_processed = result.get('pages_processed', 0)
-            st.metric("페이지 수", f"{pages_success}/{pages_processed}")
-        
-        with col2:
-            total_chars = result.get('total_chars', len(result.get('markdown', '')))
-            st.metric("총 글자 수", f"{total_chars:,}")
-        
-        with col3:
-            success_rate = pages_success / pages_processed * 100 if pages_processed > 0 else 0
-            st.metric("성공률", f"{success_rate:.0f}%")
-        
-        with col4:
-            pages_error = result.get('pages_error', 0)
-            st.metric("오류 페이지", f"{pages_error}개")
-        
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # Markdown 내용
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        st.markdown("---")
-        st.header("📝 추출된 내용")
-        
-        markdown_content = result.get('markdown', '')
-        
-        with st.expander("전체 내용 보기", expanded=True):
-            st.markdown(markdown_content)
-        
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # 다운로드
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        st.markdown("---")
-        st.header("💾 다운로드")
-        
+        # 다운로드 버튼
         col1, col2 = st.columns(2)
         
         with col1:
             st.download_button(
-                label="📝 Markdown 다운로드",
-                data=markdown_content,
-                file_name=f"prism_result_{result['session_id']}.md",
+                label="📥 Markdown 다운로드",
+                data=markdown,
+                file_name=f"prism_v50_{result['session_id']}.md",
                 mime="text/markdown",
                 use_container_width=True
             )
         
         with col2:
-            json_data = json.dumps(result, indent=2, ensure_ascii=False)
+            import json
+            json_data = json.dumps(result, ensure_ascii=False, indent=2)
             st.download_button(
-                label="📋 JSON 다운로드",
+                label="📥 JSON 다운로드",
                 data=json_data,
-                file_name=f"prism_result_{result['session_id']}.json",
+                file_name=f"prism_v50_{result['session_id']}.json",
                 mime="application/json",
                 use_container_width=True
             )
+        
+        st.markdown("---")
+        
+        # Markdown 미리보기
+        with st.expander("👀 Markdown 미리보기", expanded=True):
+            st.markdown(markdown)
     
-    else:
-        st.error(f"❌ 처리 실패: {result.get('error', '알 수 없는 오류')}")
-
-else:
-    if uploaded_file is None:
-        st.info("👆 PDF 파일을 업로드하여 시작하세요")
+    # Tab 3: 페이지별 상세
+    with tab3:
+        st.subheader("🔍 페이지별 상세 정보")
         
-        st.markdown("""
-        ### 📖 Phase 4.5 특징
+        page_results = result.get('page_results', [])
         
-        - ✅ **OCR + VLM** - 하이브리드 처리
-        - ✅ **환각 방지** - OCR 텍스트 검증
-        - ✅ **다이어그램 정확 감지** - 3개 모두 추출
-        - ✅ **품질 점수 수정** - 정확한 계산
-        - ✅ **RAG 최적화** - 불필요 내용 제거
-        - ✅ **경쟁사 수준** - 95/100 목표
-        """)
+        for page_result in page_results:
+            page_num = page_result['page_num']
+            doc_type = page_result.get('doc_type', 'mixed')
+            subtype = page_result.get('subtype', 'unknown')
+            confidence = page_result.get('confidence', 0.0)
+            quality = page_result.get('quality_score', 0.0)
+            content_length = len(page_result.get('content', ''))
+            
+            with st.expander(f"📄 페이지 {page_num} - {doc_type} ({subtype})"):
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric("문서 타입", f"{doc_type}")
+                with col2:
+                    st.metric("하위 타입", f"{subtype}")
+                with col3:
+                    st.metric("신뢰도", f"{confidence:.2f}")
+                with col4:
+                    st.metric("품질", f"{quality:.0f}/100")
+                
+                st.markdown("**추출 내용:**")
+                st.text_area(
+                    "내용",
+                    page_result.get('content', ''),
+                    height=200,
+                    key=f"content_{page_num}"
+                )
+    
+    # Tab 4: 통계
+    with tab4:
+        st.subheader("📈 처리 통계")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**문서 타입 분포**")
+            doc_type_counts = result.get('doc_type_counts', {})
+            for doc_type, count in doc_type_counts.items():
+                st.markdown(f"- **{doc_type}**: {count}개")
+        
+        with col2:
+            st.markdown("**처리 정보**")
+            st.markdown(f"- **Session ID**: {result['session_id']}")
+            st.markdown(f"- **버전**: {result.get('version', '5.0')}")
+            st.markdown(f"- **전략**: {result.get('strategy', 'universal_v50')}")
+            st.markdown(f"- **VLM**: {services['provider']}")
+    
+    st.markdown("---")
+    
+    # 액션 버튼
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("🔙 새 문서 처리", use_container_width=True):
+            st.session_state.step = 1
+            st.session_state.processing_result = None
+            st.rerun()
+    
+    with col2:
+        if st.button("🔄 재처리", use_container_width=True):
+            st.session_state.step = 2
+            st.rerun()
 
-# ============================================================
-# 푸터
-# ============================================================
-st.markdown("---")
-st.markdown("""
-<div style='text-align: center; color: #888; font-size: 0.9rem;'>
-    <strong>PRISM Phase 4.5 - OCR + VLM Hybrid</strong><br>
-    🎯 OCR 텍스트 추출 | VLM 구조 이해 | 하이브리드 통합 | 환각 방지<br>
-    목표: 경쟁사 수준 달성 (95/100점)<br>
-    Powered by Tesseract OCR & Azure OpenAI GPT-4 Vision
-</div>
-""", unsafe_allow_html=True)
+if __name__ == "__main__":
+    main()

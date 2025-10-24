@@ -1,6 +1,6 @@
-# PRISM Phase 2.7 - Python Dependencies
+# PRISM Phase 4.6 - Python Dependencies
 # Python 3.11+ 호환 (Python 3.12 완전 지원)
-# 최종 수정: 2025-10-20 (anthropic 버전 업데이트)
+# 최종 수정: 2025-10-24 (Phase 4.6 - OpenCV 추가)
 
 # ============================================
 # Core Framework
@@ -18,49 +18,31 @@ PyPDF2==3.0.1          # 레거시 코드
 pdfplumber==0.10.3     # 레거시 코드
 
 # ============================================
+# Computer Vision (Phase 4.6 신규)
+# ============================================
+opencv-python==4.9.0.80  # 다이어그램 영역 검출
+numpy==1.26.3            # OpenCV 의존성
+
+# ============================================
 # OCR 기반 패키지
 # ============================================
-paddlepaddle==2.6.0    # Python 3.12 호환
-# paddleocr는 별도 설치: pip install paddleocr==2.7.0 --no-deps
-
-# PaddleOCR 의존성
-shapely>=1.7.1
-scikit-image>=0.17.2
-imgaug>=0.4.0
-pyclipper>=1.2.1
-lmdb>=1.2.1
-tqdm>=4.62.0
-visualdl>=2.2.3
-rapidfuzz>=2.0.0
-opencv-python<=4.6.0.66
-opencv-contrib-python<=4.6.0.66
-cython>=0.29.0
-lxml>=4.6.0
-premailer>=3.9.0
-openpyxl>=3.0.0
-attrdict>=2.0.1
-python-docx>=0.8.11
-beautifulsoup4>=4.9.3
-fonttools>=4.24.0
-fire>=0.3.0
-pdf2docx>=0.5.0
+pytesseract==0.3.10      # Phase 4.5: OCR 텍스트 추출
+paddlepaddle==2.6.0      # Python 3.12 호환 (레거시)
 
 # ============================================
-# VLM APIs (Phase 2.7 Stage 1, 2)
+# VLM APIs (Phase 4.6)
 # ============================================
-# ✅ 수정: 최신 버전으로 업데이트 (proxies 문제 해결)
 anthropic==0.40.0       # Claude API (2025-10 최신)
 openai==1.58.1          # Azure OpenAI
 
 # ============================================
 # Utilities
 # ============================================
-numpy==1.26.3          # Python 3.12 호환
 requests==2.31.0       # HTTP 요청
-setuptools>=65.0.0     # PaddleOCR 내부 의존성
+setuptools>=65.0.0     # 내부 의존성
 
 # ============================================
-# 설치 가이드
+# 설치 가이드 (Phase 4.6)
 # ============================================
 #
 # 1. pip 업그레이드:
@@ -69,14 +51,18 @@ setuptools>=65.0.0     # PaddleOCR 내부 의존성
 # 2. 메인 패키지 설치:
 #    pip install -r requirements.txt
 #
-# 3. PaddleOCR 강제 설치:
-#    pip install paddleocr==2.7.0 --no-deps
+# 3. Tesseract OCR 설치 (시스템 레벨):
+#    Windows: https://github.com/UB-Mannheim/tesseract/wiki
+#    Mac: brew install tesseract tesseract-lang
+#    Linux: sudo apt-get install tesseract-ocr tesseract-ocr-kor
 #
-# 4. 설치 확인:
-#    python -c "import fitz; print(f'PyMuPDF: {fitz.__version__}')"
-#    python -c "import anthropic; print(f'Anthropic: {anthropic.__version__}')"
-#
-# 5. poppler-utils 설치:
+# 4. poppler-utils 설치:
 #    Windows: https://github.com/oschwartz10612/poppler-windows/releases
 #    Mac: brew install poppler
 #    Linux: sudo apt-get install poppler-utils
+#
+# 5. 설치 확인:
+#    python -c "import cv2; print(f'OpenCV: {cv2.__version__}')"
+#    python -c "import pytesseract; print('Tesseract OK')"
+#    python -c "import fitz; print(f'PyMuPDF: {fitz.__version__}')"
+#    python -c "import anthropic; print(f'Anthropic: {anthropic.__version__}')"

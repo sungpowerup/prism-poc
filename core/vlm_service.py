@@ -1,50 +1,40 @@
 """
-core/vlm_service.py
-PRISM Phase 4.5 - VLM Service (OCR + VLM 하이브리드)
+core/vlm_service_v50.py
+PRISM Phase 5.0 - VLM Service (범용 전략 패턴)
 
-✅ Phase 4.5 개선사항:
-1. OCR로 텍스트 추출 → VLM으로 구조 이해
-2. 다이어그램 정확 감지 (비전 분석 강화)
-3. 환각 방지 (OCR 텍스트 기반 검증)
-4. RAG 최적화 (불필요 내용 제거)
+✅ Phase 5.0 핵심:
+1. 문서 타입 우선 판별
+2. 타입별 전략 자동 선택
+3. 범용 프롬프트 (하드코딩 제로)
+4. 원본 충실도 95% 목표
 
 Author: 박준호 (AI/ML Lead)
-Date: 2025-10-23
-Version: 4.5
+Date: 2025-10-24
+Version: 5.0
 """
 
 import os
 import logging
+import json
 import re
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any
 from openai import AzureOpenAI
 from anthropic import Anthropic
 from dotenv import load_dotenv
-import base64
-from io import BytesIO
-from PIL import Image
-
-# OCR 라이브러리
-try:
-    import pytesseract
-    TESSERACT_AVAILABLE = True
-except ImportError:
-    TESSERACT_AVAILABLE = False
-    logging.warning("pytesseract not available - OCR disabled")
+from document_classifier import DocumentClassifierV50
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
 
-class VLMServiceV45:
+class VLMServiceV50:
     """
-    Vision Language Model 서비스 v4.5
+    범용 VLM 서비스 v5.0
     
-    Phase 4.5 특징:
-    - OCR + VLM 하이브리드
-    - 다이어그램 정확 감지
-    - 환각 방지
-    - RAG 최적화
+    특징:
+    - 문서 타입 자동 인식
+    - 전략 패턴 자동 적용
+    - 완전 범용 설계
     """
     
     def __init__(self, provider: str = "azure_openai"):
@@ -66,7 +56,6 @@ class VLMServiceV45:
                 azure_endpoint=azure_endpoint
             )
             self.deployment = deployment
-            logger.info(f"✅ Azure OpenAI 초기화: {deployment}")
             
         elif provider == "claude":
             api_key = os.getenv("ANTHROPIC_API_KEY")
@@ -75,484 +64,355 @@ class VLMServiceV45:
             
             self.client = Anthropic(api_key=api_key)
             self.model = "claude-3-5-sonnet-20241022"
-            logger.info(f"✅ Claude 초기화: {self.model}")
         
-        else:
-            raise ValueError(f"❌ 지원하지 않는 프로바이더: {provider}")
+        # 문서 타입 분류기
+        self.classifier = DocumentClassifierV50(provider)
         
-        logger.info(f"✅ VLM Service v4.5 초기화 완료: {provider}")
+        logger.info(f"✅ VLM Service v5.0 초기화 완료: {provider}")
     
-    def analyze_page_intelligent(
+    def analyze_page_v50(
         self,
         image_data: str,
         page_num: int
     ) -> Dict[str, Any]:
         """
-        OCR + VLM 하이브리드 페이지 분석 (Phase 4.5)
+        Phase 5.0: 범용 문서 분석
         
-        Step 1: OCR로 텍스트 추출
-        Step 2: VLM으로 구조 분석
-        Step 3: OCR + VLM 통합 추출
-        Step 4: 검증
-        
-        Args:
-            image_data: Base64 인코딩된 이미지
-            page_num: 페이지 번호
-            
-        Returns:
-            {
-                'content': str,
-                'structure': dict,
-                'confidence': float,
-                'strategy': str
-            }
+        1단계: 문서 타입 판별
+        2단계: 타입별 전략 선택
+        3단계: 구조 분석
+        4단계: 내용 추출
+        5단계: 품질 평가
         """
-        logger.info(f"🎯 Page {page_num}: OCR + VLM 하이브리드 분석 시작")
+        logger.info(f"\n{'='*60}")
+        logger.info(f"🎯 Page {page_num}: Phase 5.0 범용 분석 시작")
+        logger.info(f"{'='*60}")
         
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # Step 1: OCR 텍스트 추출
+        # Step 1: 문서 타입 판별
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        logger.info(f"  [Step 1] OCR 텍스트 추출...")
-        ocr_text = self._extract_text_ocr(image_data)
+        logger.info(f"\n[Step 1] 문서 타입 판별...")
         
-        if ocr_text:
-            logger.info(f"  [Step 1] OCR 추출: {len(ocr_text)} 글자")
-        else:
-            logger.warning(f"  [Step 1] OCR 실패 - VLM 단독 사용")
+        doc_type_result = self.classifier.classify(image_data, page_num)
         
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # Step 2: VLM 구조 분석
-        # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        logger.info(f"  [Step 2] VLM 구조 분석...")
-        structure = self._analyze_structure_enhanced(image_data)
+        doc_type = doc_type_result.get('type', 'mixed')
+        subtype = doc_type_result.get('subtype', 'unknown')
+        confidence = doc_type_result.get('confidence', 0.5)
         
-        diagram_count = structure.get('diagram_count', 0)
-        logger.info(f"  [Step 2] 다이어그램: {diagram_count}개")
-        logger.info(f"  [Step 2] 요소: {structure.get('elements', [])}")
+        logger.info(f"✅ 타입: {doc_type} ({subtype}), 신뢰도: {confidence:.2f}")
         
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # Step 3: OCR + VLM 통합 추출
+        # Step 2-4: 타입별 전략 실행
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        logger.info(f"  [Step 3] OCR + VLM 통합 추출...")
+        logger.info(f"\n[Step 2-4] 타입별 내용 추출...")
         
-        if diagram_count >= 2 or structure.get('complexity') == 'high':
-            # Complex: OCR 텍스트 활용
-            content = self._extract_with_ocr(image_data, structure, ocr_text)
-            strategy = 'complex_ocr'
-        else:
-            # Simple: VLM 단독
-            content = self._extract_simple(image_data, structure)
-            strategy = 'simple'
+        if doc_type == 'text_document':
+            content = self._extract_text_document(image_data, subtype)
+        elif doc_type == 'diagram':
+            content = self._extract_diagram(image_data, subtype)
+        elif doc_type == 'technical_drawing':
+            content = self._extract_technical_drawing(image_data, subtype)
+        elif doc_type == 'image_content':
+            content = self._extract_image_content(image_data, subtype)
+        elif doc_type == 'chart_statistics':
+            content = self._extract_chart_statistics(image_data, subtype)
+        else:  # mixed
+            content = self._extract_mixed(image_data)
+        
+        logger.info(f"✅ 추출 완료: {len(content)} 글자")
         
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # Step 4: 검증
+        # Step 5: 품질 평가
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        logger.info(f"  [Step 4] 검증 중...")
-        is_valid, issues = self._validate_output(content, structure, ocr_text)
+        quality_score = self._calculate_quality(content, doc_type)
         
-        if not is_valid:
-            logger.warning(f"  [Step 4] 검증 실패: {issues}")
-        
-        confidence = self._calculate_confidence(content, structure, ocr_text)
-        
-        logger.info(f"  [완료] {len(content)} 글자, 신뢰도: {confidence:.2f}, 전략: {strategy}")
+        logger.info(f"✅ 품질: {quality_score:.1f}/100")
+        logger.info(f"{'='*60}\n")
         
         return {
             'content': content,
-            'structure': structure,
             'confidence': confidence,
-            'strategy': strategy
+            'strategy': f'{doc_type}_v50',
+            'doc_type': doc_type,
+            'subtype': subtype,
+            'quality_score': quality_score,
+            'structure': doc_type_result
         }
     
-    def _extract_text_ocr(self, image_data: str) -> str:
-        """Step 1: OCR로 텍스트 추출"""
-        if not TESSERACT_AVAILABLE:
-            return ""
-        
-        try:
-            # Base64 → PIL Image
-            img_bytes = base64.b64decode(image_data)
-            img = Image.open(BytesIO(img_bytes))
-            
-            # OCR 실행 (한글 + 영어)
-            text = pytesseract.image_to_string(img, lang='kor+eng')
-            return text.strip()
-            
-        except Exception as e:
-            logger.warning(f"OCR 실패: {e}")
-            return ""
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # 타입별 추출 메서드
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     
-    def _analyze_structure_enhanced(self, image_data: str) -> Dict:
-        """Step 2: VLM 구조 분석 (강화)"""
+    def _extract_text_document(self, image_data: str, subtype: str) -> str:
+        """텍스트 문서 추출 (사규, 계약서, 보고서)"""
         
-        prompt = """당신은 문서 구조 분석 전문가입니다.
+        prompt = f"""이 {subtype} 문서의 내용을 Markdown으로 추출하세요.
 
-🎯 **임무: 이 페이지의 구조를 정확히 분석하세요**
+**형식:**
+# [문서 제목]
 
-### 🔍 중요: 다이어그램 개수 정확히 세기!
+**문서 정보**
+- 문서번호: [번호]
+- 제정일: [날짜]
+- 개정일: [날짜]
 
-이 페이지에는 여러 개의 **노선도 다이어그램**이 있을 수 있습니다.
-각 다이어그램은:
-- 출발점에서 시작
-- 여러 정류장을 거쳐
-- 종점까지 연결되는 선형 구조
+## [첫 번째 섹션]
 
-**반드시 모든 다이어그램을 세고 개수를 정확히 보고하세요!**
+### [하위 섹션]
+내용...
 
-### 📋 분석 항목
-
-1. **페이지 제목/주제**
-2. **주요 요소** (text, map, diagram 등)
-3. **다이어그램 개수** (정확히!)
-4. **복잡도 판단**:
-   - `simple`: 다이어그램 0~1개
-   - `medium`: 다이어그램 2~3개
-   - `high`: 다이어그램 4개 이상
-
-5. **예상 데이터 포인트 수**
-
-JSON으로 응답:
-```json
-{
-  "title": "페이지 제목",
-  "elements": ["text", "map", "diagram"],
-  "diagram_count": 3,
-  "complexity": "medium",
-  "has_map": true,
-  "estimated_data_points": 50
-}
-```
-
-**다이어그램 개수를 정확히 세는 것이 가장 중요합니다!**"""
+**중요 규칙:**
+1. 원본 텍스트를 정확히 추출하세요
+2. 조항/항 번호를 정확히 보존하세요
+3. 표가 있으면 Markdown 표로 변환하세요
+4. 메타 정보는 최소화하세요 (RAG 최적화)
+5. 간결하게 작성하세요"""
         
-        result = self._call_vlm(image_data, prompt, temperature=0.3)
-        structure = self._parse_json_response(result)
-        
-        # 다이어그램 개수 재검증
-        diagram_count = structure.get('diagram_count', 0)
-        if diagram_count >= 2:
-            structure['complexity'] = 'high'
-        
-        return structure
+        return self._call_vlm(image_data, prompt)
     
-    def _extract_with_ocr(self, image_data: str, structure: Dict, ocr_text: str) -> str:
-        """Step 3: OCR + VLM 통합 추출 (Complex)"""
+    def _extract_diagram(self, image_data: str, subtype: str) -> str:
+        """다이어그램 추출 (노선도, 플로우차트, 조직도)"""
         
-        diagram_count = structure.get('diagram_count', 1)
-        
-        # OCR 텍스트에서 정류장 이름 추출
-        stop_names = self._extract_stop_names(ocr_text)
-        
-        prompt = f"""당신은 전문 문서 분석가입니다.
+        if subtype == 'transport_route':
+            prompt = """이 교통 노선도를 분석하여 노선 정보를 추출하세요.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**형식:**
+## 노선 정보
 
-## 🎯 임무: 버스 노선도를 정확히 분석하세요
+**노선명**: [노선번호/이름]
+**운행 정보**: [배차간격, 운행시간 등]
 
-### ⚠️ 중요 정보
-
-**이 페이지에는 {diagram_count}개의 다이어그램이 있습니다.**
-
-**OCR로 추출된 정류장 이름:**
-```
-{chr(10).join(stop_names[:50])}
-```
-
-### 📋 출력 형식
-
-#### 상단 정보
-(노선명, 배차간격, 운행구간 등)
-
----
-
-#### 지도 (있는 경우)
-(지도에 표시된 주요 라벨)
-
----
-
-#### 다이어그램 {diagram_count}개
-
-각 다이어그램을 순서대로:
-
-**다이어그램 1**
-- 출발: [시작점]
-- 경유:
-  - [정류장1]
-  - [정류장2]
-  - ...
-- 종점: [종점]
-
-**다이어그램 2**
+### 경로
+1. [출발지]
+2. [경유지 1]
+3. [경유지 2]
 ...
+n. [종점]
 
-**다이어그램 {diagram_count}**
-...
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-## ✅ 필수 규칙
-
-1. **OCR 텍스트 우선 사용**
-   - 위의 OCR 정류장 이름을 최대한 활용하세요
-   - 추측하지 말고 OCR 결과를 신뢰하세요
-
-2. **{diagram_count}개 다이어그램 모두 추출**
-   - 빠뜨리지 마세요!
-
-3. **정류장 순서 정확히**
-   - 노선도의 흐름대로 순서를 지키세요
-
-4. **불필요한 내용 제거**
-   - 체크리스트 ❌
-   - 품질 이슈 ❌
-   - 주석 최소화 ✅
-
-5. **RAG 최적화**
-   - 간결하고 명확하게
-   - 중복 제거
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-이제 분석을 시작하세요!"""
+**주의:**
+- 정류장/역 이름을 정확히 추출하세요
+- 순서를 정확히 지키세요
+- 중복 없이 추출하세요"""
         
-        return self._call_vlm(image_data, prompt, temperature=0.1, max_tokens=6000)
+        elif subtype == 'flowchart':
+            prompt = """이 플로우차트를 분석하여 프로세스를 추출하세요.
+
+**형식:**
+## 프로세스 플로우
+
+### 단계
+1. **[단계 이름]**
+   - 내용: [설명]
+   - 조건: [있다면]
+   - 다음: [다음 단계]
+
+2. **[단계 이름]**
+   ...
+
+### 의사결정 포인트
+- [조건 A] → [결과 1]
+- [조건 B] → [결과 2]"""
+        
+        else:  # organization, network 등
+            prompt = """이 다이어그램을 분석하여 구조를 추출하세요.
+
+**형식:**
+## 구조
+
+### 주요 요소
+- [요소 1]: [설명]
+- [요소 2]: [설명]
+
+### 관계
+- [요소 1] → [요소 2]: [관계 설명]"""
+        
+        return self._call_vlm(image_data, prompt)
     
-    def _extract_stop_names(self, ocr_text: str) -> List[str]:
-        """OCR 텍스트에서 정류장 이름 추출"""
-        if not ocr_text:
-            return []
+    def _extract_technical_drawing(self, image_data: str, subtype: str) -> str:
+        """기술 도면 추출 (인테리어, 건축)"""
         
-        # 한글이 포함된 라인만 추출
-        lines = ocr_text.split('\n')
-        stop_names = []
+        prompt = """이 도면을 분석하여 공간 정보를 추출하세요.
+
+**형식:**
+## 평면도
+
+**전체 정보**
+- 총 면적: [면적]
+- 축척: [축척]
+
+### 공간 구성
+1. **[공간 이름]** ([면적])
+   - 위치: [방향/위치]
+   - 치수: [가로 × 세로]
+   - 특징: [주요 특징]
+
+2. **[공간 이름]**
+   ...
+
+**주의:**
+- 공간 이름을 정확히 추출하세요
+- 치수 정보를 포함하세요
+- 간결하게 작성하세요"""
         
-        for line in lines:
-            clean = line.strip()
-            # 한글이 있고, 3글자 이상, 50글자 이하
-            if re.search(r'[가-힣]', clean) and 3 <= len(clean) <= 50:
-                # 숫자만 있는 줄 제외
-                if not clean.replace(' ', '').isdigit():
-                    stop_names.append(clean)
-        
-        return stop_names
+        return self._call_vlm(image_data, prompt)
     
-    def _extract_simple(self, image_data: str, structure: Dict) -> str:
-        """Step 3: VLM 단독 추출 (Simple)"""
+    def _extract_image_content(self, image_data: str, subtype: str) -> str:
+        """이미지 콘텐츠 추출 (패션, 제품)"""
         
-        prompt = """당신은 전문 문서 분석가입니다.
+        prompt = """이 이미지를 분석하여 내용을 설명하세요.
 
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**형식:**
+## 이미지 설명
 
-## 🎯 임무: 이 페이지를 정확히 분석하세요
+### 주요 요소
+- [요소 1]: [설명]
+- [요소 2]: [설명]
 
-### 📋 출력 형식
+### 시각적 특징
+- 색상: [주요 색상]
+- 스타일: [스타일 설명]
+- 분위기: [분위기]
 
-자연스러운 문장으로 설명하세요.
+### 세부 사항
+[상세 설명]
 
-#### 섹션 구분
-- `---`로 주요 섹션 구분
-- RAG 친화적 청킹
-
-#### 예시:
-```markdown
-#### [섹션 제목]
-
-[자연어 설명]
-
-**데이터:**
-- 항목1: 값1
-- 항목2: 값2
-
----
-
-#### [다음 섹션]
-...
-```
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-## ✅ 필수 규칙
-
-1. **정확성 최우선**
-2. **불필요한 내용 제거** (체크리스트, 품질 이슈 등)
-3. **RAG 최적화** (간결, 명확)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-이제 분석을 시작하세요!"""
+**주의:**
+- 객관적으로 설명하세요
+- 간결하게 작성하세요
+- 불필요한 추측은 피하세요"""
         
-        return self._call_vlm(image_data, prompt, temperature=0.1)
+        return self._call_vlm(image_data, prompt)
     
-    def _validate_output(self, content: str, structure: Dict, ocr_text: str) -> tuple[bool, List[str]]:
-        """Step 4: 출력 검증 (강화)"""
-        issues = []
+    def _extract_chart_statistics(self, image_data: str, subtype: str) -> str:
+        """차트/통계 추출"""
         
-        # 1. 최소 길이
-        if len(content) < 100:
-            issues.append("내용이 너무 짧음")
+        prompt = """이 차트/표를 분석하여 데이터를 추출하세요.
+
+**형식:**
+## 데이터
+
+**차트 제목**: [제목]
+**차트 타입**: [막대/원형/선 등]
+
+### 데이터 테이블
+
+| [항목] | [값 1] | [값 2] | [값 3] |
+|--------|--------|--------|--------|
+| [행 1] | [값]   | [값]   | [값]   |
+| [행 2] | [값]   | [값]   | [값]   |
+
+### 주요 발견
+- [핵심 인사이트 1]
+- [핵심 인사이트 2]
+
+**주의:**
+- 데이터를 정확히 추출하세요
+- 표 형식으로 정리하세요
+- 간결하게 작성하세요"""
         
-        # 2. 반복 패턴 감지 (환각)
-        lines = content.split('\n')
-        line_counts = {}
-        for line in lines:
-            clean = line.strip()
-            if len(clean) > 5 and clean.startswith('- '):
-                line_counts[clean] = line_counts.get(clean, 0) + 1
-        
-        for line, count in line_counts.items():
-            if count >= 10:
-                issues.append(f"반복 패턴 감지: '{line}' x{count}")
-        
-        # 3. 다이어그램 개수 확인
-        expected_diagrams = structure.get('diagram_count', 0)
-        actual_diagrams = content.count('**다이어그램')
-        
-        if expected_diagrams > 0 and actual_diagrams < expected_diagrams:
-            issues.append(f"다이어그램 누락: {actual_diagrams}/{expected_diagrams}")
-        
-        # 4. OCR 텍스트 매칭 (있는 경우)
-        if ocr_text and len(ocr_text) > 100:
-            stop_names = self._extract_stop_names(ocr_text)
-            if stop_names:
-                # OCR에서 추출한 정류장 중 content에 없는 것
-                missing = [name for name in stop_names[:20] if name not in content]
-                if len(missing) > len(stop_names) * 0.5:  # 50% 이상 누락
-                    issues.append(f"OCR 정류장 대량 누락: {len(missing)}/{len(stop_names[:20])}")
-        
-        # 5. 불필요한 내용 체크
-        if '✅ 체크리스트' in content:
-            issues.append("불필요한 체크리스트 포함")
-        if '⚠️ **품질 이슈:**' in content:
-            issues.append("불필요한 품질 이슈 섹션 포함")
-        
-        is_valid = len(issues) == 0
-        return is_valid, issues
+        return self._call_vlm(image_data, prompt)
     
-    def _call_vlm(
-        self,
-        image_data: str,
-        prompt: str,
-        temperature: float = 0.1,
-        max_tokens: int = 4000
-    ) -> str:
-        """VLM API 호출"""
+    def _extract_mixed(self, image_data: str) -> str:
+        """복합 문서 추출"""
+        
+        prompt = """이 문서의 내용을 Markdown으로 추출하세요.
+
+**형식:**
+## [문서 제목]
+
+### [섹션 1]
+내용...
+
+### [섹션 2]
+내용...
+
+**주의:**
+- 문서 구조를 파악하여 적절히 추출하세요
+- 텍스트, 표, 이미지 등을 모두 포함하세요
+- 간결하고 명확하게 작성하세요"""
+        
+        return self._call_vlm(image_data, prompt)
+    
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # VLM 호출
+    # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    def _call_vlm(self, image_data: str, prompt: str) -> str:
+        """VLM 호출"""
         
         try:
             if self.provider == "azure_openai":
                 response = self.client.chat.completions.create(
                     model=self.deployment,
-                    messages=[{
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/png;base64,{image_data}"
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:image/png;base64,{image_data}"}
                                 }
-                            }
-                        ]
-                    }],
-                    max_tokens=max_tokens,
-                    temperature=temperature
+                            ]
+                        }
+                    ],
+                    max_tokens=2000,
+                    temperature=0.2
                 )
-                result = response.choices[0].message.content
                 
-            elif self.provider == "claude":
-                message = self.client.messages.create(
+                return response.choices[0].message.content.strip()
+                
+            else:  # claude
+                response = self.client.messages.create(
                     model=self.model,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    messages=[{
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "image/png",
-                                    "data": image_data
-                                }
-                            },
-                            {"type": "text", "text": prompt}
-                        ]
-                    }]
+                    max_tokens=2000,
+                    temperature=0.2,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "image/png",
+                                        "data": image_data
+                                    }
+                                },
+                                {"type": "text", "text": prompt}
+                            ]
+                        }
+                    ]
                 )
-                result = message.content[0].text
-            
-            else:
-                raise ValueError(f"지원하지 않는 프로바이더: {self.provider}")
-            
-            return result.strip() if result else ""
-            
+                
+                return response.content[0].text.strip()
+        
         except Exception as e:
-            logger.error(f"❌ VLM API 오류: {e}")
-            return ""
+            logger.error(f"❌ VLM 호출 실패: {e}")
+            return f"## 추출 실패\n오류: {str(e)}"
     
-    def _parse_json_response(self, response: str) -> Dict:
-        """JSON 응답 파싱"""
-        import json
+    def _calculate_quality(self, content: str, doc_type: str) -> float:
+        """품질 평가 (범용)"""
+        score = 100.0
         
-        try:
-            # JSON 블록 찾기
-            json_match = re.search(r'```json\s*(\{.*?\})\s*```', response, re.DOTALL)
-            if json_match:
-                return json.loads(json_match.group(1))
-            
-            # JSON 블록 없으면 전체 파싱
-            return json.loads(response)
-            
-        except Exception as e:
-            logger.warning(f"⚠️ JSON 파싱 실패: {e}")
-            # 기본값
-            return {
-                'title': 'Unknown',
-                'elements': ['text'],
-                'complexity': 'medium',
-                'diagram_count': 0,
-                'has_map': False,
-                'estimated_data_points': 10
-            }
-    
-    def _calculate_confidence(self, content: str, structure: Dict, ocr_text: str) -> float:
-        """신뢰도 계산 (강화)"""
-        confidence = 0.95
+        # 최소 길이 체크
+        if len(content) < 50:
+            score -= 30
         
-        # 1. 길이 체크
-        if len(content) < 200:
-            confidence -= 0.15
+        # 구조 체크 (헤더 존재)
+        headers = re.findall(r'^#+\s+', content, re.MULTILINE)
+        if len(headers) == 0:
+            score -= 20
+        elif len(headers) >= 3:
+            score += 10
         
-        # 2. 반복 패턴 감지
-        lines = content.split('\n')
-        line_counts = {}
-        for line in lines:
-            clean = line.strip()
-            if len(clean) > 5:
-                line_counts[clean] = line_counts.get(clean, 0) + 1
+        # RAG 불필요 내용 체크
+        meta_keywords = [
+            '이 문서는', '다음과 같이', '아래와 같이',
+            '볼 수 있습니다', '확인할 수 있습니다'
+        ]
+        for keyword in meta_keywords:
+            if keyword in content:
+                score -= 5
         
-        max_repeat = max(line_counts.values()) if line_counts else 1
-        if max_repeat >= 10:
-            confidence -= 0.2
-        elif max_repeat >= 5:
-            confidence -= 0.1
-        
-        # 3. 다이어그램 개수 매칭
-        expected = structure.get('diagram_count', 0)
-        actual = content.count('**다이어그램')
-        if expected > 0 and actual < expected:
-            confidence -= 0.15
-        
-        # 4. OCR 매칭 (있는 경우)
-        if ocr_text and len(ocr_text) > 100:
-            stop_names = self._extract_stop_names(ocr_text)
-            if stop_names:
-                matched = sum(1 for name in stop_names[:20] if name in content)
-                match_rate = matched / len(stop_names[:20])
-                if match_rate < 0.5:
-                    confidence -= 0.2
-        
-        # 5. 불필요한 내용
-        if '✅ 체크리스트' in content or '⚠️ **품질 이슈:**' in content:
-            confidence -= 0.05
-        
-        return max(0.5, min(1.0, confidence))
+        return max(0.0, min(100.0, score))
