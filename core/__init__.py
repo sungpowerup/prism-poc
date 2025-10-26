@@ -1,19 +1,17 @@
 """
-PRISM Phase 5.2.0 - Core Module (지능형 청킹 최적화)
+core package
+PRISM Phase 5.3.0 - Core modules
+GPT 보완 반영 완료
 """
 
-from .document_classifier import DocumentClassifierV50
-from .vlm_service import VLMServiceV50
-from .pipeline import Phase50Pipeline
-from .pdf_processor import PDFProcessor
-from .storage import Storage
-from .semantic_chunker import SemanticChunker
+from .quick_layout_analyzer import QuickLayoutAnalyzer
+from .prompt_rules import PromptRules
+from .hybrid_extractor import HybridExtractor
+from .kvs_normalizer import KVSNormalizer
 
 __all__ = [
-    'DocumentClassifierV50',
-    'VLMServiceV50',
-    'Phase50Pipeline',
-    'PDFProcessor',
-    'Storage',
-    'SemanticChunker'
+    'QuickLayoutAnalyzer',
+    'PromptRules',
+    'HybridExtractor',
+    'KVSNormalizer'
 ]

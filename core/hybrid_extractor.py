@@ -1,331 +1,316 @@
 """
-PRISM Phase 2.7 - 2-Pass Hybrid Extractor (완전 최종판)
-OCR + VLM 하이브리드 방식 (정확도 98%+ 보장)
+core/hybrid_extractor.py
+PRISM Phase 5.3.0 - Hybrid Extractor
 
-✅ phase27_pipeline.py 완전 호환
-✅ 모든 매개변수 지원: image, region_type, description, page_number
-✅ ExtractedContent.content 필드 지원
+목적: CV 힌트 + VLM 메타 프롬프트 + KVS 저장
+GPT 제안 통합:
+1. DSL 기반 프롬프트 생성
+2. 강화된 검증
+3. KVS 별도 페이로드 저장
 """
 
-import io
-import os
 import logging
-from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, field
-import base64
-from PIL import Image
+import re
+import json
+from typing import Dict, Any, Optional
+from pathlib import Path
 
-# Tesseract OCR
-try:
-    import pytesseract
-    TESSERACT_AVAILABLE = True
-except ImportError:
-    TESSERACT_AVAILABLE = False
-    logging.warning("Tesseract not available. VLM-only mode will be used.")
+# Phase 5.3.0 모듈 import (정리됨)
+from .quick_layout_analyzer import QuickLayoutAnalyzer
+from .prompt_rules import PromptRules
+from .kvs_normalizer import KVSNormalizer  # GPT 제안 #4
 
 logger = logging.getLogger(__name__)
 
 
-# ===== 데이터 클래스 =====
-
-@dataclass
-class ExtractedContent:
-    """
-    추출된 콘텐츠 (phase27_pipeline 완전 호환)
-    
-    Fields:
-        text: 추출된 텍스트
-        content: text의 별칭 (phase27_pipeline 호환)
-        method: 추출 방법 ('hybrid_2pass', 'vlm_only', 'error')
-        type: 콘텐츠 타입 (phase27_pipeline 호환)
-        page_number: 페이지 번호
-        ocr_text: OCR 원본 (디버깅용)
-        confidence: 신뢰도 (0.0~1.0)
-        metadata: 추가 메타데이터
-    """
-    text: str = ""
-    content: Optional[str] = None
-    method: str = 'unknown'
-    type: Optional[str] = None
-    page_number: int = 1
-    ocr_text: Optional[str] = None
-    confidence: float = 1.0
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    
-    def __post_init__(self):
-        """초기화 후 처리"""
-        # content↔text 동기화
-        if self.content is None:
-            self.content = self.text
-        if not self.text and self.content:
-            self.text = self.content
-    
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            'text': self.text,
-            'content': self.content,
-            'method': self.method,
-            'type': self.type,
-            'page_number': self.page_number,
-            'ocr_text': self.ocr_text,
-            'confidence': self.confidence,
-            'metadata': self.metadata
-        }
-
-
-# ===== 하이브리드 추출기 =====
-
 class HybridExtractor:
     """
-    2-Pass Hybrid Extractor
+    Phase 5.3.0 하이브리드 추출기
     
-    ✅ phase27_pipeline.py 완전 호환:
-    - HybridExtractor(vlm_provider='claude', ocr_engine='tesseract')
-    - extract(image=..., region_type=..., description=..., page_number=...)
+    전략:
+    1. QuickLayoutAnalyzer로 구조 힌트 획득
+    2. PromptRules DSL로 동적 프롬프트 생성 (GPT 제안)
+    3. VLM 1회 호출로 완전 추출
+    4. PromptRules로 강화 검증 (GPT 제안)
+    5. KVS 별도 추출 및 저장 (GPT 제안)
     """
     
-    def __init__(
-        self, 
-        vlm_provider: str = 'claude', 
-        ocr_engine: str = 'tesseract', 
-        vlm_service=None
-    ):
+    def __init__(self, vlm_service):
         """
         Args:
-            vlm_provider: VLM 프로바이더 ('claude', 'azure_openai', 'ollama')
-            ocr_engine: OCR 엔진 ('tesseract', 'paddle', 'none')
-            vlm_service: VLMService 인스턴스 (옵션)
+            vlm_service: VLMServiceV50 인스턴스
         """
-        # VLM Service 초기화
-        if vlm_service is None:
-            from core.vlm_service import VLMService
-            self.vlm_service = VLMService()
-        else:
-            self.vlm_service = vlm_service
-        
-        self.vlm_provider = vlm_provider
-        self.ocr_engine = ocr_engine
-        
-        # Tesseract 설정
-        if TESSERACT_AVAILABLE and ocr_engine == 'tesseract':
-            self.ocr_config = '--psm 6 -l kor+eng'
-        
-        logger.info(f"✅ HybridExtractor 초기화: VLM={vlm_provider}, OCR={ocr_engine}")
-        
-    def extract(
-        self, 
-        image: Image.Image, 
-        region_type: Optional[str] = None,
-        description: Optional[str] = None,
-        page_number: Optional[int] = None
-    ) -> ExtractedContent:
+        self.vlm = vlm_service
+        self.analyzer = QuickLayoutAnalyzer()
+        self.max_retries = 1  # GPT 제안: 재추출 1회만
+        logger.info("✅ HybridExtractor 초기화 (Phase 5.3.0)")
+    
+    def extract(self, image_data: str, page_num: int = 1) -> Dict[str, Any]:
         """
-        2-Pass 하이브리드 추출
+        하이브리드 추출 메인 함수
         
         Args:
-            image: PIL Image 객체
-            region_type: Region 타입 (옵션, phase27_pipeline 호환)
-            description: Region 설명 (옵션, phase27_pipeline 호환)
-            page_number: 페이지 번호 (옵션)
+            image_data: Base64 인코딩 이미지
+            page_num: 페이지 번호
             
         Returns:
-            ExtractedContent 객체
+            {
+                'content': str,           # Markdown 본문
+                'kvs': Dict,              # Key-Value Structured (GPT 제안)
+                'confidence': float,
+                'doc_type': str,
+                'hints': Dict,
+                'quality_score': float,
+                'validation': Dict,
+                'metrics': Dict           # 관측성 (GPT 제안)
+            }
         """
-        # 기본값 처리
-        if page_number is None:
-            page_number = 1
-        if region_type is None:
-            region_type = 'text'
+        logger.info(f"🎯 Page {page_num}: Phase 5.3.0 Hybrid 추출 시작")
+        
+        import time
+        start_time = time.time()
         
         try:
-            # Pass 1: OCR
-            ocr_text = self._extract_with_ocr(image)
+            # Step 1: CV 힌트 생성 (0.5초)
+            cv_start = time.time()
+            hints = self.analyzer.analyze(image_data)
+            cv_time = time.time() - cv_start
+            logger.info(f"   📍 CV 힌트 ({cv_time:.2f}초): {hints}")
             
-            if not ocr_text or len(ocr_text.strip()) < 50:
-                logger.warning(f"Page {page_number}: OCR 부족 ({len(ocr_text)} chars) → VLM-only")
-                return self._extract_vlm_only(image, page_number, region_type)
+            # Step 2: DSL 기반 동적 프롬프트 생성 (GPT 제안)
+            prompt = PromptRules.build_prompt(hints)
+            logger.debug(f"   📝 DSL 프롬프트 생성 완료: {len(prompt)} 글자")
             
-            # Pass 2: VLM 구조화
-            structured = self._structure_with_vlm(
-                image, ocr_text, page_number
-            )
+            # Step 3: VLM 추출 (3초)
+            vlm_start = time.time()
+            content = self._call_vlm(image_data, prompt)
+            vlm_time = time.time() - vlm_start
+            logger.info(f"   ✅ VLM 추출 완료 ({vlm_time:.2f}초): {len(content)} 글자")
             
-            return ExtractedContent(
-                text=structured,
-                content=structured,
-                method='hybrid_2pass',
-                type=region_type,
-                page_number=page_number,
-                ocr_text=ocr_text,
-                confidence=0.98,
-                metadata={'source': 'hybrid_2pass', 'description': description}
-            )
+            # Step 4: 오탈자 교정 (GPT 제안)
+            content = PromptRules.correct_typos(content)
+            
+            # Step 5: 강화 검증 (GPT 제안)
+            validation = PromptRules.validate_extraction(content, hints)
+            
+            retry_count = 0
+            if not validation['passed'] and retry_count < self.max_retries:
+                logger.warning(f"   ⚠️ 검증 실패: {validation['missing']}")
+                logger.info(f"   ♻️ 재추출 시작 (시도 {retry_count + 1}/{self.max_retries})")
+                
+                # Step 6: 재추출 (선택적)
+                retry_start = time.time()
+                content = self._focused_reextraction(
+                    image_data,
+                    hints,
+                    content,
+                    validation['missing']
+                )
+                retry_time = time.time() - retry_start
+                logger.info(f"   ✅ 재추출 완료 ({retry_time:.2f}초): {len(content)} 글자")
+                
+                # 재검증
+                validation = PromptRules.validate_extraction(content, hints)
+                retry_count += 1
+            
+            # Step 7: KVS 추출 (GPT 제안 #3)
+            kvs = self._extract_kvs(content, hints)
+            
+            # Step 7.5: KVS 정규화 (GPT 제안 #4)
+            if kvs:
+                kvs = KVSNormalizer.normalize_kvs(kvs)
+                logger.info(f"   📊 KVS 정규화 완료: {len(kvs)}개 항목")
+            
+            # 품질 점수 계산
+            quality_score = self._calculate_quality(content, hints, validation)
+            
+            # 관측성 메트릭 (GPT 제안)
+            total_time = time.time() - start_time
+            metrics = {
+                'cv_time': cv_time,
+                'vlm_time': vlm_time,
+                'total_time': total_time,
+                'retry_count': retry_count,
+                'content_length': len(content),
+                'kvs_count': len(kvs)
+            }
+            
+            return {
+                'content': content,
+                'kvs': kvs,
+                'confidence': 0.9 if validation['passed'] else 0.7,
+                'doc_type': self._infer_doc_type(hints),
+                'hints': hints,
+                'quality_score': quality_score,
+                'validation': validation,
+                'metrics': metrics
+            }
             
         except Exception as e:
-            logger.error(f"Page {page_number} 추출 실패: {e}", exc_info=True)
-            return self._extract_vlm_only(image, page_number, region_type)
+            logger.error(f"   ❌ Hybrid 추출 실패: {e}")
+            raise
     
-    def _extract_with_ocr(self, image: Image.Image) -> str:
-        """Pass 1: OCR 텍스트 추출"""
-        if self.ocr_engine == 'tesseract':
-            return self._extract_with_tesseract(image)
-        elif self.ocr_engine == 'paddle':
-            logger.warning("PaddleOCR not implemented. Using Tesseract.")
-            return self._extract_with_tesseract(image)
-        elif self.ocr_engine == 'none':
-            return ""
-        else:
-            logger.warning(f"Unknown OCR engine: {self.ocr_engine}")
-            return ""
+    def _call_vlm(self, image_data: str, prompt: str) -> str:
+        """VLM 호출 (Azure OpenAI 또는 Claude)"""
+        return self.vlm.call(image_data, prompt)
     
-    def _extract_with_tesseract(self, image: Image.Image) -> str:
-        """Tesseract OCR 실행"""
-        if not TESSERACT_AVAILABLE:
-            logger.warning("Tesseract not available")
-            return ""
-        
-        try:
-            text = pytesseract.image_to_string(image, config=self.ocr_config)
-            text = text.strip()
-            logger.info(f"✅ OCR: {len(text)} chars")
-            return text
-        except Exception as e:
-            logger.error(f"OCR 실패: {e}")
-            return ""
-    
-    def _structure_with_vlm(
-        self, 
-        image: Image.Image, 
-        ocr_text: str,
-        page_number: int
+    def _focused_reextraction(
+        self,
+        image_data: str,
+        hints: Dict,
+        prev_content: str,
+        missing: list[str]
     ) -> str:
-        """Pass 2: VLM으로 구조화 (OCR 텍스트 기반!)"""
+        """
+        누락 요소 집중 재추출 (GPT 제안: 누락 섹션만 강제)
         
-        # 이미지를 바이트로 변환
-        image_bytes = self._image_to_bytes(image)
+        전략: PromptRules의 retry 프롬프트 사용
+        """
+        # DSL 기반 재추출 프롬프트
+        retry_prompt = PromptRules.build_retry_prompt(hints, missing, prev_content)
         
-        # 🎯 핵심: OCR 텍스트를 보고 구조화하는 프롬프트
-        custom_prompt = f"""당신은 문서 구조화 전문가입니다.
-
-**중요: 아래 OCR 텍스트의 정확도를 최우선으로 하되, 이미지를 보고 구조를 파악하세요.**
-
----
-📄 OCR로 추출한 정확한 텍스트:
----
-{ocr_text}
----
-
-🎯 작업:
-1. **이미지를 보고** 문서의 구조를 파악하세요 (표, 차트, 리스트, 섹션 등)
-2. **위 OCR 텍스트를 정확히 사용**하여 마크다운으로 구조화하세요
-3. **절대 텍스트를 변경하지 마세요** - OCR 텍스트를 그대로 배치만 하세요
-
-**절대 금지 사항:**
-- ❌ OCR 텍스트에 없는 단어 추가
-- ❌ 숫자나 단어 변경 (예: "주요" → "수요" 금지)
-- ❌ 맥락에 맞지 않는 해석 (예: "해외축구" → "메이저리그" 금지)
-
-**허용 사항:**
-- ✅ 표 형식으로 정리 (|...|...|)
-- ✅ 리스트 구조화 (-, *)
-- ✅ 섹션 헤더 추가 (#, ##)
-- ✅ 줄바꿈 및 들여쓰기 조정
-
-**출력 형식:**
-- 마크다운 형식
-- OCR 텍스트의 모든 내용 포함
-- 이미지의 구조 반영
-
-**다시 한 번 강조: OCR 텍스트를 절대 변경하지 마세요!**
-"""
+        # VLM 재호출
+        additional = self._call_vlm(image_data, retry_prompt)
         
-        try:
-            # ✅ custom_prompt 전달!
-            response = self.vlm_service.generate_caption(
-                image_data=image_bytes,
-                element_type='text',
-                custom_prompt=custom_prompt  # ✅ 추가!
-            )
-            
-            # 응답 파싱
-            if isinstance(response, dict):
-                vlm_result = response.get('caption', '')
-            else:
-                vlm_result = str(response)
-            
-            # 🔍 검증: VLM 결과가 유효한지 확인
-            if not vlm_result or len(vlm_result.strip()) < 100:
-                logger.warning(f"Page {page_number}: VLM 결과 부족 ({len(vlm_result)} chars)")
-                logger.info(f"   → OCR 텍스트 사용 ({len(ocr_text)} chars)")
-                return ocr_text
-            
-            # VLM 결과가 충분하면 사용
-            logger.info(f"✅ VLM 구조화 성공: {len(vlm_result)} chars (OCR: {len(ocr_text)} chars)")
-            return vlm_result
-            
-        except Exception as e:
-            logger.error(f"VLM 구조화 실패: {e}", exc_info=True)
-            logger.info(f"   → OCR 텍스트 사용 ({len(ocr_text)} chars)")
-            return ocr_text
+        # 기존 + 추가 병합 (중복 제거)
+        merged = self._merge_content(prev_content, additional)
+        
+        return merged
     
-    def _extract_vlm_only(
-        self, 
-        image: Image.Image, 
-        page_number: int,
-        region_type: str = 'text'
-    ) -> ExtractedContent:
-        """Fallback: VLM만 사용"""
-        logger.warning(f"Page {page_number}: Fallback to VLM-only mode")
+    def _merge_content(self, prev: str, additional: str) -> str:
+        """
+        기존 내용과 추가 내용 병합 (중복 제거)
         
-        image_bytes = self._image_to_bytes(image)
+        GPT 제안: [RETRY] 헤더로 구분
+        """
+        # [RETRY] 섹션만 추출
+        retry_sections = []
+        for line in additional.split('\n'):
+            if '[RETRY]' in line or retry_sections:
+                retry_sections.append(line)
         
-        try:
-            response = self.vlm_service.generate_caption(
-                image_data=image_bytes,
-                element_type='text'
-            )
-            
-            if isinstance(response, dict):
-                text = response.get('caption', '')
-            else:
-                text = str(response)
-            
-            if not text:
-                logger.error(f"Page {page_number}: VLM 응답 없음")
-                text = "[VLM 처리 실패]"
-            
-            return ExtractedContent(
-                text=text,
-                content=text,
-                method='vlm_only',
-                type=region_type,
-                page_number=page_number,
-                confidence=0.85,
-                metadata={'source': 'vlm_only'}
-            )
-        except Exception as e:
-            logger.error(f"VLM-only 실패: {e}", exc_info=True)
-            return ExtractedContent(
-                text='[처리 실패]',
-                content='[처리 실패]',
-                method='error',
-                type='error',
-                page_number=page_number,
-                confidence=0.0,
-                metadata={'error': str(e)}
-            )
+        if retry_sections:
+            # 기존 + [RETRY] 섹션
+            return prev + '\n\n' + '\n'.join(retry_sections)
+        else:
+            # [RETRY] 헤더 없으면 전체 추가
+            return prev + '\n\n## 추가 추출 내용\n' + additional
     
-    def _image_to_bytes(self, image: Image.Image) -> bytes:
-        """PIL Image → bytes"""
-        buffer = io.BytesIO()
-        image.save(buffer, format='PNG')
-        return buffer.getvalue()
+    def _extract_kvs(self, content: str, hints: Dict) -> Dict[str, str]:
+        """
+        Key-Value Structured 데이터 추출 (GPT 제안 #3)
+        
+        목적: RAG 필드 검색 최적화
+        
+        Returns:
+            {
+                '배차간격': '27분',
+                '첫차': '05:30',
+                '막차': '22:40',
+                ...
+            }
+        """
+        if not hints.get('has_numbers'):
+            return {}
+        
+        kvs = {}
+        
+        # KVS 패턴 매칭
+        patterns = [
+            # "키: 값" 형식
+            (r'([가-힣a-zA-Z\s]+):\s*([0-9:분원%명대초]+)', 1, 2),
+            # "키 값" 형식 (띄어쓰기)
+            (r'(배차간격|첫차|막차|노선번호)\s+([0-9:분]+)', 1, 2),
+            # "키는 값" 형식
+            (r'([가-힣]+)는\s+([0-9:분원%명대초]+)', 1, 2),
+        ]
+        
+        for pattern, key_group, val_group in patterns:
+            matches = re.finditer(pattern, content)
+            for match in matches:
+                key = match.group(key_group).strip()
+                value = match.group(val_group).strip()
+                
+                # 중요 키만 저장
+                important_keys = ['배차간격', '첫차', '막차', '노선번호', '변경 전']
+                if any(ik in key for ik in important_keys):
+                    kvs[key] = value
+        
+        return kvs
     
-    def _image_to_base64(self, image: Image.Image) -> str:
-        """PIL Image → Base64"""
-        return base64.b64encode(self._image_to_bytes(image)).decode('utf-8')
-
-
-# ===== 하위 호환성 =====
-
-__all__ = ['HybridExtractor', 'ExtractedContent']
+    def _calculate_quality(
+        self,
+        content: str,
+        hints: Dict,
+        validation: Dict
+    ) -> float:
+        """
+        품질 점수 계산
+        
+        GPT 제안: 검증 점수 통합
+        """
+        base_score = 100.0
+        
+        # 길이 체크
+        if len(content) < 100:
+            base_score -= 40
+        elif len(content) < 500:
+            base_score -= 20
+        
+        # 검증 점수 반영
+        if validation['scores']:
+            avg_validation = sum(validation['scores'].values()) / len(validation['scores'])
+            base_score = (base_score + avg_validation) / 2
+        
+        # 경고 페널티
+        warning_penalty = len(validation.get('warnings', [])) * 5
+        base_score -= warning_penalty
+        
+        return max(0.0, min(100.0, base_score))
+    
+    def _infer_doc_type(self, hints: Dict) -> str:
+        """힌트로 문서 타입 추론"""
+        if hints['has_map'] and hints['diagram_count'] > 0:
+            return 'diagram'
+        elif hints['has_table']:
+            return 'chart_statistics'
+        elif hints['has_text'] and not hints['has_table']:
+            return 'text_document'
+        else:
+            return 'mixed'
+    
+    def save_kvs_payload(
+        self,
+        kvs: Dict[str, str],
+        doc_id: str,
+        page_num: int,
+        output_dir: Path
+    ) -> Optional[Path]:
+        """
+        KVS 별도 페이로드 저장 (GPT 제안 #3)
+        
+        목적: RAG 필드 검색용 JSON 파일 생성
+        
+        Returns:
+            저장된 파일 경로
+        """
+        if not kvs:
+            return None
+        
+        payload = {
+            'doc_id': doc_id,
+            'page': page_num,
+            'chunk_id': f'{doc_id}_p{page_num}_kvs',
+            'type': 'kvs',
+            'kvs': kvs,
+            'rank_hint': 3  # GPT 제안: 필드 가중치
+        }
+        
+        output_path = output_dir / f'{doc_id}_p{page_num}_kvs.json'
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"   💾 KVS 페이로드 저장: {output_path}")
+        return output_path
