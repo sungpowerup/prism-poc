@@ -1,15 +1,15 @@
 """
 core/pipeline_v50.py
-PRISM Phase 5.0 - Pipeline (완전 범용 문서 처리)
+PRISM Phase 5.2.0 - Pipeline (완전 범용 문서 처리)
 
-✅ Phase 5.0 핵심:
+✅ Phase 5.2.0 핵심:
 1. 문서 타입 자동 인식 + 타입별 전략 자동 적용
 2. 5가지 체크리스트 준수
 3. 원본 충실도 95% + 청킹 품질 90% + RAG 최적화 95%
 
 Author: 이서영 (Backend Lead)
 Date: 2025-10-24
-Version: 5.0
+Version: 5.2.0
 """
 
 import logging
@@ -18,12 +18,64 @@ import time
 import uuid
 import re
 
+# Phase 5.2.0: SemanticChunker import
+try:
+    from .semantic_chunker import SemanticChunker
+except ImportError:
+    try:
+        from semantic_chunker import SemanticChunker
+    except ImportError:
+        import sys
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("semantic_chunker", "core/semantic_chunker.py")
+        if spec:
+            semantic_chunker = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(semantic_chunker)
+            SemanticChunker = semantic_chunker.SemanticChunker
+
 logger = logging.getLogger(__name__)
+
+
+
+
+def clean_markdown(markdown: str) -> str:
+    """
+    RAG 최적화: 불필요한 요소 제거
+    
+    Phase 5.2.0 핵심:
+    - HTML 주석 제거
+    - 메타 설명 제거
+    - 중복 정보 제거
+    """
+    # HTML 주석 제거
+    markdown = re.sub(r'<!--.*?-->', '', markdown, flags=re.DOTALL)
+    
+    # 메타 설명 제거
+    meta_patterns = [
+        r'^이 이미지는.*?\.\s*',
+        r'^아래와 같이.*?\.\s*',
+        r'\n\*\*요약:\*\*\n.*?(?=\n#|\Z)',
+        r'\n## 요약\n.*?(?=\n#|\Z)',
+    ]
+    for pattern in meta_patterns:
+        markdown = re.sub(pattern, '', markdown, flags=re.MULTILINE | re.DOTALL)
+    
+    # 코드 블록 중첩 제거
+    markdown = re.sub(r'```markdown\s*\n(.*?)\n```', r'\1', markdown, flags=re.DOTALL)
+    
+    # JSON 예시 제거
+    markdown = re.sub(r'```json\s*\n.*?\n```', '', markdown, flags=re.DOTALL)
+    markdown = re.sub(r'####?\s*\*\*구조 추출 예시.*?(?=\n##|\n---|\Z)', '', markdown, flags=re.DOTALL)
+    
+    # 빈 줄 정리
+    markdown = re.sub(r'\n{4,}', '\n\n\n', markdown)
+    
+    return markdown.strip()
 
 
 class Phase50Pipeline:
     """
-    Phase 5.0 처리 파이프라인
+    Phase 5.2.0 처리 파이프라인
     
     특징:
     - 완전 범용 설계 (모든 문서 타입 지원)
@@ -41,6 +93,12 @@ class Phase50Pipeline:
         self.pdf_processor = pdf_processor
         self.vlm_service = vlm_service
         self.storage = storage
+        self.semantic_chunker = SemanticChunker(
+            min_chunk_size=600,
+            max_chunk_size=1200,
+            target_chunk_size=900
+        )
+        logger.info("✅ Phase 5.2.0: SemanticChunker 초기화 완료")
     
     def process_pdf(
         self,
@@ -49,7 +107,7 @@ class Phase50Pipeline:
         progress_callback: Optional[callable] = None
     ) -> Dict[str, Any]:
         """
-        PDF 처리 메인 함수 (Phase 5.0)
+        PDF 처리 메인 함수 (Phase 5.2.0)
         
         Args:
             pdf_path: PDF 파일 경로
@@ -63,7 +121,7 @@ class Phase50Pipeline:
         session_id = str(uuid.uuid4())[:8]
         
         logger.info(f"\n{'='*80}")
-        logger.info(f"🚀 PRISM Phase 5.0 - 범용 문서 처리 시작")
+        logger.info(f"🚀 PRISM Phase 5.2.0 - 범용 문서 처리 시작")
         logger.info(f"{'='*80}")
         logger.info(f"📄 파일: {pdf_path}")
         logger.info(f"🆔 Session ID: {session_id}")
@@ -89,9 +147,9 @@ class Phase50Pipeline:
             }
         
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # Stage 2: Phase 5.0 범용 분석 (문서 타입 자동 판별)
+        # Stage 2: Phase 5.2.0 범용 분석 (문서 타입 자동 판별)
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        logger.info("[Stage 2] Phase 5.0 범용 분석 시작")
+        logger.info("[Stage 2] Phase 5.2.0 범용 분석 시작")
         logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
         
         results = []
@@ -111,7 +169,7 @@ class Phase50Pipeline:
             logger.info(f"📄 페이지 {page_num + 1}/{len(images)} 처리 시작")
             
             try:
-                # Phase 5.0: 범용 분석
+                # Phase 5.2.0: 범용 분석
                 vlm_result = self.vlm_service.analyze_page_v50(
                     image_data=img_data,
                     page_num=page_num + 1
@@ -155,7 +213,7 @@ class Phase50Pipeline:
                 error_count += 1
         
         logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        logger.info(f"✅ Phase 5.0 분석 완료:")
+        logger.info(f"✅ Phase 5.2.0 분석 완료:")
         logger.info(f"   - 성공: {success_count}/{len(images)}개")
         logger.info(f"   - 실패: {error_count}/{len(images)}개")
         logger.info(f"   - 문서 타입 분포: {doc_type_counts}")
@@ -212,7 +270,7 @@ class Phase50Pipeline:
         result = {
             'status': 'success',
             'session_id': session_id,
-            'version': '5.0',
+            'version': '5.2.0',
             'processing_time': processing_time,
             'pages_total': len(images),
             'pages_success': success_count,
@@ -236,7 +294,7 @@ class Phase50Pipeline:
             progress_callback("✅ 완료!", 100)
         
         logger.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        logger.info("🎉 PRISM Phase 5.0 처리 완료!")
+        logger.info("🎉 PRISM Phase 5.2.0 처리 완료!")
         logger.info(f"   ⏱️  처리 시간: {processing_time:.1f}초")
         logger.info(f"   📄 성공: {success_count}/{len(images)}개")
         logger.info(f"   🎯 종합 품질: {quality_metrics['overall_score']:.1f}/100")
@@ -247,30 +305,58 @@ class Phase50Pipeline:
     
     def _generate_markdown_with_chunking(self, results: List[Dict[str, Any]]) -> str:
         """
-        페이지별 결과를 하나의 Markdown으로 통합 (지능형 청킹)
+        페이지별 결과를 지능형 청킹으로 통합
         
-        ✅ 체크리스트 2번: 지능형 청킹
-        - 페이지 구분: `---`
-        - 섹션 헤더: `##`
+        ✅ Phase 5.2.0: 지능형 청킹
+        1. 페이지 경계 무시하고 전체 Markdown 생성
+        2. SemanticChunker로 의미 단위 청킹
+        3. 청크 메타데이터 포함
         """
+        # Step 1: 전체 Markdown 생성 (페이지 구분 없이)
         markdown_parts = []
         
         for i, result in enumerate(results):
             content = result['content']
-            page_num = result['page_num']
-            doc_type = result.get('doc_type', 'mixed')
             
-            # 페이지 헤더 (메타 정보 최소화)
-            markdown_parts.append(f"<!-- 페이지 {page_num} ({doc_type}) -->\n\n")
+            # 내용 정제
+            content = clean_markdown(content)
             
-            # 내용
-            markdown_parts.append(content)
-            
-            # 페이지 구분 (마지막 페이지 제외)
-            if i < len(results) - 1:
-                markdown_parts.append("\n\n---\n\n")
+            # 내용 추가 (페이지 구분 없이)
+            if content.strip():
+                markdown_parts.append(content)
         
-        return "".join(markdown_parts).strip()
+        # Step 2: 전체 Markdown 통합
+        full_markdown = "\n\n".join(markdown_parts)
+        full_markdown = clean_markdown(full_markdown)
+        
+        logger.info(f"\n📦 Phase 5.2.0 지능형 청킹 시작...")
+        logger.info(f"  📄 전체 문서: {len(full_markdown):,}자")
+        
+        # Step 3: 지능형 청킹 (의미 단위)
+        chunked_data = self.semantic_chunker.chunk_markdown(full_markdown)
+        
+        # Step 4: 청킹 통계
+        stats = self.semantic_chunker.get_statistics(chunked_data)
+        logger.info(f"  📊 청크 수: {stats.get('total_chunks', 0)}개")
+        logger.info(f"  📏 평균 크기: {stats.get('avg_chunk_size', 0):.0f}자")
+        logger.info(f"  🎯 목표 달성률: {stats.get('target_achievement', 0):.1f}%")
+        logger.info(f"✅ 지능형 청킹 완료\n")
+        
+        # Step 5: 청크를 Markdown으로 변환 (메타데이터 포함)
+        output_parts = []
+        
+        for chunk_data in chunked_data:
+            chunk_id = chunk_data['chunk_id']
+            content = chunk_data['content']
+            section = chunk_data['section']
+            size = chunk_data['size']
+            
+            # 청크 헤더 (주석으로)
+            output_parts.append(f"<!-- Chunk {chunk_id}: {section} ({size}자) -->\n")
+            output_parts.append(content)
+            output_parts.append("\n\n")
+        
+        return "".join(output_parts).strip()
     
     def _analyze_quality_checklist(self, results: List[Dict], markdown: str) -> Dict[str, float]:
         """
@@ -397,54 +483,58 @@ class Phase50Pipeline:
     
     def _calculate_chunking_quality(self, markdown: str, results: List[Dict]) -> float:
         """
-        ✅ 2. 청킹 품질 계산
+        ✅ 2. 청킹 품질 계산 (Phase 5.2.0)
         
         평가 기준:
-        - 페이지 구분 (`---`)
-        - 섹션 헤더 (`##`)
-        - 균형잡힌 섹션 크기
+        - 의미 단위 보존 (<!-- Chunk --> 주석)
+        - 청크 크기 균일성 (800~1,000자)
+        - 섹션 헤더 존재
+        - 표 완결성
         """
         score = 0.0
         
-        # 1. 페이지 구분 (`---`)
-        page_separators = markdown.count('---')
-        expected_separators = len(results) - 1  # 마지막 페이지 제외
+        # 1. 청크 주석 존재 (의미 단위 청킹 확인)
+        chunk_comments = re.findall(r'<!-- Chunk (\d+):', markdown)
+        chunk_count = len(chunk_comments)
         
-        if page_separators >= expected_separators:
-            score += 35  # 완벽한 페이지 구분
-        elif page_separators >= expected_separators * 0.8:
-            score += 25
-        elif page_separators >= expected_separators * 0.5:
-            score += 15
+        if chunk_count > 0:
+            score += 30  # 청킹 완료
         
-        # 2. 섹션 헤더 (`##`)
-        headers = re.findall(r'^##\s+(.+)$', markdown, re.MULTILINE)
-        header_count = len(headers)
+        # 2. 청크 크기 분석
+        chunks = re.split(r'<!-- Chunk \d+:[^>]+-->', markdown)
+        chunks = [c.strip() for c in chunks if c.strip()]
         
-        if header_count >= len(results) * 2:
-            score += 35  # 페이지당 2개 이상
-        elif header_count >= len(results):
-            score += 25  # 페이지당 1개 이상
-        elif header_count >= len(results) * 0.5:
-            score += 15
+        if chunks:
+            chunk_sizes = [len(c) for c in chunks]
+            avg_size = sum(chunk_sizes) / len(chunk_sizes)
+            
+            # 평균 크기가 800~1,000자에 가까울수록 높은 점수
+            if 800 <= avg_size <= 1000:
+                score += 30  # 최적 크기
+            elif 600 <= avg_size <= 1200:
+                score += 20  # 양호
+            elif avg_size < 600 or avg_size > 1200:
+                score += 10  # 개선 필요
+            
+            # 크기 균일성 (표준편차)
+            if len(chunk_sizes) > 1 and avg_size > 0:
+                variance = sum((s - avg_size) ** 2 for s in chunk_sizes) / len(chunk_sizes)
+                std_dev = variance ** 0.5
+                cv = std_dev / avg_size  # 변동계수
+                
+                if cv < 0.2:
+                    score += 20  # 매우 균일
+                elif cv < 0.4:
+                    score += 15  # 균일
+                elif cv < 0.6:
+                    score += 10  # 양호
         
-        # 3. 균형잡힌 섹션 크기
-        sections = markdown.split('---')
-        if len(sections) > 1:
-            section_lengths = [len(s.strip()) for s in sections if s.strip()]
-            if section_lengths:
-                avg_len = sum(section_lengths) / len(section_lengths)
-                if avg_len > 0:
-                    variance = sum((l - avg_len) ** 2 for l in section_lengths) / len(section_lengths)
-                    std_dev = variance ** 0.5
-                    cv = std_dev / avg_len
-                    
-                    if cv < 0.3:
-                        score += 30  # 매우 균형잡힘
-                    elif cv < 0.5:
-                        score += 20
-                    elif cv < 0.8:
-                        score += 10
+        # 3. 섹션 헤더 존재
+        headers = re.findall(r'^##\s+', markdown, re.MULTILINE)
+        if len(headers) >= chunk_count * 0.8:
+            score += 20  # 대부분 청크가 헤더 포함
+        elif len(headers) >= chunk_count * 0.5:
+            score += 10
         
         return min(100.0, score)
     
@@ -521,7 +611,7 @@ class Phase50Pipeline:
         # 2. 타입별 전략 적용 확인
         strategies_used = set(r.get('strategy', '') for r in results)
         if 'universal_v50' in ' '.join(strategies_used):
-            score += 10  # Phase 5.0 전략 사용
+            score += 10  # Phase 5.2.0 전략 사용
         
         # 3. 하드코딩 체크 (버스 전용 키워드)
         hardcoded_keywords = [

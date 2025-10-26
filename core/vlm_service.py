@@ -1,6 +1,6 @@
 """
 core/vlm_service.py
-PRISM Phase 5.0 - VLM Service (범용 전략 패턴)
+PRISM Phase 5.1.1 - VLM Service (RAG 최적화 강화)
 """
 
 import os
@@ -12,7 +12,6 @@ from openai import AzureOpenAI
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
-# ✅ 상대 임포트 사용
 from .document_classifier import DocumentClassifierV50
 
 load_dotenv()
@@ -20,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 class VLMServiceV50:
-    """범용 VLM 서비스 v5.0"""
+    """범용 VLM 서비스 v5.1.1 - RAG 최적화 강화"""
     
     def __init__(self, provider: str = "azure_openai"):
         self.provider = provider
@@ -50,13 +49,12 @@ class VLMServiceV50:
             self.model = "claude-3-5-sonnet-20241022"
         
         self.classifier = DocumentClassifierV50(provider)
-        logger.info(f"✅ VLM Service v5.0 초기화 완료: {provider}")
+        logger.info(f"✅ VLM Service v5.1.1 초기화 완료: {provider}")
     
     def analyze_page_v50(self, image_data: str, page_num: int) -> Dict[str, Any]:
-        """Phase 5.0: 범용 문서 분석"""
-        logger.info(f"🎯 Page {page_num}: Phase 5.0 범용 분석 시작")
+        """Phase 5.1.1: RAG 최적화 강화 문서 분석"""
+        logger.info(f"🎯 Page {page_num}: Phase 5.1.1 분석 시작")
         
-        # Step 1: 문서 타입 판별
         doc_type_result = self.classifier.classify(image_data, page_num)
         doc_type = doc_type_result.get('type', 'mixed')
         subtype = doc_type_result.get('subtype', 'unknown')
@@ -64,7 +62,6 @@ class VLMServiceV50:
         
         logger.info(f"✅ 타입: {doc_type} ({subtype}), 신뢰도: {confidence:.2f}")
         
-        # Step 2-4: 타입별 전략 실행
         if doc_type == 'text_document':
             content = self._extract_text_document(image_data, subtype)
         elif doc_type == 'diagram':
@@ -80,13 +77,12 @@ class VLMServiceV50:
         
         logger.info(f"✅ 추출 완료: {len(content)} 글자")
         
-        # Step 5: 품질 평가
         quality_score = self._calculate_quality(content, doc_type)
         
         return {
             'content': content,
             'confidence': confidence,
-            'strategy': f'{doc_type}_v50',
+            'strategy': f'{doc_type}_v511',
             'doc_type': doc_type,
             'subtype': subtype,
             'quality_score': quality_score,
@@ -96,48 +92,60 @@ class VLMServiceV50:
     def _extract_text_document(self, image_data: str, subtype: str) -> str:
         prompt = f"""이 {subtype} 문서의 내용을 Markdown으로 추출하세요.
 
-**중요 규칙:**
-1. 원본 텍스트를 정확히 추출하세요
-2. 조항/항 번호를 정확히 보존하세요
-3. 표가 있으면 Markdown 표로 변환하세요
-4. 메타 정보는 최소화하세요
-5. 간결하게 작성하세요"""
+**규칙:**
+1. 원본 텍스트를 정확히 추출
+2. 조항/항 번호 정확히 보존
+3. 표는 Markdown 표로 변환
+
+**절대 금지:**
+- 메타 설명 ("이 이미지는", "다음과 같습니다", "아래는")
+- 안내 문구 ("필요하신", "말씀해 주세요", "재구성 가능")
+- 요약 섹션 ("**요약:**", "**구조 요약:**")
+
+**오직 원본 내용만 출력하세요.**"""
         return self._call_vlm(image_data, prompt)
     
     def _extract_diagram(self, image_data: str, subtype: str) -> str:
         if subtype == 'transport_route':
-            prompt = """이 교통 노선도를 분석하여 노선 정보를 추출하세요.
+            prompt = """이 교통 노선도의 정보를 추출하세요.
 
 **형식:**
 ## 노선 정보
 **노선명**: [노선번호/이름]
 
 ### 경로
-1. [출발지]
-2. [경유지 1]
-...
+1. [정류장 1]
+2. [정류장 2]
 
-**주의:** 정류장/역 이름을 정확히 추출하고 순서를 지키세요."""
+**절대 금지:**
+- "다이어그램의 구조는", "필요하신", "재구성 가능" 등
+- 오직 노선 정보만 출력"""
         else:
-            prompt = """이 다이어그램을 분석하여 구조를 추출하세요."""
+            prompt = """이 다이어그램의 정보를 추출하세요.
+
+**절대 금지:**
+- 메타 설명, 안내 문구, 요약
+- 오직 다이어그램 내용만 출력"""
         return self._call_vlm(image_data, prompt)
     
     def _extract_technical_drawing(self, image_data: str, subtype: str) -> str:
-        prompt = """이 도면을 분석하여 공간 정보를 추출하세요.
+        prompt = """이 도면의 정보를 추출하세요.
 
-**형식:**
 ## 평면도
 
 ### 공간 구성
 1. **[공간 이름]** ([면적])
    - 위치: [방향/위치]
-   - 치수: [가로 × 세로]"""
+   - 치수: [가로 × 세로]
+
+**절대 금지:**
+- 메타 설명, 안내 문구
+- 오직 도면 내용만 출력"""
         return self._call_vlm(image_data, prompt)
     
     def _extract_image_content(self, image_data: str, subtype: str) -> str:
         prompt = """이 이미지를 객관적으로 설명하세요.
 
-**형식:**
 ## 이미지 설명
 
 ### 주요 요소
@@ -145,13 +153,16 @@ class VLMServiceV50:
 
 ### 시각적 특징
 - 색상: [주요 색상]
-- 스타일: [스타일]"""
+- 스타일: [스타일]
+
+**절대 금지:**
+- "이 이미지는", "아래는" 등 메타 설명
+- 오직 이미지 내용만 출력"""
         return self._call_vlm(image_data, prompt)
     
     def _extract_chart_statistics(self, image_data: str, subtype: str) -> str:
-        prompt = """이 차트/표를 분석하여 데이터를 추출하세요.
+        prompt = """이 차트/표의 데이터를 추출하세요.
 
-**형식:**
 ## 데이터
 
 **차트 제목**: [제목]
@@ -159,11 +170,20 @@ class VLMServiceV50:
 ### 데이터 테이블
 | 항목 | 값 1 | 값 2 |
 |------|------|------|
-| 행 1 | [값] | [값] |"""
+| 행 1 | [값] | [값] |
+
+**절대 금지:**
+- "아래는 이미지의 차트/표에서 추출한"
+- "필요한 데이터가 더 있으면"
+- 오직 차트/표 데이터만 출력"""
         return self._call_vlm(image_data, prompt)
     
     def _extract_mixed(self, image_data: str) -> str:
-        prompt = """이 문서의 내용을 Markdown으로 추출하세요."""
+        prompt = """이 문서의 내용을 Markdown으로 추출하세요.
+
+**절대 금지:**
+- 메타 설명, 안내 문구, 요약
+- 오직 문서 내용만 출력"""
         return self._call_vlm(image_data, prompt)
     
     def _call_vlm(self, image_data: str, prompt: str) -> str:
