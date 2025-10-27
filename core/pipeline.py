@@ -138,7 +138,8 @@ class Phase53Pipeline:
                 progress_callback("PDF → 이미지 변환 중...", 0.1)
             
             logger.info("📄 Step 1: PDF → 이미지 변환")
-            images = self.pdf_processor.convert_to_images(
+            # ✅ 수정: convert_to_images → pdf_to_images
+            images = self.pdf_processor.pdf_to_images(
                 pdf_path=pdf_path,
                 max_pages=max_pages,
                 dpi=300

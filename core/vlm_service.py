@@ -1,6 +1,10 @@
 """
 core/vlm_service.py
-PRISM Phase 5.1.1 - VLM Service (RAG 최적화 강화)
+PRISM Phase 5.3.0 - VLM Service (HybridExtractor 호환)
+
+✅ Phase 5.3.0 추가:
+- call() 메서드: HybridExtractor 전용 간단 인터페이스
+- analyze_page_v50(): 기존 Phase 5.0 메서드 유지
 """
 
 import os
@@ -12,14 +16,18 @@ from openai import AzureOpenAI
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
-from .document_classifier import DocumentClassifierV50
+try:
+    from .document_classifier import DocumentClassifierV50
+except ImportError:
+    # DocumentClassifier 없으면 None으로 처리
+    DocumentClassifierV50 = None
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
 
 class VLMServiceV50:
-    """범용 VLM 서비스 v5.1.1 - RAG 최적화 강화"""
+    """범용 VLM 서비스 v5.3.0 - HybridExtractor 호환"""
     
     def __init__(self, provider: str = "azure_openai"):
         self.provider = provider
@@ -48,19 +56,108 @@ class VLMServiceV50:
             self.client = Anthropic(api_key=api_key)
             self.model = "claude-3-5-sonnet-20241022"
         
-        self.classifier = DocumentClassifierV50(provider)
-        logger.info(f"✅ VLM Service v5.1.1 초기화 완료: {provider}")
+        # DocumentClassifier는 선택적
+        if DocumentClassifierV50:
+            self.classifier = DocumentClassifierV50(provider)
+        else:
+            self.classifier = None
+            logger.warning("⚠️ DocumentClassifier 없음 - call() 메서드만 사용")
+        
+        logger.info(f"✅ VLM Service v5.3.0 초기화 완료: {provider}")
+    
+    def call(self, image_data: str, prompt: str) -> str:
+        """
+        ✅ Phase 5.3.0 신규: HybridExtractor 전용 간단 인터페이스
+        
+        Args:
+            image_data: Base64 인코딩된 이미지
+            prompt: VLM 프롬프트 (PromptRules DSL 생성)
+        
+        Returns:
+            VLM 응답 텍스트 (Markdown)
+        """
+        try:
+            if self.provider == "azure_openai":
+                response = self.client.chat.completions.create(
+                    model=self.deployment,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": prompt},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:image/png;base64,{image_data}"}
+                                }
+                            ]
+                        }
+                    ],
+                    max_tokens=2000,
+                    temperature=0.2
+                )
+                return response.choices[0].message.content.strip()
+            
+            else:  # claude
+                response = self.client.messages.create(
+                    model=self.model,
+                    max_tokens=2000,
+                    temperature=0.2,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": "image/png",
+                                        "data": image_data
+                                    }
+                                },
+                                {"type": "text", "text": prompt}
+                            ]
+                        }
+                    ]
+                )
+                return response.content[0].text.strip()
+        
+        except Exception as e:
+            logger.error(f"❌ VLM 호출 실패: {e}")
+            raise
     
     def analyze_page_v50(self, image_data: str, page_num: int) -> Dict[str, Any]:
-        """Phase 5.1.1: RAG 최적화 강화 문서 분석"""
-        logger.info(f"🎯 Page {page_num}: Phase 5.1.1 분석 시작")
+        """
+        Phase 5.0-5.1 호환: 문서 타입별 분석
         
-        doc_type_result = self.classifier.classify(image_data, page_num)
-        doc_type = doc_type_result.get('type', 'mixed')
-        subtype = doc_type_result.get('subtype', 'unknown')
-        confidence = doc_type_result.get('confidence', 0.5)
+        Args:
+            image_data: Base64 인코딩된 이미지
+            page_num: 페이지 번호
         
-        logger.info(f"✅ 타입: {doc_type} ({subtype}), 신뢰도: {confidence:.2f}")
+        Returns:
+            {
+                'content': str,
+                'confidence': float,
+                'strategy': str,
+                'doc_type': str,
+                'subtype': str,
+                'quality_score': float,
+                'structure': Dict
+            }
+        """
+        if not self.classifier:
+            # Classifier 없으면 Mixed로 처리
+            logger.warning("⚠️ DocumentClassifier 없음 - mixed 타입으로 처리")
+            doc_type = 'mixed'
+            subtype = 'unknown'
+            confidence = 0.5
+            doc_type_result = {}
+        else:
+            logger.info(f"🎯 Page {page_num}: Phase 5.1.1 분석 시작")
+            doc_type_result = self.classifier.classify(image_data, page_num)
+            doc_type = doc_type_result.get('type', 'mixed')
+            subtype = doc_type_result.get('subtype', 'unknown')
+            confidence = doc_type_result.get('confidence', 0.5)
+            logger.info(f"✅ 타입: {doc_type} ({subtype}), 신뢰도: {confidence:.2f}")
         
         if doc_type == 'text_document':
             content = self._extract_text_document(image_data, subtype)
@@ -103,7 +200,7 @@ class VLMServiceV50:
 - 요약 섹션 ("**요약:**", "**구조 요약:**")
 
 **오직 원본 내용만 출력하세요.**"""
-        return self._call_vlm(image_data, prompt)
+        return self.call(image_data, prompt)
     
     def _extract_diagram(self, image_data: str, subtype: str) -> str:
         if subtype == 'transport_route':
@@ -126,7 +223,7 @@ class VLMServiceV50:
 **절대 금지:**
 - 메타 설명, 안내 문구, 요약
 - 오직 다이어그램 내용만 출력"""
-        return self._call_vlm(image_data, prompt)
+        return self.call(image_data, prompt)
     
     def _extract_technical_drawing(self, image_data: str, subtype: str) -> str:
         prompt = """이 도면의 정보를 추출하세요.
@@ -141,7 +238,7 @@ class VLMServiceV50:
 **절대 금지:**
 - 메타 설명, 안내 문구
 - 오직 도면 내용만 출력"""
-        return self._call_vlm(image_data, prompt)
+        return self.call(image_data, prompt)
     
     def _extract_image_content(self, image_data: str, subtype: str) -> str:
         prompt = """이 이미지를 객관적으로 설명하세요.
@@ -158,7 +255,7 @@ class VLMServiceV50:
 **절대 금지:**
 - "이 이미지는", "아래는" 등 메타 설명
 - 오직 이미지 내용만 출력"""
-        return self._call_vlm(image_data, prompt)
+        return self.call(image_data, prompt)
     
     def _extract_chart_statistics(self, image_data: str, subtype: str) -> str:
         prompt = """이 차트/표의 데이터를 추출하세요.
@@ -176,7 +273,7 @@ class VLMServiceV50:
 - "아래는 이미지의 차트/표에서 추출한"
 - "필요한 데이터가 더 있으면"
 - 오직 차트/표 데이터만 출력"""
-        return self._call_vlm(image_data, prompt)
+        return self.call(image_data, prompt)
     
     def _extract_mixed(self, image_data: str) -> str:
         prompt = """이 문서의 내용을 Markdown으로 추출하세요.
@@ -184,55 +281,7 @@ class VLMServiceV50:
 **절대 금지:**
 - 메타 설명, 안내 문구, 요약
 - 오직 문서 내용만 출력"""
-        return self._call_vlm(image_data, prompt)
-    
-    def _call_vlm(self, image_data: str, prompt: str) -> str:
-        try:
-            if self.provider == "azure_openai":
-                response = self.client.chat.completions.create(
-                    model=self.deployment,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": prompt},
-                                {
-                                    "type": "image_url",
-                                    "image_url": {"url": f"data:image/png;base64,{image_data}"}
-                                }
-                            ]
-                        }
-                    ],
-                    max_tokens=2000,
-                    temperature=0.2
-                )
-                return response.choices[0].message.content.strip()
-            else:
-                response = self.client.messages.create(
-                    model=self.model,
-                    max_tokens=2000,
-                    temperature=0.2,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "image",
-                                    "source": {
-                                        "type": "base64",
-                                        "media_type": "image/png",
-                                        "data": image_data
-                                    }
-                                },
-                                {"type": "text", "text": prompt}
-                            ]
-                        }
-                    ]
-                )
-                return response.content[0].text.strip()
-        except Exception as e:
-            logger.error(f"❌ VLM 호출 실패: {e}")
-            return f"## 추출 실패\n오류: {str(e)}"
+        return self.call(image_data, prompt)
     
     def _calculate_quality(self, content: str, doc_type: str) -> float:
         score = 100.0

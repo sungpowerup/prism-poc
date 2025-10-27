@@ -1,282 +1,288 @@
 """
 core/semantic_chunker.py
-PRISM Phase 5.2 - Semantic Chunker (지능형 청킹)
+PRISM Phase 5.2.0 - Semantic Chunker
+
+목적: 의미 단위 기반 지능형 청킹
+- 페이지 경계가 아닌 의미 단위로 분할
+- 표/다이어그램 무결성 보존
+- RAG 검색 최적화
+
+Author: 박준호 (AI/ML Lead)
+Date: 2025-10-25
+Version: 5.2.0
 """
 
 import re
 import logging
-from typing import List, Dict, Tuple
+from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
 
 class SemanticChunker:
     """
-    Phase 5.2: 의미 단위 기반 지능형 청킹
+    의미 단위 기반 청킹 엔진
     
-    목표:
-    - 청크 크기: 800~1,000자 (최적)
-    - 의미 단위 보존: 98%
-    - 표 완결성: 100%
+    전략:
+    1. 헤더 기준 섹션 분할 (##, ###)
+    2. 표/다이어그램 무결성 보존
+    3. 목표 청크 크기 유지 (800-1000자)
+    4. 청크 메타데이터 추가
     """
     
-    def __init__(self, 
-                 min_chunk_size: int = 600,
-                 max_chunk_size: int = 1200,
-                 target_chunk_size: int = 900):
+    def __init__(
+        self,
+        min_chunk_size: int = 600,
+        max_chunk_size: int = 1200,
+        target_chunk_size: int = 900
+    ):
         """
         Args:
-            min_chunk_size: 최소 청크 크기 (기본 600자)
-            max_chunk_size: 최대 청크 크기 (기본 1200자)
-            target_chunk_size: 목표 청크 크기 (기본 900자)
+            min_chunk_size: 최소 청크 크기
+            max_chunk_size: 최대 청크 크기
+            target_chunk_size: 목표 청크 크기
         """
         self.min_chunk_size = min_chunk_size
         self.max_chunk_size = max_chunk_size
         self.target_chunk_size = target_chunk_size
-        logger.info(f"✅ SemanticChunker 초기화: {min_chunk_size}~{max_chunk_size}자")
+        
+        logger.info(f"✅ SemanticChunker 초기화")
+        logger.info(f"   청크 크기: {min_chunk_size}-{max_chunk_size} (목표: {target_chunk_size})")
     
-    def chunk_markdown(self, markdown: str, page_num: int = None) -> List[Dict]:
+    def chunk(self, markdown: str) -> List[Dict[str, Any]]:
         """
         Markdown을 의미 단위로 청킹
         
         Args:
-            markdown: 청킹할 Markdown 텍스트
-            page_num: 페이지 번호 (선택)
-            
+            markdown: 전체 Markdown 문자열
+        
         Returns:
-            청크 리스트 (메타데이터 포함)
+            청크 리스트: [
+                {
+                    'chunk_id': str,
+                    'content': str,
+                    'char_count': int,
+                    'type': 'section' | 'table' | 'mixed',
+                    'headers': List[str],
+                    'page_hint': int  # 페이지 번호 힌트
+                },
+                ...
+            ]
         """
-        logger.info(f"🎯 의미 단위 청킹 시작: {len(markdown)}자")
+        logger.info(f"🔗 SemanticChunking 시작: {len(markdown)} 글자")
         
-        # Step 1: 헤더 기준 섹션 분할
+        # Step 1: 섹션 분할
         sections = self._split_by_headers(markdown)
-        logger.info(f"  📄 섹션 분할: {len(sections)}개")
+        logger.info(f"   섹션 분할: {len(sections)}개")
         
-        # Step 2: 표 보호 (분리되지 않도록)
-        sections = self._protect_tables(sections)
-        logger.info(f"  📊 표 보호 완료")
-        
-        # Step 3: 청크 크기 최적화
-        chunks = self._optimize_chunk_size(sections)
-        logger.info(f"  📦 청크 최적화: {len(chunks)}개")
-        
-        # Step 4: 메타데이터 추가
-        chunked_data = self._add_metadata(chunks, page_num)
-        
-        # 통계 출력
-        avg_size = sum(c['size'] for c in chunked_data) / len(chunked_data) if chunked_data else 0
-        logger.info(f"✅ 청킹 완료: {len(chunked_data)}개 청크, 평균 {avg_size:.0f}자")
-        
-        return chunked_data
-    
-    def _split_by_headers(self, markdown: str) -> List[str]:
-        """
-        헤더(##) 기준으로 섹션 분할
-        
-        헤더 우선순위:
-        1. ## (H2) - 주요 섹션
-        2. ### (H3) - 하위 섹션
-        3. #### (H4) - 세부 섹션
-        """
-        sections = []
-        current_section = []
-        
-        lines = markdown.split('\n')
-        
-        for line in lines:
-            # H2 헤더 감지 (주요 섹션 구분)
-            if re.match(r'^##\s+', line):
-                if current_section:
-                    sections.append('\n'.join(current_section))
-                current_section = [line]
-            else:
-                current_section.append(line)
-        
-        # 마지막 섹션 추가
-        if current_section:
-            sections.append('\n'.join(current_section))
-        
-        return sections
-    
-    def _protect_tables(self, sections: List[str]) -> List[str]:
-        """
-        표가 청크 경계에서 분리되지 않도록 보호
-        
-        표 감지:
-        - Markdown 표: | 로 시작하는 연속된 라인
-        - 표 전체를 하나의 단위로 취급
-        """
-        protected_sections = []
-        
-        for section in sections:
-            # 표 포함 여부 확인
-            has_table = '|' in section and section.count('|') > 3
-            
-            if has_table:
-                # 표가 있는 섹션은 분할하지 않음
-                protected_sections.append(section)
-            else:
-                # 표가 없는 섹션은 문단 단위로 분할 가능
-                protected_sections.append(section)
-        
-        return protected_sections
-    
-    def _optimize_chunk_size(self, sections: List[str]) -> List[str]:
-        """
-        청크 크기를 800~1,000자로 최적화
-        
-        전략:
-        1. 너무 작은 섹션 (<600자): 다음 섹션과 병합
-        2. 적정 크기 (600~1,200자): 그대로 유지
-        3. 너무 큰 섹션 (>1,200자): 문단 단위 분할
-        """
-        optimized = []
-        buffer = ""
-        
-        for section in sections:
-            section_size = len(section)
-            
-            if not section.strip():
-                continue
-            
-            # Case 1: 너무 작은 섹션 - 버퍼에 누적
-            if section_size < self.min_chunk_size:
-                if not buffer:
-                    buffer = section
-                else:
-                    # 버퍼와 병합했을 때 max를 넘지 않으면 병합
-                    if len(buffer) + len(section) + 2 <= self.max_chunk_size:
-                        buffer += "\n\n" + section
-                    else:
-                        # 버퍼 flush
-                        optimized.append(buffer)
-                        buffer = section
-            
-            # Case 2: 적정 크기 - 그대로 추가
-            elif section_size <= self.max_chunk_size:
-                # 버퍼가 있으면 먼저 flush
-                if buffer:
-                    optimized.append(buffer)
-                    buffer = ""
-                optimized.append(section)
-            
-            # Case 3: 너무 큰 섹션 - 분할
-            else:
-                # 버퍼가 있으면 먼저 flush
-                if buffer:
-                    optimized.append(buffer)
-                    buffer = ""
-                
-                # 문단 단위로 분할
-                sub_chunks = self._split_large_section(section)
-                optimized.extend(sub_chunks)
-        
-        # 마지막 버퍼 flush
-        if buffer:
-            optimized.append(buffer)
-        
-        return optimized
-    
-    def _split_large_section(self, section: str) -> List[str]:
-        """
-        큰 섹션을 문단 단위로 분할
-        
-        분할 기준:
-        1. 빈 줄 (\n\n)
-        2. 리스트 아이템
-        3. 표
-        """
+        # Step 2: 청크 생성
         chunks = []
-        current_chunk = []
-        current_size = 0
+        for i, section in enumerate(sections):
+            section_chunks = self._chunk_section(section, start_id=len(chunks))
+            chunks.extend(section_chunks)
         
-        # 문단 단위로 분할
-        paragraphs = section.split('\n\n')
+        logger.info(f"   ✅ {len(chunks)}개 청크 생성")
         
-        for para in paragraphs:
-            para_size = len(para)
-            
-            if current_size + para_size + 2 <= self.max_chunk_size:
-                current_chunk.append(para)
-                current_size += para_size + 2
-            else:
-                # 현재 청크 저장
-                if current_chunk:
-                    chunks.append('\n\n'.join(current_chunk))
-                
-                # 새 청크 시작
-                current_chunk = [para]
-                current_size = para_size
-        
-        # 마지막 청크 저장
-        if current_chunk:
-            chunks.append('\n\n'.join(current_chunk))
+        # Step 3: 메타데이터 추가
+        for chunk in chunks:
+            self._add_metadata(chunk, markdown)
         
         return chunks
     
-    def _add_metadata(self, chunks: List[str], page_num: int = None) -> List[Dict]:
+    def _split_by_headers(self, markdown: str) -> List[Dict[str, Any]]:
         """
-        청크에 메타데이터 추가
-        
-        메타데이터:
-        - chunk_id: 청크 번호
-        - content: 청크 내용
-        - size: 청크 크기
-        - section: 섹션 이름
-        - page_num: 페이지 번호 (있는 경우)
-        - prev_chunk_id: 이전 청크 ID
-        - next_chunk_id: 다음 청크 ID
-        """
-        chunked_data = []
-        
-        for i, chunk in enumerate(chunks):
-            # 섹션 이름 추출 (첫 번째 헤더)
-            section_name = self._extract_section_name(chunk)
-            
-            metadata = {
-                'chunk_id': i,
-                'content': chunk,
-                'size': len(chunk),
-                'section': section_name,
-                'page_num': page_num,
-                'prev_chunk_id': i - 1 if i > 0 else None,
-                'next_chunk_id': i + 1 if i < len(chunks) - 1 else None
-            }
-            
-            chunked_data.append(metadata)
-        
-        return chunked_data
-    
-    def _extract_section_name(self, chunk: str) -> str:
-        """청크에서 첫 번째 헤더 추출"""
-        lines = chunk.split('\n')
-        for line in lines:
-            if line.startswith('#'):
-                # 헤더 기호 제거
-                return line.lstrip('#').strip()
-        return "Untitled Section"
-    
-    def get_statistics(self, chunked_data: List[Dict]) -> Dict:
-        """
-        청킹 통계 계산
+        헤더 기준으로 섹션 분할
         
         Returns:
-            통계 딕셔너리
+            [
+                {
+                    'header': str,
+                    'level': int,  # 1, 2, 3
+                    'content': str,
+                    'has_table': bool
+                },
+                ...
+            ]
         """
-        if not chunked_data:
-            return {}
+        sections = []
         
-        sizes = [c['size'] for c in chunked_data]
+        # 헤더 패턴 (##, ###)
+        header_pattern = r'^(#{1,3})\s+(.+)$'
         
-        stats = {
-            'total_chunks': len(chunked_data),
-            'avg_chunk_size': sum(sizes) / len(sizes),
-            'min_chunk_size': min(sizes),
-            'max_chunk_size': max(sizes),
-            'target_achievement': sum(
-                1 for s in sizes 
-                if self.min_chunk_size <= s <= self.max_chunk_size
-            ) / len(sizes) * 100
-        }
+        lines = markdown.split('\n')
+        current_section = None
         
-        return stats
+        for line in lines:
+            match = re.match(header_pattern, line)
+            
+            if match:
+                # 이전 섹션 저장
+                if current_section:
+                    sections.append(current_section)
+                
+                # 새 섹션 시작
+                level = len(match.group(1))
+                header = match.group(2).strip()
+                
+                current_section = {
+                    'header': header,
+                    'level': level,
+                    'content': line + '\n',
+                    'has_table': False
+                }
+            else:
+                if current_section:
+                    current_section['content'] += line + '\n'
+                    
+                    # 표 감지
+                    if '|' in line and '---' not in line:
+                        current_section['has_table'] = True
+                else:
+                    # 헤더 없는 첫 부분
+                    if not sections:
+                        current_section = {
+                            'header': '(Intro)',
+                            'level': 1,
+                            'content': line + '\n',
+                            'has_table': False
+                        }
+        
+        # 마지막 섹션
+        if current_section:
+            sections.append(current_section)
+        
+        return sections
+    
+    def _chunk_section(
+        self,
+        section: Dict[str, Any],
+        start_id: int
+    ) -> List[Dict[str, Any]]:
+        """
+        섹션을 적절한 크기로 청킹
+        
+        전략:
+        - 표가 있으면 무조건 1개 청크 (무결성 보존)
+        - 표 없으면 목표 크기로 분할
+        """
+        content = section['content']
+        char_count = len(content)
+        
+        # 표가 있으면 무조건 1개 청크
+        if section['has_table']:
+            return [{
+                'chunk_id': f'chunk_{start_id}',
+                'content': content,
+                'char_count': char_count,
+                'type': 'table',
+                'headers': [section['header']],
+                'page_hint': self._extract_page_hint(content)
+            }]
+        
+        # 표 없고 목표 크기 이하면 1개 청크
+        if char_count <= self.max_chunk_size:
+            return [{
+                'chunk_id': f'chunk_{start_id}',
+                'content': content,
+                'char_count': char_count,
+                'type': 'section',
+                'headers': [section['header']],
+                'page_hint': self._extract_page_hint(content)
+            }]
+        
+        # 표 없고 목표 크기 초과 → 분할
+        return self._split_long_section(section, start_id)
+    
+    def _split_long_section(
+        self,
+        section: Dict[str, Any],
+        start_id: int
+    ) -> List[Dict[str, Any]]:
+        """
+        긴 섹션을 여러 청크로 분할
+        
+        전략:
+        - 문단 단위로 분할 (\n\n)
+        - 목표 크기 유지
+        """
+        content = section['content']
+        paragraphs = content.split('\n\n')
+        
+        chunks = []
+        current_chunk = ''
+        chunk_headers = [section['header']]
+        
+        for para in paragraphs:
+            if not para.strip():
+                continue
+            
+            # 현재 청크 + 문단
+            test_chunk = current_chunk + '\n\n' + para if current_chunk else para
+            
+            if len(test_chunk) > self.max_chunk_size and current_chunk:
+                # 현재 청크 저장
+                chunks.append({
+                    'chunk_id': f'chunk_{start_id + len(chunks)}',
+                    'content': current_chunk.strip(),
+                    'char_count': len(current_chunk),
+                    'type': 'section',
+                    'headers': chunk_headers.copy(),
+                    'page_hint': self._extract_page_hint(current_chunk)
+                })
+                
+                # 새 청크 시작
+                current_chunk = para
+            else:
+                current_chunk = test_chunk
+        
+        # 마지막 청크
+        if current_chunk.strip():
+            chunks.append({
+                'chunk_id': f'chunk_{start_id + len(chunks)}',
+                'content': current_chunk.strip(),
+                'char_count': len(current_chunk),
+                'type': 'section',
+                'headers': chunk_headers.copy(),
+                'page_hint': self._extract_page_hint(current_chunk)
+            })
+        
+        return chunks
+    
+    def _extract_page_hint(self, content: str) -> int:
+        """
+        내용에서 페이지 번호 힌트 추출
+        
+        패턴: "# Page 3" → 3
+        """
+        match = re.search(r'#\s+Page\s+(\d+)', content)
+        if match:
+            return int(match.group(1))
+        return 0
+    
+    def _add_metadata(self, chunk: Dict[str, Any], full_markdown: str):
+        """
+        청크에 추가 메타데이터 추가
+        
+        메타데이터:
+        - position: 전체 문서 내 위치 (0~1)
+        - contains_numbers: 숫자 데이터 포함 여부
+        """
+        # 위치 계산
+        chunk_start = full_markdown.find(chunk['content'])
+        if chunk_start >= 0:
+            chunk['position'] = chunk_start / len(full_markdown)
+        else:
+            chunk['position'] = 0.0
+        
+        # 숫자 데이터 검출
+        content = chunk['content']
+        number_patterns = [
+            r'\d{1,2}:\d{2}',  # 시간
+            r'\d+분',          # 분
+            r'\d+원',          # 금액
+            r'\d+%'            # 퍼센트
+        ]
+        
+        chunk['contains_numbers'] = any(
+            re.search(pattern, content) for pattern in number_patterns
+        )

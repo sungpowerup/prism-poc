@@ -7,6 +7,8 @@ GPT 제안 통합:
 1. DSL 기반 프롬프트 생성
 2. 강화된 검증
 3. KVS 별도 페이로드 저장
+
+✅ v5.3.1: KVS 추출 정규식 버그 수정
 """
 
 import logging
@@ -215,14 +217,19 @@ class HybridExtractor:
         
         kvs = {}
         
-        # KVS 패턴 매칭
+        # ✅ v5.3.1: KVS 패턴 매칭 버그 수정
         patterns = [
-            # "키: 값" 형식
-            (r'([가-힣a-zA-Z\s]+):\s*([0-9:분원%명대초]+)', 1, 2),
-            # "키 값" 형식 (띄어쓰기)
+            # "키: 값" 형식 (콜론 뒤에 숫자/한글 필수)
+            (r'([가-힣a-zA-Z\s]+):\s*([0-9:분원%명대초]+[가-힣]*)', 1, 2),
+            
+            # "키 값" 형식 (띄어쓰기) - 특정 키워드만
             (r'(배차간격|첫차|막차|노선번호)\s+([0-9:분]+)', 1, 2),
+            
             # "키는 값" 형식
             (r'([가-힣]+)는\s+([0-9:분원%명대초]+)', 1, 2),
+            
+            # "키가 값" 형식
+            (r'([가-힣]+)가\s+([0-9:분원%명대초]+)', 1, 2),
         ]
         
         for pattern, key_group, val_group in patterns:
@@ -231,10 +238,19 @@ class HybridExtractor:
                 key = match.group(key_group).strip()
                 value = match.group(val_group).strip()
                 
+                # ✅ 빈 값 필터링 (콜론만 있는 경우 제외)
+                if not value or value == ':':
+                    continue
+                
                 # 중요 키만 저장
-                important_keys = ['배차간격', '첫차', '막차', '노선번호', '변경 전']
+                important_keys = ['배차간격', '첫차', '막차', '노선번호', '변경 전', '변경 후']
                 if any(ik in key for ik in important_keys):
-                    kvs[key] = value
+                    # ✅ 중복 키 처리: 기존 값이 더 길면 유지
+                    if key in kvs:
+                        if len(value) > len(kvs[key]):
+                            kvs[key] = value
+                    else:
+                        kvs[key] = value
         
         return kvs
     
