@@ -1,16 +1,18 @@
 """
 core/prompt_rules.py
-PRISM Phase 5.3.1 - Prompt Rules (긴급 패치)
+PRISM Phase 5.3.2 - Prompt Rules (도메인 가드 + 표 시리얼라이저)
 
-✅ Phase 5.3.1 수정:
-1. 재추출 프롬프트 강화 (map/table/diagram 필수 조건 명시)
-2. 신호 기반 검증 (길이 대신 키워드·체인 기반)
-3. 표 2단 검증 (Markdown 표 또는 CSV-like)
-4. 다이어그램 환각 패턴 검출
+✅ Phase 5.3.2 긴급 패치:
+1. ✅ 도메인 가드 ('노선 흐름' 조건부 활성화)
+2. ✅ 표 시리얼라이저 2단계 (Markdown 표 변환)
+3. ✅ 신호 기반 검증 유지 (Phase 5.3.1)
+4. ✅ 재추출 프롬프트 강화 유지
 
-Author: 박준호 (AI/ML Lead) + GPT 제안 반영
+GPT 제안 100% 반영
+
+Author: 박준호 (AI/ML Lead)
 Date: 2025-10-27
-Version: 5.3.1
+Version: 5.3.2
 """
 
 import re
@@ -22,13 +24,13 @@ logger = logging.getLogger(__name__)
 
 class PromptRules:
     """
-    Phase 5.3.1 프롬프트 생성·검증 엔진
+    Phase 5.3.2 프롬프트 생성·검증 엔진
     
-    GPT 제안 반영:
-    - 재추출 프롬프트에 필수 조건 명시
-    - 검증을 신호 기반으로 전환 (길이 대신 키워드)
-    - 표 2단 검증 (Markdown 표 또는 CSV-like 2행↑)
-    - 다이어그램 환각 패턴 검출
+    GPT 제안 100% 반영:
+    - 도메인 가드: '노선 흐름' 문구 조건부 활성화
+    - 표 시리얼라이저: CSV-like → Markdown 변환
+    - 신호 기반 검증 (Phase 5.3.1 유지)
+    - 재추출 프롬프트 강화 (Phase 5.3.1 유지)
     """
     
     # 공통 금지 규칙
@@ -63,14 +65,25 @@ class PromptRules:
 - Markdown 표 형식 (| 헤더 | 헤더 |)
 - 각 행의 파이프(|) 개수 동일
 - 셀은 명확히 구분
+- 빈 셀은 공백으로 표시
 """
     
-    DIAGRAM_RULES = """
-[다이어그램 규칙]
-- 흐름을 화살표(→)로 1~3개 체인으로 표현
+    # ✅ 도메인 가드: 버스/지도 전용 규칙
+    DIAGRAM_RULES_BUS = """
+[다이어그램 규칙 - 버스/지도 문서 전용]
+- 버스 노선은 "노선" 또는 "흐름" 단어 사용 가능
+- 화살표(→)로 1~3개 체인 표현
 - 체인은 최대 30 노드까지 (초과 시 "…(중간 생략)…")
-- 노드는 구체적 명칭 사용
-- "노선" 또는 "흐름" 단어 1개 이상 포함
+- 노드는 구체적 명칭 사용 (정류장명)
+"""
+    
+    # ✅ 도메인 가드: 일반 문서 규칙
+    DIAGRAM_RULES_GENERAL = """
+[다이어그램 규칙 - 일반 문서]
+- 흐름을 화살표(→)로 표현
+- 체인은 최대 10 노드까지
+- "노선", "흐름" 단어 사용 금지 (버스 문서 아님)
+- 대신 "프로세스", "단계", "구조" 등 사용
 """
     
     NUMBERS_RULES = """
@@ -78,12 +91,17 @@ class PromptRules:
 - 시간: "05:30" 형식 (HH:MM)
 - 분: "27분" 형식
 - 금액: "10,000원" 형식 (천단위 구분)
+- 백분율: "45.2%" 형식
 """
     
     @classmethod
     def build_prompt(cls, hints: Dict[str, Any]) -> str:
         """
-        CV 힌트 기반 동적 프롬프트 생성
+        ✅ Phase 5.3.2: CV 힌트 기반 동적 프롬프트 (도메인 가드 적용)
+        
+        변경:
+        - 버스/지도 문서와 일반 문서를 구분
+        - '노선 흐름' 문구는 버스/지도 문서에만 허용
         
         Args:
             hints: QuickLayoutAnalyzer의 힌트
@@ -104,14 +122,24 @@ class PromptRules:
         if hints.get('has_text'):
             sections.append(cls.TEXT_RULES)
         
+        # ✅ 도메인 가드: 지도 규칙은 has_map일 때만
         if hints.get('has_map'):
             sections.append(cls.MAP_RULES)
         
         if hints.get('has_table'):
             sections.append(cls.TABLE_RULES)
         
+        # ✅ 도메인 가드: 다이어그램 규칙 선택
         if hints.get('diagram_count', 0) > 0:
-            sections.append(cls.DIAGRAM_RULES)
+            # 버스/지도 문서 판별
+            is_bus_doc = hints.get('has_map') and hints.get('diagram_count') > 0
+            
+            if is_bus_doc:
+                sections.append(cls.DIAGRAM_RULES_BUS)
+                logger.debug("   📍 버스/지도 다이어그램 규칙 적용")
+            else:
+                sections.append(cls.DIAGRAM_RULES_GENERAL)
+                logger.debug("   📍 일반 다이어그램 규칙 적용")
         
         if hints.get('has_numbers'):
             sections.append(cls.NUMBERS_RULES)
@@ -131,7 +159,7 @@ class PromptRules:
         prev_content: str
     ) -> str:
         """
-        ✅ Phase 5.3.1: 재추출 프롬프트 강화 (GPT 제안)
+        ✅ Phase 5.3.2: 재추출 프롬프트 강화 (Phase 5.3.1 유지)
         
         전략: 누락 요소별 필수 조건을 명시
         
@@ -175,6 +203,7 @@ class PromptRules:
 - 헤더 1행 + 데이터 1행 이상 (최소 2행)
 - 각 행의 파이프(|) 개수는 동일
 - 숫자 데이터는 정확히 추출
+- 빈 셀은 공백으로 표시
 
 예시:
 | 항목 | 값 |
@@ -184,17 +213,35 @@ class PromptRules:
 """)
         
         if 'diagram' in missing:
-            focused_sections.append("""
-## [RETRY] 다이어그램
+            # ✅ 도메인 가드: 버스/지도 여부 확인
+            is_bus_doc = hints.get('has_map') and hints.get('diagram_count', 0) > 0
+            
+            if is_bus_doc:
+                focused_sections.append("""
+## [RETRY] 다이어그램 (버스 노선)
 
 [필수 조건]
-- 흐름을 화살표(→)로 1~3개 체인 표현
-- 체인은 최대 30 노드 이내 (초과 시 "…(중간 생략)…")
+- 버스 노선을 화살표(→)로 1~3개 체인 표현
+- 체인은 최대 30 노드 이내
 - '노선' 또는 '흐름' 단어 1개 이상 포함
+- 정류장명은 구체적으로 명시
 
 예시:
 ### 다이어그램 1
-- 흐름: 꽃바위 → 화암 → 일산해수욕장 → 대왕암공원 → 꽃바위
+- 노선: 꽃바위 → 화암 → 일산해수욕장 → 대왕암공원 → 꽃바위
+""")
+            else:
+                focused_sections.append("""
+## [RETRY] 다이어그램 (일반)
+
+[필수 조건]
+- 흐름을 화살표(→)로 표현 (최대 10 노드)
+- "프로세스", "단계", "구조" 등 사용
+- "노선", "흐름" 단어 사용 금지
+
+예시:
+### 프로세스
+- 단계: 신규유입 → 지속관람 → 이탈위험
 """)
         
         # 공통 금지 규칙
@@ -209,13 +256,11 @@ class PromptRules:
         hints: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        ✅ Phase 5.3.1: 신호 기반 검증 (GPT 제안)
+        ✅ Phase 5.3.2: 신호 기반 검증 (Phase 5.3.1 유지)
         
         변경:
-        - 길이 기준 완화 (300 → 100)
-        - 키워드·체인 기반 검증으로 전환
-        - 표 2단 검증 (Markdown 표 또는 CSV-like)
-        - 다이어그램 환각 패턴 검출
+        - 표 시리얼라이저 2단 검증 추가
+        - 도메인 가드 적용 ('노선 흐름' 검증)
         
         Args:
             content: 추출된 Markdown
@@ -248,25 +293,47 @@ class PromptRules:
                 missing.append('map')
                 logger.warning(f"   ⚠️ 지도 검증 실패 (키워드:{has_kw}, 지명:{has_place}, 체인:{has_chain})")
         
-        # ✅ 2. 표 검증 (2단: Markdown 표 또는 CSV-like)
+        # ✅ 2. 표 검증 (2단: Markdown 표 또는 CSV-like 또는 시리얼라이즈)
         if hints.get('has_table'):
-            # Markdown 표 검증
+            # 1단: Markdown 표 검증
             md_table = bool(re.search(r'^\|.+\|\s*$', content, re.MULTILINE)) and '---' in content
             
-            # CSV-like 2행 이상 검증
+            # 2단: CSV-like 2행 이상 검증
             csv_like = len(re.findall(r'^[^\n,]+(,|\t|\|)[^\n]+$', content, re.MULTILINE)) >= 2
             
-            if md_table or csv_like:
+            # 3단: 단일행 플랫 테이블 시리얼라이즈
+            flat_table_serialized = False
+            if not md_table and not csv_like:
+                # 플랫 테이블 감지 및 변환 시도
+                serialized_content = cls._serialize_flat_table(content)
+                if serialized_content != content:
+                    content = serialized_content
+                    flat_table_serialized = True
+                    logger.info("   🔧 플랫 테이블 → Markdown 표 변환 성공")
+            
+            if md_table or csv_like or flat_table_serialized:
                 scores['table'] = 100
-                logger.debug("   ✅ 표 검증 통과 (Markdown 또는 CSV-like)")
+                logger.debug("   ✅ 표 검증 통과")
             else:
                 scores['table'] = 0
                 missing.append('table')
-                logger.warning("   ⚠️ 표 검증 실패 (Markdown 표 없음)")
+                logger.warning("   ⚠️ 표 검증 실패")
         
-        # ✅ 3. 다이어그램 검증 + 환각 패턴 검출 (GPT 제안)
+        # ✅ 3. 다이어그램 검증 + 환각 패턴 검출 + 도메인 가드
         if hints.get('diagram_count', 0) > 0:
-            diagram_mentions = len(re.findall(r'다이어그램|흐름|노선', content))
+            # 버스/지도 문서 여부
+            is_bus_doc = hints.get('has_map') and hints.get('diagram_count') > 0
+            
+            if is_bus_doc:
+                # 버스 문서: '노선' 또는 '흐름' 허용
+                diagram_mentions = len(re.findall(r'다이어그램|노선|흐름', content))
+            else:
+                # ✅ 도메인 가드: 일반 문서에서 '노선', '흐름' 사용 시 경고
+                if '노선' in content or (re.search(r'(?<!버스\s)흐름', content)):
+                    warnings.append("일반 문서에서 '노선', '흐름' 단어 사용 - 버스 템플릿 오염")
+                    logger.warning("   ⚠️ 도메인 가드: 버스 템플릿 오염 감지")
+                
+                diagram_mentions = len(re.findall(r'다이어그램|프로세스|단계|구조', content))
             
             # 기본 검증
             if diagram_mentions >= hints['diagram_count']:
@@ -315,6 +382,52 @@ class PromptRules:
         }
     
     @classmethod
+    def _serialize_flat_table(cls, content: str) -> str:
+        """
+        ✅ Phase 5.3.2: 표 시리얼라이저 2단계 (GPT 제안)
+        
+        전략:
+        - 단일행 플랫 테이블 감지
+        - 키워드 앵커로 열 헤더 추정
+        - Markdown 표로 변환
+        
+        Args:
+            content: Markdown 내용
+        
+        Returns:
+            변환된 Markdown (실패 시 원본)
+        """
+        # 플랫 테이블 패턴: "키: 값 키: 값 ..."
+        flat_pattern = r'([\w가-힣]+):\s*([0-9.%원명대초]+)'
+        
+        matches = re.findall(flat_pattern, content)
+        
+        if len(matches) < 2:
+            return content
+        
+        # Markdown 표 생성
+        table_lines = [
+            "| 항목 | 값 |",
+            "|---|---|"
+        ]
+        
+        for key, value in matches:
+            table_lines.append(f"| {key} | {value} |")
+        
+        # 원본에서 플랫 테이블 부분 찾아 교체
+        flat_section = re.search(
+            r'((?:[\w가-힣]+:\s*[0-9.%원명대초]+\s*){2,})',
+            content
+        )
+        
+        if flat_section:
+            table_md = '\n'.join(table_lines)
+            content = content.replace(flat_section.group(1), table_md)
+            logger.info(f"   🔧 플랫 테이블 변환: {len(matches)}개 항목")
+        
+        return content
+    
+    @classmethod
     def correct_typos(cls, content: str) -> str:
         """
         간단한 오탈자 교정
@@ -338,6 +451,35 @@ class PromptRules:
         content = re.sub(r'\s*\|\s*', ' | ', content)
         
         return content.strip()
+    
+    @classmethod
+    def sanitize_domain_leak(cls, content: str, hints: Dict) -> str:
+        """
+        ✅ Phase 5.3.2: 도메인 가드 - 템플릿 오염 제거
+        
+        전략:
+        - 비버스 문서에서 '노선 흐름' 문구 제거
+        - 버스 문서는 허용
+        
+        Args:
+            content: Markdown 내용
+            hints: CV 힌트
+        
+        Returns:
+            정화된 Markdown
+        """
+        # 버스/지도 문서면 스킵
+        if hints.get('has_map') and hints.get('diagram_count', 0) > 0:
+            return content
+        
+        # 비버스 문서: '노선 흐름' 문구 제거
+        content = re.sub(r'노선\s*흐름\s*→', '단계 →', content)
+        content = re.sub(r'(?<!버스\s)흐름\s*→', '프로세스 →', content)
+        
+        if '노선' in content or '흐름' in content:
+            logger.info("   🔧 도메인 가드: 버스 템플릿 문구 제거")
+        
+        return content
 
 
 # 사용 예시
@@ -345,7 +487,7 @@ if __name__ == "__main__":
     # 테스트
     hints = {
         'has_text': True,
-        'has_map': True,
+        'has_map': False,  # 비버스 문서
         'has_table': True,
         'has_numbers': True,
         'diagram_count': 2
@@ -357,28 +499,17 @@ if __name__ == "__main__":
     
     # 검증 테스트
     test_content = """
-## 지도 정보
-
-### 주요 위치
-- 북쪽: 울산대학교병원
-- 남쪽: 화암중학교
-
-### 경로
-꽃바위 → 화암 → 동구청
-
 ## 표
 
-| 항목 | 값 |
-|---|---|
-| 배차간격 | 27분 |
+성별: 남성 45.2% 여성: 54.8% 연령대: 14~19세 11.2% 20대: 25.9%
 
 ## 다이어그램
 
 ### 다이어그램 1
-- 흐름: A → B → C
+- 프로세스: 신규유입 → 지속관람 → 이탈위험
 
 ### 다이어그램 2
-- 흐름: X → Y → Z
+- 단계: A → B → C
 """
     
     result = PromptRules.validate_extraction(test_content, hints)

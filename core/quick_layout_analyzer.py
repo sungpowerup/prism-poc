@@ -1,15 +1,15 @@
 """
 core/quick_layout_analyzer.py
-PRISM Phase 5.3.1 - Quick Layout Analyzer (긴급 패치)
+PRISM Phase 5.3.2 - Quick Layout Analyzer
 
-✅ Phase 5.3.1 수정:
-1. Canny threshold 완화 (50/150 → 30/100)
-2. Tesseract 표 키워드 검출 추가 (2단 검증)
-3. 표 검출 민감도 향상
+✅ Phase 5.3.2: Phase 5.3.1 유지
+- Canny threshold 완화 (30/100)
+- Tesseract 표 키워드 검출 (2단 검증)
+- 표 검출 민감도 향상
 
-Author: 박준호 (AI/ML Lead) + GPT 제안 반영
+Author: 박준호 (AI/ML Lead)
 Date: 2025-10-27
-Version: 5.3.1
+Version: 5.3.2
 """
 
 import cv2
@@ -31,11 +31,9 @@ except ImportError:
 
 class QuickLayoutAnalyzer:
     """
-    Phase 5.3.1 OpenCV 기반 빠른 레이아웃 분석기
+    Phase 5.3.2 OpenCV 기반 빠른 레이아웃 분석기
     
-    GPT 제안 반영:
-    - Canny threshold 완화로 흐릿한 선 검출
-    - Tesseract로 표 키워드 보조 검출 (2단 검증)
+    (Phase 5.3.1 기능 유지)
     
     목적:
     - VLM 호출 전 0.5초 이내 구조 힌트 생성
@@ -52,7 +50,7 @@ class QuickLayoutAnalyzer:
     def __init__(self):
         """초기화"""
         self.tesseract_available = TESSERACT_AVAILABLE
-        logger.info("✅ QuickLayoutAnalyzer v5.3.1 초기화 완료")
+        logger.info("✅ QuickLayoutAnalyzer v5.3.2 초기화 완료")
         if self.tesseract_available:
             logger.info("   📊 Tesseract 표 키워드 검출 활성화")
     
@@ -81,7 +79,7 @@ class QuickLayoutAnalyzer:
         hints = {
             'has_text': self._detect_text(image),
             'has_map': self._detect_map(image),
-            'has_table': self._detect_tables(image, image_data),  # ✅ image_data 추가
+            'has_table': self._detect_tables(image, image_data),
             'has_numbers': self._detect_numbers(image),
             'diagram_count': self._count_diagrams(image)
         }
@@ -140,7 +138,7 @@ class QuickLayoutAnalyzer:
     
     def _detect_tables(self, image: np.ndarray, image_data: str = None) -> bool:
         """
-        ✅ Phase 5.3.1: 표 검출 강화 (GPT 제안)
+        ✅ Phase 5.3.1: 표 검출 강화 (유지)
         
         전략:
         1. OpenCV Canny threshold 완화 (30/100)
@@ -156,7 +154,7 @@ class QuickLayoutAnalyzer:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         
         # ✅ 1. Canny threshold 완화 (흐릿한 선 검출)
-        edges = cv2.Canny(gray, 30, 100)  # 기존: 50, 150
+        edges = cv2.Canny(gray, 30, 100)
         
         # 가로선 검출
         horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
