@@ -1,17 +1,19 @@
 """
 core/prompt_rules.py
-PRISM Phase 5.5.0 - Prompt Rules
+PRISM Phase 5.5.1 - Prompt Rules (Hotfix)
 
-✅ Phase 5.5.0 핵심 개선 (GPT 보강 반영):
+✅ Phase 5.5.1 핫픽스 (GPT 보강 반영):
+- 개정 이력 표 이중 게이트 (날짜 패턴 + 행 수 추정)
+- 표 허용 조건 강화 (confidence=3 + 날짜≥2 + 표 행≥2)
+
+(Phase 5.5.0 기능 유지)
 - 가감형 table_confidence 계산 (0~3)
 - 규정/법령 모드 자동 감지 (견고)
-- 표 금지 규칙 상단 배치 (ABSOLUTE RULE)
-- 규정 모드 하드 게이트 (confidence >= 3만 표 허용)
-- 버스 도메인 하드 게이트 유지
+- 표 금지 규칙 상단 배치
 
 Author: 최동현 (Frontend Lead)
 Date: 2025-10-27
-Version: 5.5.0
+Version: 5.5.1
 """
 
 import re
@@ -23,7 +25,12 @@ logger = logging.getLogger(__name__)
 
 class PromptRules:
     """
-    Phase 5.5.0 동적 프롬프트 생성 엔진
+    Phase 5.5.1 동적 프롬프트 생성 엔진 (Hotfix)
+    
+    개선:
+    - 개정 이력 표 이중 게이트 (보수적)
+    - 날짜 패턴 검증 강화
+    - 표 행 수 추정 추가
     
     전략:
     - QuickLayoutAnalyzer 힌트 기반
@@ -33,7 +40,7 @@ class PromptRules:
     """
     
     # ==========================================
-    # ✅ Phase 5.5.0: 표 금지 절대 규칙 (상단 배치)
+    # Phase 5.5.0: 표 금지 절대 규칙 (상단 배치)
     # ==========================================
     
     STATUTE_ABSOLUTE_FORBID = """**ABSOLUTE RULE (규정/법령 모드):**
@@ -161,13 +168,16 @@ class PromptRules:
 """
     
     # ==========================================
-    # Phase 5.5.0: 메인 함수
+    # Phase 5.5.1: 메인 함수
     # ==========================================
     
     @classmethod
     def build_prompt(cls, hints: Dict[str, Any]) -> str:
         """
-        ✅ Phase 5.5.0: 힌트 기반 동적 프롬프트 생성
+        ✅ Phase 5.5.1: 힌트 기반 동적 프롬프트 생성 (Hotfix)
+        
+        개선:
+        - 개정 이력 표 이중 게이트 (보수적)
         
         전략:
         1. OCR 텍스트 추출
@@ -182,7 +192,7 @@ class PromptRules:
         Returns:
             최종 프롬프트
         """
-        logger.info("   🎨 PromptRules v5.5.0 프롬프트 생성")
+        logger.info("   🎨 PromptRules v5.5.1 프롬프트 생성 (Hotfix)")
         
         # 1️⃣ OCR 텍스트 추출
         ocr_text = hints.get('ocr_text', '')
@@ -208,16 +218,16 @@ class PromptRules:
             # 규정 프롬프트
             sections.append(cls.STATUTE_RULES)
             
-            # ✅ 진짜 표일 때만 허용 (confidence >= 3)
-            if table_confidence >= 3 and cls._looks_like_revision_table(ocr_text):
-                logger.info(f"      ✅ 개정 이력 표 허용 (confidence: {table_confidence})")
+            # ✅ Phase 5.5.1: 개정 이력 표 이중 게이트 (보수적)
+            if table_confidence >= 3 and cls._is_revision_table_strict(ocr_text):
+                logger.info(f"      ✅ 개정 이력 표 허용 (이중 게이트 통과)")
                 sections.append(cls.TABLE_RULES)
         
         else:
             # 일반 모드
             sections.append(cls.BASE_RULES)
             
-            # ✅ Phase 5.5.0: 표 신뢰도 게이트 (>= 2)
+            # Phase 5.5.0: 표 신뢰도 게이트 (>= 2)
             if table_confidence >= 2:
                 logger.info(f"      ✅ 표 규칙 적용 (confidence: {table_confidence})")
                 sections.append(cls.TABLE_RULES)
@@ -240,13 +250,13 @@ class PromptRules:
         return prompt
     
     # ==========================================
-    # ✅ Phase 5.5.0: 보조 함수
+    # Phase 5.5.1: 보조 함수
     # ==========================================
     
     @classmethod
     def _calculate_table_confidence(cls, hints: Dict[str, Any], ocr_text: str) -> int:
         """
-        ✅ Phase 5.5.0: 표 신뢰도 계산 (가감형 0~3)
+        Phase 5.5.0: 표 신뢰도 계산 (가감형 0~3)
         
         전략:
         - 가산 요소 (+1씩): CV 교차점, 선밀도, OCR 키워드
@@ -273,7 +283,7 @@ class PromptRules:
         h_v_line_density = hints.get('h_v_line_density', 0)
         if h_v_line_density > 0.02:
             score += 1
-            logger.debug(f"         [+1] 선밀도 {h_v_line_density:.4f} > 0.02")
+            logger.debug(f"         [+1] 선밀도 {h_v_line_density:.6f} > 0.02")
         
         # OCR: 표 키워드 2개 이상
         table_keywords = ['단위', '사례수', '비율', '항목', '합계', '%']
@@ -306,7 +316,7 @@ class PromptRules:
     @classmethod
     def _detect_statute_mode(cls, hints: Dict[str, Any], ocr_text: str) -> bool:
         """
-        ✅ Phase 5.5.0: 규정/법령 모드 감지 (견고)
+        Phase 5.5.0: 규정/법령 모드 감지 (견고)
         
         전략:
         - 패턴 2종 이상 매칭
@@ -351,23 +361,59 @@ class PromptRules:
         return is_statute
     
     @classmethod
-    def _looks_like_revision_table(cls, ocr_text: str) -> bool:
+    def _is_revision_table_strict(cls, ocr_text: str) -> bool:
         """
-        ✅ Phase 5.5.0: 개정 이력 표 감지
+        ✅ Phase 5.5.1: 개정 이력 표 이중 게이트 (보수적)
         
-        목적: 규정 모드에서도 개정 이력 표는 허용
+        목적: 규정 모드에서도 진짜 개정 이력 표만 허용
+        
+        조건:
+        1. 개정 키워드 2개 이상
+        2. 날짜 패턴 2개 이상 (YYYY-MM-DD or YYYY.MM.DD)
+        3. 표 행 수 추정 2개 이상
         
         Args:
             ocr_text: OCR 텍스트
         
         Returns:
-            개정 이력 표 여부
+            개정 이력 표 여부 (이중 게이트)
         """
-        revision_keywords = ['개정', '차수', '차 개정', '시행일']
+        # ✅ 1단계: 개정 키워드 검사
+        revision_keywords = ['개정', '차수', '차 개정', '시행일', '제정']
         keyword_count = sum(1 for kw in revision_keywords if kw in ocr_text)
         
-        is_revision = keyword_count >= 2
-        if is_revision:
-            logger.debug(f"         개정 이력 표 감지 (키워드: {keyword_count}개)")
+        if keyword_count < 2:
+            logger.debug(f"         개정 키워드 부족: {keyword_count} < 2")
+            return False
         
-        return is_revision
+        # ✅ 2단계: 날짜 패턴 검사 (YYYY-MM-DD or YYYY.MM.DD)
+        date_patterns = [
+            r'\d{4}[-./]\d{1,2}[-./]\d{1,2}',  # 2019-05-27 or 2019.05.27
+            r'\d{4}년\s?\d{1,2}월\s?\d{1,2}일',  # 2019년 5월 27일
+        ]
+        
+        date_matches = 0
+        for pattern in date_patterns:
+            date_matches += len(re.findall(pattern, ocr_text))
+        
+        if date_matches < 2:
+            logger.debug(f"         날짜 패턴 부족: {date_matches} < 2")
+            return False
+        
+        # ✅ 3단계: 표 행 수 추정 (개정/차수 키워드 행)
+        lines = ocr_text.split('\n')
+        revision_lines = [
+            line for line in lines
+            if any(kw in line for kw in ['개정', '차수', '차 개정', '시행일'])
+        ]
+        
+        if len(revision_lines) < 2:
+            logger.debug(f"         표 행 수 부족: {len(revision_lines)} < 2")
+            return False
+        
+        # ✅ 통과!
+        logger.debug(
+            f"         개정 이력 표 이중 게이트 통과: "
+            f"키워드={keyword_count}, 날짜={date_matches}, 행={len(revision_lines)}"
+        )
+        return True

@@ -1,22 +1,21 @@
 """
 core/quick_layout_analyzer.py
-PRISM Phase 5.5.0 - Quick Layout Analyzer
+PRISM Phase 5.5.1 - Quick Layout Analyzer (Hotfix)
 
-✅ Phase 5.5.0 핵심 개선 (GPT 보강 반영):
-- OCR 텍스트 반환 (ocr_text)
-- 조항 토큰 비율 계산 (article_token_ratio)
-- 번호 목록 밀도 계산 (numbered_list_density)
-- 격자 밀도 계산 (h_v_line_density)
-- 교차점 개수 반환 (grid_intersections)
+✅ Phase 5.5.1 핫픽스 (GPT 보강 반영):
+- 교차점 계산 보수화 (적응 이진화 + 가는 선 제거)
+- 최소 선 길이 필터링 (40px)
+- 표 신뢰도 정확도 향상
 
-(Phase 5.4.0 기능 유지)
+(Phase 5.5.0 기능 유지)
+- OCR 텍스트 반환
+- 조항 토큰 비율 계산
+- 번호 목록 밀도 계산
 - 버스 키워드 검출
-- 지도 검출 민감도 강화
-- 표 검출 2단 검증
 
 Author: 박준호 (AI/ML Lead)
 Date: 2025-10-27
-Version: 5.5.0
+Version: 5.5.1
 """
 
 import cv2
@@ -39,31 +38,23 @@ except ImportError:
 
 class QuickLayoutAnalyzer:
     """
-    Phase 5.5.0 OpenCV + OCR 기반 빠른 레이아웃 분석기
+    Phase 5.5.1 OpenCV + OCR 기반 빠른 레이아웃 분석기 (Hotfix)
+    
+    개선:
+    - 교차점 계산 보수화 (적응 이진화 + morphology)
+    - 가는 선 제거 (조항 번호/구분선 필터링)
+    - 최소 선 길이 필터링
     
     목적:
     - VLM 호출 전 0.5초 이내 구조 힌트 생성
     - 프롬프트 최적화 및 검증 기준 제공
-    - 표 과검출 방지 (가감형 confidence)
-    
-    힌트:
-    - has_text: 텍스트 영역 존재
-    - has_map: 지도/노선도 존재
-    - has_table: 표 존재
-    - has_numbers: 숫자 데이터 존재
-    - diagram_count: 다이어그램 개수
-    - grid_intersections: 교차점 개수 (표 신뢰도)
-    - h_v_line_density: 가로/세로선 밀도 (표 신뢰도)
-    - ocr_text: OCR 추출 텍스트 (짧게)
-    - article_token_ratio: 조항 토큰 비율 (규정 모드 감지)
-    - numbered_list_density: 번호 목록 밀도 (규정 모드 감지)
-    - bus_keywords: 버스 키워드 리스트
+    - 표 과검출 방지 (보수적 계산)
     """
     
     def __init__(self):
         """초기화"""
         self.tesseract_available = TESSERACT_AVAILABLE
-        logger.info("✅ QuickLayoutAnalyzer v5.5.0 초기화 완료")
+        logger.info("✅ QuickLayoutAnalyzer v5.5.1 초기화 완료 (Hotfix)")
         if self.tesseract_available:
             logger.info("   📊 Tesseract OCR 활성화 (표 + 버스 + 규정 키워드)")
         else:
@@ -91,7 +82,7 @@ class QuickLayoutAnalyzer:
                 'bus_keywords': List[str]
             }
         """
-        logger.info("   🔍 QuickLayoutAnalyzer v5.5.0 시작")
+        logger.info("   🔍 QuickLayoutAnalyzer v5.5.1 시작 (Hotfix)")
         
         # Base64 → OpenCV 이미지
         image = self._base64_to_cv2(image_data)
@@ -108,22 +99,22 @@ class QuickLayoutAnalyzer:
             'has_numbers': self._detect_numbers(image),
             'diagram_count': self._count_diagrams(image),
             
-            # ✅ Phase 5.5.0: 표 신뢰도 계산용 필드
-            'grid_intersections': self._count_grid_intersections(gray),
-            'h_v_line_density': self._calculate_line_density(gray),
+            # ✅ Phase 5.5.1: 보수적 표 신뢰도 계산용 필드
+            'grid_intersections': self._count_grid_intersections_conservative(gray),
+            'h_v_line_density': self._calculate_line_density_conservative(gray),
             
-            # ✅ Phase 5.5.0: OCR 기반 필드
+            # Phase 5.5.0: OCR 기반 필드
             'ocr_text': ocr_text[:500],  # 짧게 (500자)
             'article_token_ratio': self._calculate_article_ratio(ocr_text),
             'numbered_list_density': self._calculate_numbered_density(ocr_text),
             
-            # ✅ Phase 5.4.0: 버스 키워드
+            # Phase 5.4.0: 버스 키워드
             'bus_keywords': self._detect_bus_keywords(ocr_text)
         }
         
         logger.info(f"   ✅ 힌트 생성 완료:")
         logger.info(f"      - 텍스트: {hints['has_text']}, 지도: {hints['has_map']}, 표: {hints['has_table']}")
-        logger.info(f"      - 교차점: {hints['grid_intersections']}, 선밀도: {hints['h_v_line_density']:.4f}")
+        logger.info(f"      - 교차점: {hints['grid_intersections']}, 선밀도: {hints['h_v_line_density']:.6f}")
         logger.info(f"      - 조항비율: {hints['article_token_ratio']:.2f}, 번호밀도: {hints['numbered_list_density']:.2f}")
         if hints['bus_keywords']:
             logger.info(f"      - 버스 키워드: {hints['bus_keywords']}")
@@ -139,7 +130,7 @@ class QuickLayoutAnalyzer:
     
     def _extract_ocr_text(self, gray: np.ndarray) -> str:
         """
-        ✅ Phase 5.5.0: OCR 텍스트 추출
+        OCR 텍스트 추출
         
         Args:
             gray: Grayscale 이미지
@@ -166,7 +157,7 @@ class QuickLayoutAnalyzer:
     
     def _calculate_article_ratio(self, ocr_text: str) -> float:
         """
-        ✅ Phase 5.5.0: 조항 토큰 비율 계산
+        조항 토큰 비율 계산
         
         목적: 규정/법령 문서 감지 + 표 과검출 방지
         
@@ -206,7 +197,7 @@ class QuickLayoutAnalyzer:
     
     def _calculate_numbered_density(self, ocr_text: str) -> float:
         """
-        ✅ Phase 5.5.0: 번호 목록 밀도 계산
+        번호 목록 밀도 계산
         
         목적: 규정/법령 문서 감지 + 표 과검출 방지
         
@@ -243,66 +234,107 @@ class QuickLayoutAnalyzer:
         logger.debug(f"      번호 목록: {numbered_lines}/{len(lines)} 줄 = {density:.2f}")
         return density
     
-    def _count_grid_intersections(self, gray: np.ndarray) -> int:
+    def _count_grid_intersections_conservative(self, gray: np.ndarray) -> int:
         """
-        ✅ Phase 5.5.0: 격자 교차점 개수 계산
+        ✅ Phase 5.5.1: 보수적 격자 교차점 계산
+        
+        개선:
+        - 적응 이진화 (Adaptive Threshold)
+        - morphology open으로 가는 선 제거
+        - 최소 선 길이 필터링 (40px)
         
         Args:
             gray: Grayscale 이미지
         
         Returns:
-            교차점 개수
+            교차점 개수 (보수적)
         """
-        # Canny 엣지 검출
-        edges = cv2.Canny(gray, 30, 100)
+        # ✅ 1단계: 적응 이진화
+        # - 조명 변화에 강함
+        # - 가는 선 (조항 번호) 제거 효과
+        binary = cv2.adaptiveThreshold(
+            gray, 255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV,
+            11, 2
+        )
         
-        # 가로선 검출
+        # ✅ 2단계: Canny 엣지 검출
+        edges = cv2.Canny(binary, 30, 100)
+        
+        # ✅ 3단계: 가로선 검출 (최소 길이 40px)
         horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
         horizontal_lines = cv2.morphologyEx(edges, cv2.MORPH_OPEN, horizontal_kernel)
         
-        # 세로선 검출
+        # morphology open으로 가는 선 제거
+        horizontal_lines = cv2.morphologyEx(horizontal_lines, cv2.MORPH_OPEN, np.ones((1, 3), np.uint8))
+        
+        # ✅ 4단계: 세로선 검출 (최소 길이 40px)
         vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 40))
         vertical_lines = cv2.morphologyEx(edges, cv2.MORPH_OPEN, vertical_kernel)
         
-        # 교차점 검출
+        # morphology open으로 가는 선 제거
+        vertical_lines = cv2.morphologyEx(vertical_lines, cv2.MORPH_OPEN, np.ones((3, 1), np.uint8))
+        
+        # ✅ 5단계: 교차점 검출 (보수적)
         intersections = cv2.bitwise_and(horizontal_lines, vertical_lines)
+        
+        # ✅ 6단계: 작은 노이즈 제거 (5x5 커널)
+        kernel_denoise = np.ones((5, 5), np.uint8)
+        intersections = cv2.morphologyEx(intersections, cv2.MORPH_OPEN, kernel_denoise)
+        
         intersections_count = np.sum(intersections > 0)
         
-        logger.debug(f"      격자 교차점: {intersections_count}개")
+        logger.debug(f"      격자 교차점(보수적): {intersections_count}개")
         return int(intersections_count)
     
-    def _calculate_line_density(self, gray: np.ndarray) -> float:
+    def _calculate_line_density_conservative(self, gray: np.ndarray) -> float:
         """
-        ✅ Phase 5.5.0: 가로/세로선 밀도 계산
+        ✅ Phase 5.5.1: 보수적 가로/세로선 밀도 계산
+        
+        개선:
+        - 적응 이진화
+        - morphology open으로 가는 선 제거
+        - 최소 선 길이 필터링
         
         Args:
             gray: Grayscale 이미지
         
         Returns:
-            선 밀도 (0.0 ~ 1.0)
+            선 밀도 (0.0 ~ 1.0, 보수적)
         """
-        # Canny 엣지 검출
-        edges = cv2.Canny(gray, 30, 100)
+        # ✅ 1단계: 적응 이진화
+        binary = cv2.adaptiveThreshold(
+            gray, 255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV,
+            11, 2
+        )
         
-        # 가로선 검출
+        # ✅ 2단계: Canny 엣지 검출
+        edges = cv2.Canny(binary, 30, 100)
+        
+        # ✅ 3단계: 가로선 검출 (최소 40px)
         horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
         horizontal_lines = cv2.morphologyEx(edges, cv2.MORPH_OPEN, horizontal_kernel)
+        horizontal_lines = cv2.morphologyEx(horizontal_lines, cv2.MORPH_OPEN, np.ones((1, 3), np.uint8))
         
-        # 세로선 검출
+        # ✅ 4단계: 세로선 검출 (최소 40px)
         vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 40))
         vertical_lines = cv2.morphologyEx(edges, cv2.MORPH_OPEN, vertical_kernel)
+        vertical_lines = cv2.morphologyEx(vertical_lines, cv2.MORPH_OPEN, np.ones((3, 1), np.uint8))
         
-        # 선 픽셀 합계
+        # ✅ 5단계: 선 픽셀 합계
         h_pixels = np.sum(horizontal_lines > 0)
         v_pixels = np.sum(vertical_lines > 0)
         
         # 전체 픽셀
         total_pixels = gray.shape[0] * gray.shape[1]
         
-        # 밀도 계산
+        # 밀도 계산 (보수적)
         density = (h_pixels + v_pixels) / max(1, total_pixels)
         
-        logger.debug(f"      선 밀도: {density:.6f}")
+        logger.debug(f"      선 밀도(보수적): {density:.6f}")
         return float(density)
     
     def _detect_text(self, image: np.ndarray) -> bool:

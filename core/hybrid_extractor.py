@@ -1,28 +1,32 @@
 """
 core/hybrid_extractor.py
-PRISM Phase 5.5.0 - Hybrid Extractor
+PRISM Phase 5.6.0 - Hybrid Extractor (Integrated)
 
-✅ Phase 5.5.0 핵심 개선 (GPT 보강 반영):
-- 검증 강화 (표 금지 규칙 위반 감지)
-- 재추출 Replace 병합 (append 금지)
-- 7-gram 중복 제거 유지
-- 규정 모드 + 표 신뢰도 기반 재시도
+✅ Phase 5.6.0 통합 (GPT + 팀 의견 반영):
+1. Post-merge Normalizer (문장 결속)
+2. Statute-aware Chunker (조문 청킹)
+3. Typo Normalizer (오탈자 교정)
+
+(Phase 5.5.1 기능 유지)
+- 표 포맷 감지 보수화
+- 중복 제거 안전화
+- 검증 강화
 
 Author: 이서영 (Backend Lead)  
 Date: 2025-10-27
-Version: 5.5.0
+Version: 5.6.0
 """
 
 import logging
 import re
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 logger = logging.getLogger(__name__)
 
 
 class HybridExtractor:
     """
-    Phase 5.5.0 CV 힌트 기반 지능형 추출기
+    Phase 5.6.0 통합 추출기
     
     플로우:
     1. QuickLayoutAnalyzer → CV 힌트
@@ -31,7 +35,10 @@ class HybridExtractor:
     4. Validation → 검증
     5. Retry → 재추출
     6. Merge → Replace 병합
-    7. KVSNormalizer → KVS 정규화
+    7. ✅ PostMergeNormalizer → 문장 결속
+    8. ✅ TypoNormalizer → 오탈자 교정
+    9. Dedup → 중복 제거
+    10. KVSNormalizer → KVS 정규화
     """
     
     def __init__(self, vlm_service, analyzer=None, prompt_rules=None, kvs_normalizer=None):
@@ -56,14 +63,21 @@ class HybridExtractor:
         else:
             self.kvs_normalizer = kvs_normalizer
         
-        logger.info("✅ HybridExtractor v5.5.0 초기화 완료")
+        # ✅ Phase 5.6.0: 새 컴포넌트
+        from .post_merge_normalizer import PostMergeNormalizer
+        from .typo_normalizer import TypoNormalizer
+        
+        self.post_normalizer = PostMergeNormalizer()
+        self.typo_normalizer = TypoNormalizer()
+        
+        logger.info("✅ HybridExtractor v5.6.0 초기화 완료 (Integrated)")
     
     def extract(self, image_data: str, page_num: int = 1) -> Dict[str, Any]:
         """페이지 추출"""
         import time
         start_time = time.time()
         
-        logger.info(f"   🔧 HybridExtractor v5.5.0 추출 시작 (페이지 {page_num})")
+        logger.info(f"   🔧 HybridExtractor v5.6.0 추출 시작 (페이지 {page_num})")
         
         try:
             # Step 1: CV 힌트
@@ -101,20 +115,31 @@ class HybridExtractor:
                 
                 validation = self._validate_content(content, hints)
             
-            # Step 6: KVS
+            # ✅ Step 6: Post-merge Normalizer (Phase 5.6.0)
+            doc_type = self._determine_doc_type(hints)
+            content = self.post_normalizer.normalize(content, doc_type)
+            
+            # ✅ Step 7: Typo Normalizer (Phase 5.6.0)
+            content = self.typo_normalizer.normalize(content, doc_type)
+            
+            # Step 8: 중복 제거
+            content = self._dedup_by_sentences(content)
+            logger.info(f"      🧹 중복 제거 완료 ({len(content)} 글자)")
+            
+            # Step 9: KVS
             kvs = self._extract_kvs(content)
             if kvs:
                 kvs = self.kvs_normalizer.normalize_kvs(kvs)
                 logger.info(f"      💾 KVS: {len(kvs)}개")
             
-            # Step 7: 품질
+            # Step 10: 품질
             quality_score = self._calculate_quality(content, validation)
             
             total_time = time.time() - start_time
             
             result = {
                 'content': content,
-                'doc_type': self._determine_doc_type(hints),
+                'doc_type': doc_type,
                 'confidence': validation['confidence'],
                 'quality_score': quality_score,
                 'hints': hints,
@@ -147,8 +172,8 @@ class HybridExtractor:
         table_confidence = PromptRules._calculate_table_confidence(hints, ocr_text)
         is_statute_mode = PromptRules._detect_statute_mode(hints, ocr_text)
         
-        # 표 금지 위반
-        has_table = self._has_table_format(content)
+        # 표 금지 위반 검사
+        has_table = self._has_table_format_conservative(content)
         
         if is_statute_mode:
             if has_table and table_confidence < 3:
@@ -198,20 +223,39 @@ class HybridExtractor:
             'scores': scores
         }
     
-    def _has_table_format(self, content: str) -> bool:
-        """표 형식 감지"""
-        lines = content.split('\n')
-        pipe_lines = [l for l in lines if '|' in l]
+    def _has_table_format_conservative(self, content: str) -> bool:
+        """보수적 표 형식 감지"""
+        lines = [l.strip() for l in content.splitlines() if l.strip()]
         
-        has_header_line = any('---' in l for l in pipe_lines)
+        # Markdown 표: 헤더-구분선-데이터 연속 블록
+        blocks = 0
+        for i in range(len(lines) - 2):
+            if '|' in lines[i]:
+                if set(lines[i+1].replace('|', '').strip()) <= set('- '):
+                    if '|' in lines[i+2]:
+                        blocks += 1
+                        logger.debug(f"         Markdown 표 블록 감지: 줄 {i}-{i+2}")
         
-        if len(pipe_lines) >= 3 and has_header_line:
+        if blocks >= 1:
+            logger.debug(f"         표 형식: Markdown 표 {blocks}개 블록")
             return True
         
-        comma_lines = [l for l in lines if l.count(',') >= 3]
-        if len(comma_lines) >= 3:
-            return True
+        # CSV-like
+        csv_run = 0
+        for i, line in enumerate(lines):
+            if line.count(',') >= 3:
+                alnum_ratio = sum(c.isalnum() for c in line) / max(1, len(line))
+                if alnum_ratio > 0.5:
+                    csv_run += 1
+                    if csv_run >= 3:
+                        logger.debug(f"         표 형식: CSV-like 줄 {i-2}-{i}")
+                        return True
+                else:
+                    csv_run = 0
+            else:
+                csv_run = 0
         
+        logger.debug(f"         표 형식: 없음 (보수적 검사)")
         return False
     
     def _retry_with_table_forbidden(self, image_data: str, hints: Dict[str, Any]) -> str:
@@ -244,29 +288,27 @@ class HybridExtractor:
     def _replace_merge(self, original: str, retry: str) -> str:
         """Replace 병합"""
         merged = retry
-        merged = self._remove_7gram_duplicates(merged)
         logger.debug(f"         Replace: {len(original)} → {len(merged)} 글자")
         return merged
     
-    def _remove_7gram_duplicates(self, text: str) -> str:
-        """7-gram 중복 제거"""
-        words = text.split()
-        if len(words) < 7:
-            return text
+    def _dedup_by_sentences(self, text: str) -> str:
+        """문장 단위 중복 제거"""
+        sents = [s.strip() for s in re.split(r'(?<=[.!?。])\s+|\n{2,}', text) if s.strip()]
         
         seen = set()
-        result = []
+        out = []
         
-        for i in range(len(words)):
-            if i + 7 <= len(words):
-                seven_gram = ' '.join(words[i:i+7])
-                if seven_gram not in seen:
-                    seen.add(seven_gram)
-                    result.append(words[i])
-            else:
-                result.append(words[i])
+        for s in sents:
+            key = re.sub(r'\s+', ' ', s)[:160]
+            
+            if key not in seen:
+                seen.add(key)
+                out.append(s)
         
-        return ' '.join(result)
+        result = "\n\n".join(out)
+        
+        logger.debug(f"         중복 제거: {len(sents)}문장 → {len(out)}문장")
+        return result
     
     def _extract_kvs(self, content: str) -> Dict[str, str]:
         """KVS 추출"""
