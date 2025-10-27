@@ -1,20 +1,18 @@
 """
 core/hybrid_extractor.py
-PRISM Phase 5.6.0 - Hybrid Extractor (Integrated)
+PRISM Phase 5.6.1 - Hybrid Extractor (Hotfix)
 
-✅ Phase 5.6.0 통합 (GPT + 팀 의견 반영):
-1. Post-merge Normalizer (문장 결속)
-2. Statute-aware Chunker (조문 청킹)
-3. Typo Normalizer (오탈자 교정)
+✅ Phase 5.6.1 핫픽스:
+1. 빈 조문/빈 페이지 가드 (자동 재추출)
+2. 품질 지표 3종 추가 (statute_mode, table_confidence, 개정 메모 추출)
+3. PostMergeNormalizer v5.6.1 통합
+4. TypoNormalizer v5.6.1 통합
 
-(Phase 5.5.1 기능 유지)
-- 표 포맷 감지 보수화
-- 중복 제거 안전화
-- 검증 강화
+(Phase 5.6.0 기능 유지)
 
 Author: 이서영 (Backend Lead)  
 Date: 2025-10-27
-Version: 5.6.0
+Version: 5.6.1
 """
 
 import logging
@@ -26,19 +24,21 @@ logger = logging.getLogger(__name__)
 
 class HybridExtractor:
     """
-    Phase 5.6.0 통합 추출기
+    Phase 5.6.1 통합 추출기 (Hotfix)
     
     플로우:
     1. QuickLayoutAnalyzer → CV 힌트
     2. PromptRules → DSL 프롬프트
     3. VLMService → Markdown 추출
     4. Validation → 검증
-    5. Retry → 재추출
-    6. Merge → Replace 병합
-    7. ✅ PostMergeNormalizer → 문장 결속
-    8. ✅ TypoNormalizer → 오탈자 교정
-    9. Dedup → 중복 제거
-    10. KVSNormalizer → KVS 정규화
+    5. ✅ Empty Guard → 빈 조문 가드 (Phase 5.6.1)
+    6. Retry → 재추출
+    7. Merge → Replace 병합
+    8. ✅ PostMergeNormalizer v5.6.1 → 문장 결속 강화
+    9. ✅ TypoNormalizer v5.6.1 → 오탈자 교정 확장
+    10. Dedup → 중복 제거
+    11. KVSNormalizer → KVS 정규화
+    12. ✅ Amendment Extractor → 개정 메모 추출 (Phase 5.6.1)
     """
     
     def __init__(self, vlm_service, analyzer=None, prompt_rules=None, kvs_normalizer=None):
@@ -63,21 +63,21 @@ class HybridExtractor:
         else:
             self.kvs_normalizer = kvs_normalizer
         
-        # ✅ Phase 5.6.0: 새 컴포넌트
+        # ✅ Phase 5.6.1: 새 컴포넌트 (v5.6.1)
         from .post_merge_normalizer import PostMergeNormalizer
         from .typo_normalizer import TypoNormalizer
         
         self.post_normalizer = PostMergeNormalizer()
         self.typo_normalizer = TypoNormalizer()
         
-        logger.info("✅ HybridExtractor v5.6.0 초기화 완료 (Integrated)")
+        logger.info("✅ HybridExtractor v5.6.1 초기화 완료 (Hotfix)")
     
     def extract(self, image_data: str, page_num: int = 1) -> Dict[str, Any]:
         """페이지 추출"""
         import time
         start_time = time.time()
         
-        logger.info(f"   🔧 HybridExtractor v5.6.0 추출 시작 (페이지 {page_num})")
+        logger.info(f"   🔧 HybridExtractor v5.6.1 추출 시작 (페이지 {page_num})")
         
         try:
             # Step 1: CV 힌트
@@ -100,7 +100,21 @@ class HybridExtractor:
             validation = self._validate_content(content, hints)
             logger.info(f"      ✅ 검증: {validation['passed']}")
             
-            # Step 5: 재추출
+            # ✅ Step 5: 빈 조문 가드 (Phase 5.6.1)
+            if len(content.strip()) < 100:
+                logger.warning(f"      ⚠️ 빈 페이지 감지 ({len(content)} 글자) - 재추출 시도")
+                
+                retry_start = time.time()
+                retry_content = self._retry_with_simple_prompt(image_data)
+                retry_time = time.time() - retry_start
+                
+                if len(retry_content.strip()) > len(content.strip()):
+                    content = retry_content
+                    logger.info(f"      ✅ 재추출 성공 ({len(content)} 글자)")
+                else:
+                    logger.warning(f"      ⚠️ 재추출도 실패 - 빈 페이지로 판단")
+            
+            # Step 6: 재추출 (표 금지)
             retry_count = 0
             if not validation['passed'] and 'TABLE_FORBIDDEN_USED' in validation['violations']:
                 logger.info(f"      🔄 표 금지 재추출")
@@ -115,25 +129,36 @@ class HybridExtractor:
                 
                 validation = self._validate_content(content, hints)
             
-            # ✅ Step 6: Post-merge Normalizer (Phase 5.6.0)
+            # ✅ Step 7: Post-merge Normalizer v5.6.1 (Phase 5.6.1)
             doc_type = self._determine_doc_type(hints)
             content = self.post_normalizer.normalize(content, doc_type)
             
-            # ✅ Step 7: Typo Normalizer (Phase 5.6.0)
+            # ✅ Step 8: Typo Normalizer v5.6.1 (Phase 5.6.1)
             content = self.typo_normalizer.normalize(content, doc_type)
             
-            # Step 8: 중복 제거
+            # Step 9: 중복 제거
             content = self._dedup_by_sentences(content)
             logger.info(f"      🧹 중복 제거 완료 ({len(content)} 글자)")
             
-            # Step 9: KVS
+            # Step 10: KVS
             kvs = self._extract_kvs(content)
             if kvs:
                 kvs = self.kvs_normalizer.normalize_kvs(kvs)
                 logger.info(f"      💾 KVS: {len(kvs)}개")
             
-            # Step 10: 품질
+            # ✅ Step 11: 개정 메모 추출 (Phase 5.6.1)
+            amendment_notes = self._extract_amendment_notes(content)
+            
+            # Step 12: 품질
             quality_score = self._calculate_quality(content, validation)
+            
+            # ✅ Step 13: 품질 지표 3종 (Phase 5.6.1)
+            ocr_text = hints.get('ocr_text', '')
+            quality_indicators = {
+                'statute_mode': self.prompt_rules._detect_statute_mode(hints, ocr_text),
+                'table_confidence': self.prompt_rules._calculate_table_confidence(hints, ocr_text),
+                'amendment_count': len(amendment_notes)
+            }
             
             total_time = time.time() - start_time
             
@@ -145,6 +170,8 @@ class HybridExtractor:
                 'hints': hints,
                 'validation': validation,
                 'kvs': kvs,
+                'amendment_notes': amendment_notes,  # ✅ Phase 5.6.1 신규
+                'quality_indicators': quality_indicators,  # ✅ Phase 5.6.1 신규
                 'metrics': {
                     'cv_time': cv_time,
                     'prompt_time': prompt_time,
@@ -285,6 +312,21 @@ class HybridExtractor:
         retry_content = self.vlm.call(image_data, retry_prompt)
         return retry_content
     
+    def _retry_with_simple_prompt(self, image_data: str) -> str:
+        """✅ Phase 5.6.1: 빈 페이지 재추출 (간결 프롬프트)"""
+        retry_prompt = """이 페이지의 모든 텍스트를 Markdown으로 정확히 추출하세요.
+
+**규칙:**
+1. 원본 텍스트 그대로 추출
+2. 제목은 # ## ### 사용
+3. 메타 설명 금지
+
+모든 내용을 빠짐없이 추출하세요.
+"""
+        
+        retry_content = self.vlm.call(image_data, retry_prompt)
+        return retry_content
+    
     def _replace_merge(self, original: str, retry: str) -> str:
         """Replace 병합"""
         merged = retry
@@ -329,6 +371,40 @@ class HybridExtractor:
                     kvs[key] = value
         
         return kvs
+    
+    def _extract_amendment_notes(self, content: str) -> List[Dict[str, str]]:
+        """
+        ✅ Phase 5.6.1: 개정 메모 추출 (신규)
+        
+        패턴:
+        - 삭제 <YYYY.MM.DD>
+        - 신설 YYYY.MM.DD
+        - 개정 YYYY.MM.DD
+        
+        Returns:
+            [{'type': 'deleted', 'date': '2024.1.1'}, ...]
+        """
+        notes = []
+        
+        # 삭제 패턴
+        deleted = re.findall(r'삭제\s*<(\d{4}\.\d{1,2}\.\d{1,2})>', content)
+        for date in deleted:
+            notes.append({'type': 'deleted', 'date': date})
+        
+        # 신설 패턴
+        created = re.findall(r'신설\s*(\d{4}\.\d{1,2}\.\d{1,2})', content)
+        for date in created:
+            notes.append({'type': 'created', 'date': date})
+        
+        # 개정 패턴
+        amended = re.findall(r'개정\s*(\d{4}\.\d{1,2}\.\d{1,2})', content)
+        for date in amended:
+            notes.append({'type': 'amended', 'date': date})
+        
+        if notes:
+            logger.debug(f"         개정 메모: {len(notes)}개 추출")
+        
+        return notes
     
     def _determine_doc_type(self, hints: Dict[str, Any]) -> str:
         """문서 타입 판별"""

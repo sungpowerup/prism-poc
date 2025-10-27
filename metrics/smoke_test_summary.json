@@ -1,0 +1,127 @@
+{
+  "timestamp": "2025-10-27T17:50:51.307260",
+  "total": 3,
+  "passed": 2,
+  "failed": 1,
+  "pass_rate": 0.6666666666666666,
+  "all_pass": false,
+  "results": [
+    {
+      "doc_id": "statute_01",
+      "doc_type": "statute",
+      "metrics": {
+        "article_boundary_f1": 1.0,
+        "list_binding_fix_rate": 1.0,
+        "table_false_positive": 0.0,
+        "amendment_capture_rate": 1.0,
+        "empty_article_rate": 0.0
+      },
+      "dod_status": {
+        "article_boundary_f1": {
+          "value": 1.0,
+          "target": 0.97,
+          "pass": true
+        },
+        "list_binding_fix_rate": {
+          "value": 1.0,
+          "target": 0.98,
+          "pass": true
+        },
+        "table_false_positive": {
+          "value": 0.0,
+          "target": 0.0,
+          "pass": true
+        },
+        "amendment_capture_rate": {
+          "value": 1.0,
+          "target": 1.0,
+          "pass": true
+        },
+        "empty_article_rate": {
+          "value": 0.0,
+          "target": 0.0,
+          "pass": true
+        }
+      },
+      "dod_pass": true
+    },
+    {
+      "doc_id": "statute_02",
+      "doc_type": "statute",
+      "metrics": {
+        "article_boundary_f1": 0.95,
+        "list_binding_fix_rate": 0.99,
+        "table_false_positive": 0.0,
+        "amendment_capture_rate": 1.0,
+        "empty_article_rate": 0.0
+      },
+      "dod_status": {
+        "article_boundary_f1": {
+          "value": 0.95,
+          "target": 0.97,
+          "pass": false
+        },
+        "list_binding_fix_rate": {
+          "value": 0.99,
+          "target": 0.98,
+          "pass": true
+        },
+        "table_false_positive": {
+          "value": 0.0,
+          "target": 0.0,
+          "pass": true
+        },
+        "amendment_capture_rate": {
+          "value": 1.0,
+          "target": 1.0,
+          "pass": true
+        },
+        "empty_article_rate": {
+          "value": 0.0,
+          "target": 0.0,
+          "pass": true
+        }
+      },
+      "dod_pass": false
+    },
+    {
+      "doc_id": "bus_diagram",
+      "doc_type": "bus_diagram",
+      "metrics": {
+        "article_boundary_f1": 1.0,
+        "list_binding_fix_rate": 1.0,
+        "table_false_positive": 0.0,
+        "amendment_capture_rate": 1.0,
+        "empty_article_rate": 0.0
+      },
+      "dod_status": {
+        "article_boundary_f1": {
+          "value": 1.0,
+          "target": 0.97,
+          "pass": true
+        },
+        "list_binding_fix_rate": {
+          "value": 1.0,
+          "target": 0.98,
+          "pass": true
+        },
+        "table_false_positive": {
+          "value": 0.0,
+          "target": 0.0,
+          "pass": true
+        },
+        "amendment_capture_rate": {
+          "value": 1.0,
+          "target": 1.0,
+          "pass": true
+        },
+        "empty_article_rate": {
+          "value": 0.0,
+          "target": 0.0,
+          "pass": true
+        }
+      },
+      "dod_pass": true
+    }
+  ]
+}
