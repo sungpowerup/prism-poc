@@ -1,16 +1,14 @@
 """
-app_v530.py
-PRISM Phase 5.3.0 - Streamlit App (CV-Guided Hybrid)
+app_v531.py
+PRISM Phase 5.3.1 - Streamlit App (긴급 패치)
 
-✅ Phase 5.3.0 UI 핵심:
-1. KVS 페이로드 다운로드
-2. 관측성 메트릭 시각화 (cv_time, vlm_time, retry_count)
-3. 페이지별 품질 점수 스파크라인
-4. 5가지 체크리스트 시각화
+✅ Phase 5.3.1 수정:
+1. Streamlit 라벨 경고 제거 (label_visibility 명시)
+2. UI 개선 (Phase 5.3.0 기능 유지)
 
 Author: 최동현 (Frontend Lead)
 Date: 2025-10-27
-Version: 5.3.0
+Version: 5.3.1
 """
 
 import streamlit as st
@@ -29,7 +27,7 @@ project_root = Path(__file__).parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-# ✅ Phase 5.3.0: Pipeline import
+# Phase 5.3.1: Pipeline import
 try:
     from core.pdf_processor import PDFProcessor
     from core.vlm_service import VLMServiceV50
@@ -48,7 +46,7 @@ except ImportError:
 
 # 페이지 설정
 st.set_page_config(
-    page_title="PRISM Phase 5.3.0 - CV-Guided Hybrid",
+    page_title="PRISM Phase 5.3.1 - CV-Guided Hybrid",
     page_icon="🎯",
     layout="wide"
 )
@@ -97,7 +95,7 @@ st.markdown("""
 # 서비스 초기화
 @st.cache_resource
 def init_services():
-    """서비스 초기화 (Phase 5.3.0)"""
+    """서비스 초기화 (Phase 5.3.1)"""
     try:
         # VLM 프로바이더 선택
         provider = "azure_openai"
@@ -136,14 +134,14 @@ if 'processing_result' not in st.session_state:
 
 def main():
     """메인 함수"""
-    st.markdown('<div class="main-header">🎯 PRISM Phase 5.3.0</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-header">CV-Guided Hybrid Extraction</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">🎯 PRISM Phase 5.3.1</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sub-header">CV-Guided Hybrid Extraction (긴급 패치)</div>', unsafe_allow_html=True)
     
-    # Phase 5.3.0 가용성 체크
+    # Phase 5.3.1 가용성 체크
     if not PHASE_53_AVAILABLE:
         st.markdown(f"""
         <div class="error-box">
-            <h3>❌ Phase 5.3.0 모듈을 찾을 수 없습니다</h3>
+            <h3>❌ Phase 5.3.1 모듈을 찾을 수 없습니다</h3>
             <p><strong>오류:</strong> {IMPORT_ERROR}</p>
             <h4>📂 필요한 파일:</h4>
             <pre>
@@ -151,11 +149,11 @@ core/
 ├── __init__.py
 ├── pdf_processor.py
 ├── vlm_service.py
-├── pipeline.py       ← Phase 5.3.0
-├── hybrid_extractor.py    ← Phase 5.3.0
-├── quick_layout_analyzer.py ← Phase 5.3.0
-├── prompt_rules.py        ← Phase 5.3.0
-├── kvs_normalizer.py      ← Phase 5.3.0
+├── pipeline.py       ← Phase 5.3.1
+├── hybrid_extractor.py    ← Phase 5.3.1 (긴급 패치)
+├── quick_layout_analyzer.py ← Phase 5.3.1 (긴급 패치)
+├── prompt_rules.py        ← Phase 5.3.1 (긴급 패치)
+├── kvs_normalizer.py
 └── semantic_chunker.py
             </pre>
         </div>
@@ -168,14 +166,14 @@ core/
     
     # 사이드바
     with st.sidebar:
-        st.header("📋 Phase 5.3.0")
+        st.header("📋 Phase 5.3.1 (긴급 패치)")
         st.markdown(f"**🤖 VLM**: {services['provider']}")
-        st.markdown("**📦 버전**: 5.3.0")
-        st.markdown("**🔧 기술**:")
-        st.markdown("- OpenCV CV 힌트")
-        st.markdown("- DSL 프롬프트")
-        st.markdown("- 강화된 검증")
-        st.markdown("- KVS 정규화")
+        st.markdown("**📦 버전**: 5.3.1")
+        st.markdown("**🔧 긴급 수정**:")
+        st.markdown("- 환각 체인 컷 (30 노드)")
+        st.markdown("- 표 검출 강화 (Tesseract)")
+        st.markdown("- 신호 기반 검증")
+        st.markdown("- [RETRY] 섹션만 추출")
     
     # 스텝별 UI
     if st.session_state.step == 1:
@@ -189,7 +187,12 @@ def show_upload_step(services):
     """Step 1: PDF 업로드"""
     st.header("📤 Step 1: PDF 업로드")
     
-    uploaded_file = st.file_uploader("PDF 파일 선택", type=['pdf'])
+    # ✅ Phase 5.3.1: label_visibility 명시
+    uploaded_file = st.file_uploader(
+        "PDF 파일 선택",
+        type=['pdf'],
+        label_visibility="visible"
+    )
     
     if uploaded_file:
         st.session_state.uploaded_file = uploaded_file
@@ -200,16 +203,23 @@ def show_upload_step(services):
         with col2:
             st.metric("크기", f"{uploaded_file.size/1024/1024:.2f} MB")
         
-        max_pages = st.slider("최대 처리 페이지", 1, 50, 20)
+        # ✅ Phase 5.3.1: label 명시
+        max_pages = st.slider(
+            "최대 처리 페이지",
+            min_value=1,
+            max_value=50,
+            value=20,
+            label_visibility="visible"
+        )
         
-        if st.button("🚀 Phase 5.3.0 처리 시작", type="primary"):
+        if st.button("🚀 Phase 5.3.1 처리 시작", type="primary"):
             st.session_state.max_pages = max_pages
             st.session_state.step = 2
             st.rerun()
 
 def show_processing_step(services):
     """Step 2: 처리 중"""
-    st.header("⚙️ Step 2: Phase 5.3.0 처리 중")
+    st.header("⚙️ Step 2: Phase 5.3.1 처리 중 (긴급 패치)")
     
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -225,7 +235,7 @@ def show_processing_step(services):
         with open(temp_path, "wb") as f:
             f.write(st.session_state.uploaded_file.getbuffer())
         
-        # Phase 5.3.0 Pipeline 실행
+        # Phase 5.3.1 Pipeline 실행
         result = services['pipeline'].process_pdf(
             pdf_path=str(temp_path),
             max_pages=st.session_state.max_pages,
@@ -249,10 +259,10 @@ def show_processing_step(services):
         st.code(traceback.format_exc())
 
 def show_results_step(services):
-    """Step 3: 결과 표시 (Phase 5.3.0)"""
+    """Step 3: 결과 표시 (Phase 5.3.1)"""
     result = st.session_state.processing_result
     
-    st.header("✅ Step 3: 결과 (Phase 5.3.0)")
+    st.header("✅ Step 3: 결과 (Phase 5.3.1 긴급 패치)")
     
     # 기본 메트릭
     col1, col2, col3, col4 = st.columns(4)
@@ -263,7 +273,6 @@ def show_results_step(services):
     with col3:
         st.metric("종합 품질", f"{result['overall_score']:.0f}/100")
     with col4:
-        # ✅ Phase 5.3.0: KVS 페이로드 개수
         kvs_count = len(result.get('kvs_payloads', []))
         st.metric("KVS 데이터", f"{kvs_count}개")
     
@@ -277,7 +286,7 @@ def show_results_step(services):
     
     # Tab 1: 5가지 체크리스트
     with tab1:
-        st.subheader("5가지 체크리스트 (Phase 5.3.0)")
+        st.subheader("5가지 체크리스트 (Phase 5.3.1 긴급 패치)")
         
         checklist = [
             ("원본 충실도", 'fidelity_score', 95),
@@ -297,7 +306,7 @@ def show_results_step(services):
                 st.progress(score / 100)
             with col2:
                 delta = score - target
-                st.metric("", f"{delta:+.0f}", delta_color="normal" if delta >= 0 else "inverse")
+                st.metric("편차", f"{delta:+.0f}", delta_color="normal" if delta >= 0 else "inverse")
     
     # Tab 2: Markdown
     with tab2:
@@ -305,12 +314,12 @@ def show_results_step(services):
         
         markdown = result['markdown']
         
-        # 다운로드 버튼
+        # 다운로드 버튼 (✅ label 명시)
         st.download_button(
-            "📥 Markdown 다운로드",
-            markdown,
-            f"prism_{result['session_id']}.md",
-            "text/markdown",
+            label="📥 Markdown 다운로드",
+            data=markdown,
+            file_name=f"prism_{result['session_id']}.md",
+            mime="text/markdown",
             use_container_width=True
         )
         
@@ -318,9 +327,9 @@ def show_results_step(services):
         with st.expander("👁️ Markdown 미리보기", expanded=True):
             st.markdown(markdown)
     
-    # Tab 3: 성능 메트릭 (Phase 5.3.0 신규)
+    # Tab 3: 성능 메트릭
     with tab3:
-        st.subheader("⏱️ 성능 메트릭 (Phase 5.3.0)")
+        st.subheader("⏱️ 성능 메트릭 (Phase 5.3.1)")
         
         if result.get('metrics'):
             import pandas as pd
@@ -372,7 +381,7 @@ def show_results_step(services):
         else:
             st.info("메트릭 데이터가 없습니다.")
     
-    # Tab 4: KVS 페이로드 (Phase 5.3.0 신규)
+    # Tab 4: KVS 페이로드
     with tab4:
         st.subheader("📦 KVS 페이로드 (RAG 최적화)")
         
@@ -397,12 +406,12 @@ def show_results_step(services):
                             st.markdown(f"- 청크 ID: `{kvs_data.get('chunk_id')}`")
                             st.markdown(f"- KVS 개수: `{len(kvs_data.get('kvs', {}))}`")
                         
-                        # 다운로드 버튼
+                        # 다운로드 버튼 (✅ label 명시)
                         st.download_button(
-                            f"📥 다운로드",
-                            json.dumps(kvs_data, ensure_ascii=False, indent=2),
-                            Path(kvs_path).name,
-                            "application/json",
+                            label=f"📥 다운로드",
+                            data=json.dumps(kvs_data, ensure_ascii=False, indent=2),
+                            file_name=Path(kvs_path).name,
+                            mime="application/json",
                             key=f"download_{kvs_path}"
                         )
                     except Exception as e:
