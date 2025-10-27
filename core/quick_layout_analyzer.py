@@ -1,22 +1,31 @@
 """
 core/quick_layout_analyzer.py
-PRISM Phase 5.3.2 - Quick Layout Analyzer
+PRISM Phase 5.4.0 - Quick Layout Analyzer
 
-✅ Phase 5.3.2: Phase 5.3.1 유지
+✅ Phase 5.4.0: 버스 키워드 검출 추가
+- Tesseract OCR로 버스 관련 키워드 검출
+- 버스 문서 판별 정확도 향상
+- 도메인 하드 게이트 지원
+
+(Phase 5.3.3 기능 유지)
+- 지도 검출 민감도 강화
+- 표를 지도로 오인하는 문제 수정
+- 면적 비율 조건 추가 (30% 이상)
+
+(Phase 5.3.2 기능 유지)
 - Canny threshold 완화 (30/100)
 - Tesseract 표 키워드 검출 (2단 검증)
-- 표 검출 민감도 향상
 
 Author: 박준호 (AI/ML Lead)
 Date: 2025-10-27
-Version: 5.3.2
+Version: 5.4.0
 """
 
 import cv2
 import numpy as np
 import logging
 import base64
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +59,9 @@ class QuickLayoutAnalyzer:
     def __init__(self):
         """초기화"""
         self.tesseract_available = TESSERACT_AVAILABLE
-        logger.info("✅ QuickLayoutAnalyzer v5.3.2 초기화 완료")
+        logger.info("✅ QuickLayoutAnalyzer v5.4.0 초기화 완료 (버스 키워드 검출)")
         if self.tesseract_available:
-            logger.info("   📊 Tesseract 표 키워드 검출 활성화")
+            logger.info("   📊 Tesseract OCR 활성화 (표 + 버스 키워드)")
     
     def analyze(self, image_data: str) -> Dict[str, Any]:
         """
@@ -81,7 +90,8 @@ class QuickLayoutAnalyzer:
             'has_map': self._detect_map(image),
             'has_table': self._detect_tables(image, image_data),
             'has_numbers': self._detect_numbers(image),
-            'diagram_count': self._count_diagrams(image)
+            'diagram_count': self._count_diagrams(image),
+            'bus_keywords': self._detect_bus_keywords(image_data)  # ✅ Phase 5.4.0
         }
         
         logger.info(f"   ✅ 힌트: {hints}")
@@ -118,7 +128,9 @@ class QuickLayoutAnalyzer:
         """
         지도/노선도 검출
         
-        전략: 색상 다양성 + 곡선
+        ✅ Phase 5.3.3: 민감도 강화 (표 오인 방지)
+        
+        전략: 색상 다양성 + 곡선 + 면적 비율
         """
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         
@@ -132,8 +144,18 @@ class QuickLayoutAnalyzer:
         # 큰 컨투어 개수
         large_contours = sum(1 for c in contours if cv2.contourArea(c) > 1000)
         
-        has_map = std_dev > 40 and large_contours > 5
-        logger.debug(f"      지도/노선도: {has_map} (편차: {std_dev:.1f}, 컨투어: {large_contours})")
+        # 컨투어 면적 비율 (지도는 이미지의 30% 이상 차지)
+        total_area = image.shape[0] * image.shape[1]
+        contour_area = sum(cv2.contourArea(c) for c in contours if cv2.contourArea(c) > 1000)
+        area_ratio = contour_area / total_area if total_area > 0 else 0
+        
+        # ✅ 조건 강화: 표준편차 60 이상 + 큰 컨투어 10개 이상 + 면적 비율 30% 이상
+        has_map = std_dev > 60 and large_contours > 10 and area_ratio > 0.3
+        
+        logger.debug(
+            f"      지도/노선도: {has_map} "
+            f"(편차: {std_dev:.1f}, 컨투어: {large_contours}, 면적비: {area_ratio:.2%})"
+        )
         return has_map
     
     def _detect_tables(self, image: np.ndarray, image_data: str = None) -> bool:
@@ -240,6 +262,42 @@ class QuickLayoutAnalyzer:
         
         logger.debug(f"      다이어그램: {diagram_count}개 (큰 영역: {large_regions})")
         return diagram_count
+    
+    def _detect_bus_keywords(self, image_data: str = None) -> List[str]:
+        """
+        ✅ Phase 5.4.0: 버스 문서 키워드 검출
+        
+        전략: Tesseract OCR로 버스 관련 키워드 검출
+        
+        Args:
+            image_data: Base64 이미지 (선택)
+        
+        Returns:
+            검출된 버스 키워드 리스트 (예: ['노선', '배차', '정류장'])
+        """
+        if not self.tesseract_available or not image_data:
+            return []
+        
+        try:
+            # Base64 → OpenCV 이미지
+            image = self._base64_to_cv2(image_data)
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            
+            # OCR 실행
+            text = pytesseract.image_to_string(gray, lang='kor+eng')
+            
+            # 버스 키워드 검사
+            BUS_KEYWORDS = ['노선', '배차', '정류장', '첫차', '막차', '차고지', '버스']
+            detected = [kw for kw in BUS_KEYWORDS if kw in text]
+            
+            if detected:
+                logger.debug(f"      버스 키워드 검출: {detected}")
+            
+            return detected
+        
+        except Exception as e:
+            logger.debug(f"      버스 키워드 검출 실패: {e}")
+            return []
 
 
 # 테스트 코드
