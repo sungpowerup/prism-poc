@@ -1,64 +1,68 @@
 """
-app_v560.py
-PRISM Phase 5.6.0 - Streamlit App (StatuteChunker 통합)
+app.py
+PRISM Phase 5.7.0 - Streamlit Demo
 
-✅ Phase 5.6.0 신규:
-1. StatuteChunker UI 통합 (조문 단위 청킹)
-2. 조문별 메타데이터 표시 (장, 절, 개정일)
-3. 조문 통계 및 JSON 다운로드
-
-(Phase 5.3.1 기능 유지)
-- CV-Guided Hybrid Extraction
-- KVS 페이로드 지원
-- 5가지 체크리스트
+기능:
+1. PDF 업로드
+2. Phase 5.6.x Pipeline (Markdown 추출)
+3. Phase 5.7.0 Tree 생성
+4. Tree 시각화
+5. JSON/Markdown 다운로드
 
 Author: 최동현 (Frontend Lead)
 Date: 2025-10-27
-Version: 5.6.0
+Version: 5.7.0
 """
 
 import streamlit as st
-import os
 import sys
-import time
-import json
+import os
 from pathlib import Path
+import json
+import time
+import tempfile
 from dotenv import load_dotenv
 
 # 환경 변수 로드
 load_dotenv()
 
-# 프로젝트 루트를 Python 경로에 추가
-project_root = Path(__file__).parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
+# 프로젝트 루트 추가
+sys.path.insert(0, str(Path(__file__).parent))
 
-# Phase 5.6.0: Pipeline + StatuteChunker import
+# Phase 5.7.0 컴포넌트
+try:
+    from core.tree_builder import TreeBuilder
+    from core.hierarchical_parser import HierarchicalParser
+    from core.llm_adapter import LLMAdapter
+    PHASE_570_AVAILABLE = True
+except ImportError as e:
+    PHASE_570_AVAILABLE = False
+    TREE_IMPORT_ERROR = str(e)
+
+# Phase 5.6.x Pipeline (Markdown 추출용)
 try:
     from core.pdf_processor import PDFProcessor
     from core.vlm_service import VLMServiceV50
     from core.pipeline import Phase53Pipeline
-    from core.statute_chunker import StatuteChunker  # ✅ Phase 5.6.0 신규
-    PHASE_56_AVAILABLE = True
-    IMPORT_ERROR = None
+    PIPELINE_AVAILABLE = True
 except ImportError as e:
-    PHASE_56_AVAILABLE = False
-    IMPORT_ERROR = str(e)
+    PIPELINE_AVAILABLE = False
+    PIPELINE_IMPORT_ERROR = str(e)
 
-# Storage는 선택적
-try:
-    from core.storage import Storage
-except ImportError:
-    Storage = None
+# ==========================================
+# Page Config
+# ==========================================
 
-# 페이지 설정
 st.set_page_config(
-    page_title="PRISM Phase 5.6.0 - Statute-aware",
-    page_icon="🎯",
+    page_title="PRISM Phase 5.7.0",
+    page_icon="🌲",
     layout="wide"
 )
 
-# 커스텀 CSS
+# ==========================================
+# CSS
+# ==========================================
+
 st.markdown("""
 <style>
     .main-header {
@@ -67,81 +71,64 @@ st.markdown("""
         background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
-        margin-bottom: 0.5rem;
     }
-    .sub-header {
-        font-size: 1.2rem;
-        color: #666;
-        margin-bottom: 2rem;
-    }
-    .metric-box {
+    .metric-card {
         background: #f0f2f6;
         padding: 1rem;
-        border-radius: 5px;
+        border-radius: 8px;
         text-align: center;
     }
-    .success-box {
-        background: #d4edda;
-        border: 1px solid #c3e6cb;
-        color: #155724;
-        padding: 1rem;
-        border-radius: 5px;
-        margin: 1rem 0;
-    }
-    .error-box {
-        background: #f8d7da;
-        border: 1px solid #f5c6cb;
-        color: #721c24;
-        padding: 1rem;
-        border-radius: 5px;
-        margin: 1rem 0;
-    }
-    .statute-box {
-        background: #e7f3ff;
+    .tree-node {
+        background: #ffffff;
         border-left: 4px solid #2196F3;
         padding: 1rem;
         margin: 0.5rem 0;
+        border-radius: 4px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .clause-node {
+        background: #f8f9fa;
+        border-left: 3px solid #4CAF50;
+        padding: 0.8rem;
+        margin: 0.3rem 0 0.3rem 2rem;
         border-radius: 3px;
     }
-    .statute-header {
-        font-size: 1.1rem;
-        font-weight: bold;
-        color: #1976D2;
-        margin-bottom: 0.5rem;
-    }
-    .statute-meta {
-        font-size: 0.9rem;
-        color: #666;
-        margin-bottom: 0.5rem;
+    .item-node {
+        background: #fafafa;
+        border-left: 2px solid #FF9800;
+        padding: 0.6rem;
+        margin: 0.2rem 0 0.2rem 4rem;
+        border-radius: 2px;
     }
 </style>
 """, unsafe_allow_html=True)
 
+# ==========================================
 # 서비스 초기화
+# ==========================================
+
 @st.cache_resource
 def init_services():
-    """서비스 초기화 (Phase 5.6.0)"""
+    """서비스 초기화"""
     try:
-        # VLM 프로바이더 선택
+        # VLM 프로바이더
         provider = "azure_openai"
         azure_key = os.getenv("AZURE_OPENAI_API_KEY")
         azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
         
         if not azure_key or not azure_endpoint:
             provider = "claude"
-            claude_key = os.getenv("ANTHROPIC_API_KEY")
-            if not claude_key:
-                raise ValueError("Azure OpenAI 또는 Claude API 키가 필요합니다")
         
         services = {
             'pdf_processor': PDFProcessor(),
             'vlm_service': VLMServiceV50(provider=provider),
             'pipeline': Phase53Pipeline(
                 pdf_processor=PDFProcessor(),
-                vlm_service=VLMServiceV50(provider=provider),
-                storage=Storage() if Storage else None
+                vlm_service=VLMServiceV50(provider=provider)
             ),
-            'statute_chunker': StatuteChunker(),  # ✅ Phase 5.6.0 신규
+            'tree_builder': TreeBuilder(),
+            'hierarchical_parser': HierarchicalParser(),
+            'llm_adapter': LLMAdapter(),
             'provider': provider
         }
         
@@ -150,408 +137,347 @@ def init_services():
         st.error(f"❌ 서비스 초기화 실패: {e}")
         return None
 
-# 세션 상태
-if 'step' not in st.session_state:
-    st.session_state.step = 1
-if 'uploaded_file' not in st.session_state:
-    st.session_state.uploaded_file = None
-if 'processing_result' not in st.session_state:
-    st.session_state.processing_result = None
-if 'statute_chunks' not in st.session_state:  # ✅ Phase 5.6.0 신규
-    st.session_state.statute_chunks = None
+# ==========================================
+# Title
+# ==========================================
 
-def main():
-    """메인 함수"""
-    st.markdown('<div class="main-header">🎯 PRISM Phase 5.6.0</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sub-header">Statute-aware Chunking (조문 단위 청킹)</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">🌲 PRISM Phase 5.7.0</div>', unsafe_allow_html=True)
+st.markdown("**PDF → Markdown → 법령 트리 (3단 계층 구조)**")
+
+# ==========================================
+# 모듈 체크
+# ==========================================
+
+if not PHASE_570_AVAILABLE:
+    st.error(f"❌ Phase 5.7.0 모듈 로드 실패: {TREE_IMPORT_ERROR}")
+    st.info("필수 파일: tree_builder.py, hierarchical_parser.py, llm_adapter.py")
+    st.stop()
+
+if not PIPELINE_AVAILABLE:
+    st.error(f"❌ Pipeline 모듈 로드 실패: {PIPELINE_IMPORT_ERROR}")
+    st.info("필수 파일: pdf_processor.py, vlm_service.py, pipeline.py")
+    st.stop()
+
+# ==========================================
+# Sidebar
+# ==========================================
+
+with st.sidebar:
+    st.header("📋 Phase 5.7.0 특징")
+    st.markdown("""
+    **한 번의 클릭으로 완료:**
+    - ✅ PDF → Markdown (Phase 5.6.x)
+    - ✅ Markdown → Tree (Phase 5.7.0)
+    - ✅ 3단 계층 (조문·항·호)
+    - ✅ DoD 자동 검증
+    - ✅ 경계 누수 탐지
+    - ✅ JSON/Markdown 다운로드
+    """)
     
-    # Phase 5.6.0 가용성 체크
-    if not PHASE_56_AVAILABLE:
-        st.markdown(f"""
-        <div class="error-box">
-            <h3>❌ Phase 5.6.0 모듈을 찾을 수 없습니다</h3>
-            <p><strong>오류:</strong> {IMPORT_ERROR}</p>
-            <h4>📂 필요한 파일:</h4>
-            <pre>
-core/
-├── __init__.py
-├── pdf_processor.py
-├── vlm_service.py
-├── pipeline.py              ← Phase 5.3.0
-├── hybrid_extractor.py      ← Phase 5.6.0 (통합)
-├── quick_layout_analyzer.py
-├── prompt_rules.py          ← Phase 5.5.1 (Hotfix)
-├── kvs_normalizer.py
-├── semantic_chunker.py
-├── post_merge_normalizer.py ← Phase 5.6.0 (신규)
-├── typo_normalizer.py       ← Phase 5.6.0 (신규)
-└── statute_chunker.py       ← Phase 5.6.0 (신규)
-            </pre>
-        </div>
-        """, unsafe_allow_html=True)
-        st.stop()
+    st.divider()
+    
+    st.header("⚙️ 설정")
+    
+    max_pages = st.slider("최대 페이지 수", 1, 50, 20)
     
     services = init_services()
-    if not services:
-        st.stop()
-    
-    # 사이드바
-    with st.sidebar:
-        st.header("📋 Phase 5.6.0")
-        st.markdown(f"**🤖 VLM**: {services['provider']}")
-        st.markdown("**📦 버전**: 5.6.0")
-        st.markdown("**🆕 Phase 5.6.0 신규:**")
-        st.markdown("- 📚 조문 단위 청킹")
-        st.markdown("- 🔗 문장 결속 정규화")
-        st.markdown("- ✍️ 오탈자 교정")
-        st.markdown("**🔧 Phase 5.5.1 유지:**")
-        st.markdown("- 표 금지 규칙 강화")
-        st.markdown("- 개정 이력 표 이중 게이트")
-    
-    # 스텝별 UI
-    if st.session_state.step == 1:
-        show_upload_step(services)
-    elif st.session_state.step == 2:
-        show_processing_step(services)
-    elif st.session_state.step == 3:
-        show_results_step(services)
+    if services:
+        st.success(f"✅ VLM: {services['provider']}")
 
-def show_upload_step(services):
-    """Step 1: PDF 업로드"""
-    st.header("📤 Step 1: PDF 업로드")
-    
-    uploaded_file = st.file_uploader(
-        "PDF 파일 선택",
-        type=['pdf'],
-        label_visibility="visible"
-    )
-    
-    if uploaded_file:
-        st.session_state.uploaded_file = uploaded_file
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("파일명", uploaded_file.name)
-        with col2:
-            st.metric("크기", f"{uploaded_file.size/1024/1024:.2f} MB")
-        
-        max_pages = st.slider(
-            "최대 처리 페이지",
-            min_value=1,
-            max_value=50,
-            value=20,
-            label_visibility="visible"
-        )
-        
-        if st.button("🚀 Phase 5.6.0 처리 시작", type="primary"):
-            st.session_state.max_pages = max_pages
-            st.session_state.step = 2
-            st.rerun()
+# ==========================================
+# Main Content
+# ==========================================
 
-def show_processing_step(services):
-    """Step 2: 처리 중"""
-    st.header("⚙️ Step 2: Phase 5.6.0 처리 중")
+# 세션 상태 초기화
+if 'markdown' not in st.session_state:
+    st.session_state.markdown = None
+if 'tree_document' not in st.session_state:
+    st.session_state.tree_document = None
+
+# ==========================================
+# Step 1: PDF 업로드
+# ==========================================
+
+st.header("📄 Step 1: PDF 업로드")
+
+uploaded_file = st.file_uploader(
+    "PDF 파일 선택",
+    type=['pdf'],
+    help="법령 또는 규정 문서를 업로드하세요"
+)
+
+if uploaded_file:
+    st.success(f"✅ 파일 업로드: {uploaded_file.name} ({uploaded_file.size:,} bytes)")
     
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+    # ==========================================
+    # Step 2: 처리 시작 (Phase 5.6.x → 5.7.0 통합)
+    # ==========================================
     
-    def update_progress(msg, pct):
-        progress_bar.progress(pct)
-        status_text.text(f"🔄 {msg}")
+    st.divider()
+    st.header("🚀 Step 2: 처리 시작")
+    st.markdown("**PDF → Markdown → Tree (자동 실행)**")
     
-    try:
-        # 임시 파일 저장
-        temp_path = Path("temp") / st.session_state.uploaded_file.name
-        temp_path.parent.mkdir(exist_ok=True)
-        with open(temp_path, "wb") as f:
-            f.write(st.session_state.uploaded_file.getbuffer())
+    if st.button("🚀 처리 시작", type="primary", use_container_width=True):
         
-        # Phase 5.3.0 Pipeline 실행 (HybridExtractor v5.6.0 내장)
-        result = services['pipeline'].process_pdf(
-            pdf_path=str(temp_path),
-            max_pages=st.session_state.max_pages,
-            progress_callback=update_progress
-        )
-        
-        # ✅ Phase 5.6.0: StatuteChunker 실행
-        if result['status'] == 'success':
-            update_progress("조문 단위 청킹 중...", 0.95)
-            
-            # Markdown에서 조문 청킹
-            statute_chunks = services['statute_chunker'].chunk(
-                content=result['markdown'],
-                page_num=None  # 전체 문서
-            )
-            
-            st.session_state.statute_chunks = statute_chunks
-            result['statute_chunks'] = statute_chunks
-            
-            # 통계 추가
-            if statute_chunks:
-                stats = services['statute_chunker'].get_stats(statute_chunks)
-                result['statute_stats'] = stats
-        
-        # 임시 파일 삭제
-        if temp_path.exists():
-            temp_path.unlink()
-        
-        if result['status'] == 'success':
-            st.session_state.processing_result = result
-            st.session_state.step = 3
-            st.rerun()
+        if not services:
+            st.error("❌ 서비스 초기화 필요")
         else:
-            st.error(f"❌ 처리 실패: {result.get('error')}")
-    
-    except Exception as e:
-        st.error(f"❌ 오류 발생: {e}")
-        import traceback
-        st.code(traceback.format_exc())
-
-def show_results_step(services):
-    """Step 3: 결과 표시 (Phase 5.6.0)"""
-    result = st.session_state.processing_result
-    
-    st.header("✅ Step 3: 결과 (Phase 5.6.0)")
-    
-    # 기본 메트릭
-    col1, col2, col3, col4, col5 = st.columns(5)
-    with col1:
-        st.metric("페이지", f"{result['pages_success']}/{result['pages_total']}")
-    with col2:
-        st.metric("처리 시간", f"{result['processing_time']:.1f}초")
-    with col3:
-        st.metric("종합 품질", f"{result['overall_score']:.0f}/100")
-    with col4:
-        kvs_count = len(result.get('kvs_payloads', []))
-        st.metric("KVS 데이터", f"{kvs_count}개")
-    with col5:
-        # ✅ Phase 5.6.0: 조문 개수
-        statute_count = len(result.get('statute_chunks', []))
-        st.metric("조문 개수", f"{statute_count}개")
-    
-    # ✅ Phase 5.6.0: 탭 추가 (📚 조문 청킹)
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📊 체크리스트",
-        "📚 조문 청킹",  # ✅ 신규 탭
-        "📝 Markdown",
-        "⏱️ 성능 메트릭",
-        "📦 KVS 페이로드"
-    ])
-    
-    # Tab 1: 5가지 체크리스트
-    with tab1:
-        st.subheader("5가지 체크리스트 (Phase 5.6.0)")
-        
-        checklist = [
-            ("원본 충실도", 'fidelity_score', 95),
-            ("청킹 품질", 'chunking_score', 95),  # ✅ 목표 상향 (조문 청킹)
-            ("RAG 적합도", 'rag_score', 95),
-            ("범용성", 'universality_score', 100),
-            ("경쟁사 대비", 'competitive_score', 95)
-        ]
-        
-        for name, key, target in checklist:
-            score = result.get(key, 0)
-            status = "✅" if score >= target else "⚠️" if score >= target - 10 else "❌"
+            # 임시 파일 저장
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+                tmp_file.write(uploaded_file.read())
+                tmp_path = tmp_file.name
             
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.markdown(f"**{status} {name}**: {score:.0f}/100 (목표: {target})")
-                st.progress(score / 100)
-            with col2:
-                delta = score - target
-                st.metric("편차", f"{delta:+.0f}", delta_color="normal" if delta >= 0 else "inverse")
+            try:
+                # Progress
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                # ==========================================
+                # Phase 5.6.x: Markdown 추출
+                # ==========================================
+                
+                status_text.text("📝 Phase 5.6.x: Markdown 추출 중...")
+                progress_bar.progress(10)
+                
+                def progress_callback(msg, progress):
+                    # 0~80% 범위로 매핑
+                    mapped_progress = int(10 + (progress * 0.7))
+                    status_text.text(f"📝 {msg}")
+                    progress_bar.progress(mapped_progress)
+                
+                result = services['pipeline'].process_pdf(
+                    pdf_path=tmp_path,
+                    max_pages=max_pages,
+                    progress_callback=progress_callback
+                )
+                
+                if result['status'] != 'success':
+                    st.error(f"❌ Markdown 추출 실패: {result.get('error', 'Unknown error')}")
+                    progress_bar.empty()
+                    status_text.empty()
+                    st.stop()
+                
+                markdown = result['markdown']
+                doc_title = uploaded_file.name.replace('.pdf', '')
+                
+                status_text.text(f"✅ Markdown 추출 완료 ({result['pages_success']}/{result['pages_total']} 페이지)")
+                progress_bar.progress(80)
+                time.sleep(0.5)
+                
+                # ==========================================
+                # Phase 5.7.0: Tree 생성
+                # ==========================================
+                
+                # TreeBuilder
+                status_text.text("🌲 Phase 5.7.0: TreeBuilder 실행 중...")
+                progress_bar.progress(85)
+                time.sleep(0.3)
+                
+                builder = services['tree_builder']
+                document = builder.build(
+                    markdown=markdown,
+                    document_title=doc_title
+                )
+                
+                # HierarchicalParser
+                status_text.text("🔍 Phase 5.7.0: HierarchicalParser 검증 중...")
+                progress_bar.progress(90)
+                time.sleep(0.3)
+                
+                parser = services['hierarchical_parser']
+                validated = parser.parse(document)
+                
+                # LLMAdapter
+                status_text.text("🤖 Phase 5.7.0: LLMAdapter 프롬프트 생성 중...")
+                progress_bar.progress(95)
+                time.sleep(0.3)
+                
+                adapter = services['llm_adapter']
+                prompt = adapter.to_prompt(validated)
+                json_export = adapter.to_json_export(validated)
+                
+                # 저장
+                st.session_state.markdown = markdown
+                st.session_state.doc_title = doc_title
+                st.session_state.tree_document = validated
+                st.session_state.prompt = prompt
+                st.session_state.json_export = json_export
+                
+                # 완료
+                status_text.text("✅ 모든 처리 완료!")
+                progress_bar.progress(100)
+                time.sleep(0.5)
+                progress_bar.empty()
+                status_text.empty()
+                
+                st.success(f"✅ 처리 완료! (Markdown → Tree 변환)")
+                
+            except Exception as e:
+                st.error(f"❌ 오류 발생: {str(e)}")
+                import traceback
+                st.code(traceback.format_exc())
+            
+            finally:
+                # 임시 파일 삭제
+                try:
+                    os.unlink(tmp_path)
+                except:
+                    pass
+
+# ==========================================
+# Step 3: 결과 표시
+# ==========================================
+
+if st.session_state.tree_document:
     
-    # ✅ Tab 2: 조문 청킹 (Phase 5.6.0 신규)
-    with tab2:
-        show_statute_chunks_tab(result)
+    st.divider()
+    st.header("📊 Step 3: 결과")
     
-    # Tab 3: Markdown
-    with tab3:
-        st.subheader("📝 추출된 Markdown")
+    document = st.session_state.tree_document
+    metrics = document['document'].get('metrics', {})
+    tree = document['document']['tree']
+    
+    # ==========================================
+    # DoD 지표
+    # ==========================================
+    
+    st.subheader("📈 Phase 5.6.3 DoD 지표")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        rate = metrics.get('hierarchy_preservation_rate', 0)
+        st.metric(
+            "계층 보존율",
+            f"{rate:.1%}",
+            delta="목표 ≥95%",
+            delta_color="normal" if rate >= 0.95 else "inverse"
+        )
+    
+    with col2:
+        rate = metrics.get('boundary_cross_bleed_rate', 0)
+        st.metric(
+            "경계 누수율",
+            f"{rate:.1%}",
+            delta="목표 =0%",
+            delta_color="normal" if rate == 0 else "inverse"
+        )
+    
+    with col3:
+        rate = metrics.get('empty_article_rate', 0)
+        st.metric(
+            "빈 조문율",
+            f"{rate:.1%}",
+            delta="목표 =0%",
+            delta_color="normal" if rate == 0 else "inverse"
+        )
+    
+    # DoD 통과
+    dod_pass = metrics.get('dod_pass', False)
+    
+    if dod_pass:
+        st.success("✅ **DoD 검증 통과!**")
+    else:
+        st.error("❌ **DoD 검증 실패!**")
+    
+    # ==========================================
+    # Tree 시각화
+    # ==========================================
+    
+    st.divider()
+    st.subheader("🌲 Tree 구조")
+    
+    # 통계
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("조문 수", len(tree))
+    
+    with col2:
+        clause_count = sum(
+            len([c for c in a.get('children', []) if isinstance(c, dict) and c.get('level') == 'clause'])
+            for a in tree
+        )
+        st.metric("항 수", clause_count)
+    
+    with col3:
+        item_count = 0
+        for article in tree:
+            for child in article.get('children', []):
+                if isinstance(child, dict) and child.get('level') == 'clause':
+                    item_count += len([
+                        i for i in child.get('children', [])
+                        if isinstance(i, dict) and i.get('level') == 'item'
+                    ])
+        st.metric("호 수", item_count)
+    
+    # Tree 표시
+    for i, article in enumerate(tree, 1):
+        article_no = article.get('article_no', '')
+        article_title = article.get('article_title', '')
+        content = article.get('content', '')
+        metadata = article.get('metadata', {})
         
-        markdown = result['markdown']
-        
-        # 다운로드 버튼
+        # 조문
+        with st.expander(f"📄 {article_no}{article_title}", expanded=(i <= 3)):
+            
+            # 메타데이터
+            if metadata.get('is_deleted'):
+                st.error("🗑️ 삭제됨")
+            
+            if metadata.get('has_cross_bleed'):
+                st.warning("⚠️ 경계 누수")
+            
+            if metadata.get('amended_dates'):
+                st.info(f"📅 {', '.join(metadata['amended_dates'])}")
+            
+            # 본문
+            if content:
+                st.markdown(f"**본문:** {content}")
+            
+            # 항
+            for child in article.get('children', []):
+                if isinstance(child, dict) and child.get('level') == 'clause':
+                    st.markdown(f"**{child['clause_no']}** {child.get('content', '')}")
+                    
+                    # 호
+                    for item in child.get('children', []):
+                        if isinstance(item, dict) and item.get('level') == 'item':
+                            st.markdown(f"  - **{item['item_no']}** {item.get('content', '')}")
+    
+    # ==========================================
+    # 다운로드
+    # ==========================================
+    
+    st.divider()
+    st.subheader("💾 다운로드")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
         st.download_button(
-            label="📥 Markdown 다운로드",
-            data=markdown,
-            file_name=f"prism_{result['session_id']}.md",
+            "📥 JSON 다운로드",
+            data=st.session_state.json_export,
+            file_name=f"{st.session_state.doc_title}_tree.json",
+            mime="application/json",
+            use_container_width=True
+        )
+    
+    with col2:
+        st.download_button(
+            "📥 Markdown 다운로드",
+            data=st.session_state.markdown,
+            file_name=f"{st.session_state.doc_title}.md",
             mime="text/markdown",
             use_container_width=True
         )
-        
-        # 미리보기
-        with st.expander("👁️ Markdown 미리보기", expanded=True):
-            st.markdown(markdown)
-    
-    # Tab 4: 성능 메트릭
-    with tab4:
-        st.subheader("⏱️ 성능 메트릭 (Phase 5.6.0)")
-        
-        if result.get('metrics'):
-            import pandas as pd
-            
-            metrics_df = pd.DataFrame(result['metrics'])
-            
-            # 평균 메트릭
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                avg_cv = metrics_df['cv_time'].mean()
-                st.metric("평균 CV 시간", f"{avg_cv:.2f}초")
-            with col2:
-                avg_vlm = metrics_df['vlm_time'].mean()
-                st.metric("평균 VLM 시간", f"{avg_vlm:.2f}초")
-            with col3:
-                avg_total = metrics_df['total_time'].mean()
-                st.metric("평균 총 시간", f"{avg_total:.2f}초")
-            with col4:
-                avg_retry = metrics_df['retry_count'].mean()
-                st.metric("평균 재추출", f"{avg_retry:.1f}회")
-            
-            # 상세 테이블
-            st.markdown("**페이지별 상세 메트릭:**")
-            st.dataframe(
-                metrics_df,
-                use_container_width=True,
-                column_config={
-                    'cv_time': st.column_config.NumberColumn('CV 시간(초)', format="%.2f"),
-                    'vlm_time': st.column_config.NumberColumn('VLM 시간(초)', format="%.2f"),
-                    'total_time': st.column_config.NumberColumn('총 시간(초)', format="%.2f"),
-                    'retry_count': st.column_config.NumberColumn('재추출 횟수', format="%d")
-                }
-            )
-            
-            # 시간 분포 차트
-            st.markdown("**처리 시간 분포:**")
-            import plotly.express as px
-            
-            fig = px.bar(
-                metrics_df,
-                x=metrics_df.index + 1,
-                y=['cv_time', 'vlm_time'],
-                labels={'value': '시간(초)', 'variable': '단계', 'x': '페이지'},
-                title='페이지별 처리 시간 분석'
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("메트릭 데이터가 없습니다.")
-    
-    # Tab 5: KVS 페이로드
-    with tab5:
-        st.subheader("📦 KVS 페이로드 (RAG 최적화)")
-        
-        if result.get('kvs_payloads'):
-            st.markdown(f"**{len(result['kvs_payloads'])}개의 KVS 페이로드가 생성되었습니다.**")
-            st.markdown("KVS는 Key-Value Structured 데이터로, RAG 필드 검색을 최적화합니다.")
-            
-            for kvs_path in result['kvs_payloads']:
-                with st.expander(f"📄 {Path(kvs_path).name}"):
-                    try:
-                        with open(kvs_path, encoding='utf-8') as f:
-                            kvs_data = json.load(f)
-                        
-                        # KVS 데이터 표시
-                        col1, col2 = st.columns([2, 1])
-                        with col1:
-                            st.json(kvs_data)
-                        with col2:
-                            st.markdown("**메타 정보:**")
-                            st.markdown(f"- 문서 ID: `{kvs_data.get('doc_id')}`")
-                            st.markdown(f"- 페이지: `{kvs_data.get('page')}`")
-                            st.markdown(f"- 청크 ID: `{kvs_data.get('chunk_id')}`")
-                            st.markdown(f"- KVS 개수: `{len(kvs_data.get('kvs', {}))}`")
-                        
-                        # 다운로드 버튼
-                        st.download_button(
-                            label=f"📥 다운로드",
-                            data=json.dumps(kvs_data, ensure_ascii=False, indent=2),
-                            file_name=Path(kvs_path).name,
-                            mime="application/json",
-                            key=f"download_{kvs_path}"
-                        )
-                    except Exception as e:
-                        st.error(f"KVS 파일 읽기 실패: {e}")
-        else:
-            st.info("KVS 페이로드가 없습니다. (숫자 데이터가 없는 문서일 수 있습니다)")
-    
-    # 새 문서 버튼
-    if st.button("🔙 새 문서 처리", use_container_width=True):
-        st.session_state.step = 1
-        st.session_state.uploaded_file = None
-        st.session_state.processing_result = None
-        st.session_state.statute_chunks = None
-        st.rerun()
 
-def show_statute_chunks_tab(result):
-    """✅ Phase 5.6.0: 조문 청킹 탭 (신규)"""
-    st.subheader("📚 조문 단위 청킹 (Phase 5.6.0)")
-    
-    statute_chunks = result.get('statute_chunks', [])
-    
-    if not statute_chunks:
-        st.info("조문 청킹 데이터가 없습니다. (일반 문서일 수 있습니다)")
-        return
-    
-    # 통계
-    stats = result.get('statute_stats', {})
-    if stats:
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("총 조문", f"{stats.get('total_chunks', 0)}개")
-        with col2:
-            st.metric("평균 길이", f"{stats.get('avg_chunk_size', 0):.0f}자")
-        with col3:
-            st.metric("장 개수", f"{stats.get('chapters', 0)}개")
-        with col4:
-            st.metric("절 개수", f"{stats.get('sections', 0)}개")
-    
-    # JSON 다운로드 버튼
-    st.download_button(
-        label="📥 조문 청킹 JSON 다운로드",
-        data=json.dumps(statute_chunks, ensure_ascii=False, indent=2),
-        file_name=f"statute_chunks_{result['session_id']}.json",
-        mime="application/json",
-        use_container_width=True
-    )
-    
-    st.markdown("---")
-    
-    # 조문 리스트
-    st.markdown(f"### 📋 총 {len(statute_chunks)}개 조문")
-    
-    for i, chunk in enumerate(statute_chunks):
-        article_no = chunk.get('article_no', 'unknown')
-        article_title = chunk.get('article_title', '')
-        chapter = chunk.get('chapter')
-        section = chunk.get('section')
-        content = chunk.get('content', '')
-        metadata = chunk.get('metadata', {})
-        
-        with st.expander(
-            f"{i+1}. {article_no}" + (f" ({article_title})" if article_title else ""),
-            expanded=(i < 3)  # 처음 3개만 펼침
-        ):
-            # 메타데이터
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                if chapter:
-                    st.markdown(f"**📖 장:** {chapter}")
-            with col2:
-                if section:
-                    st.markdown(f"**📑 절:** {section}")
-            with col3:
-                last_amended = metadata.get('last_amended')
-                if last_amended:
-                    st.markdown(f"**📅 개정일:** {last_amended}")
-            
-            # 내용
-            st.markdown("**📝 내용:**")
-            st.markdown(f'<div class="statute-box">{content}</div>', unsafe_allow_html=True)
-            
-            # 추가 정보
-            if metadata.get('amended_dates'):
-                st.markdown(f"**📜 개정 이력:** {', '.join(metadata['amended_dates'])}")
+# ==========================================
+# Footer
+# ==========================================
 
-if __name__ == "__main__":
-    main()
+st.divider()
+st.markdown("""
+---
+**PRISM Phase 5.7.0** | 법령 트리 구조화 완성 🎉
+""")
