@@ -1,17 +1,24 @@
 """
 app.py
-PRISM Phase 5.7.0 - Streamlit Demo
+PRISM Phase 5.7.2.2 Hotfix - Streamlit Demo
+
+✅ Phase 5.7.2.2 긴급 수정:
+1. 버전 정보 표시
+2. 빈 페이지 DoD 母数 제외
+3. 페이지 처리 로직 개선
+4. 캐시 클리어 가이드
+5. ✅ VLM 초기화 파라미터 수정
 
 기능:
 1. PDF 업로드
-2. Phase 5.6.x Pipeline (Markdown 추출)
+2. Phase 5.7.2.2 Pipeline (Markdown 추출 + 페이지 구분자 제거)
 3. Phase 5.7.0 Tree 생성
 4. Tree 시각화
 5. JSON/Markdown 다운로드
 
-Author: 최동현 (Frontend Lead)
-Date: 2025-10-27
-Version: 5.7.0
+Author: 최동현 (Frontend Lead) + GPT(미송) 의견 반영
+Date: 2025-10-31
+Version: 5.7.2.2 Hotfix
 """
 
 import streamlit as st
@@ -54,7 +61,7 @@ except ImportError as e:
 # ==========================================
 
 st.set_page_config(
-    page_title="PRISM Phase 5.7.0",
+    page_title="PRISM Phase 5.7.2.2",
     page_icon="🌲",
     layout="wide"
 )
@@ -100,102 +107,164 @@ st.markdown("""
         margin: 0.2rem 0 0.2rem 4rem;
         border-radius: 2px;
     }
+    .version-badge {
+        background: #667eea;
+        color: white;
+        padding: 0.3rem 0.8rem;
+        border-radius: 12px;
+        font-size: 0.85rem;
+        font-weight: bold;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 서비스 초기화
+# Header
 # ==========================================
 
-@st.cache_resource
-def init_services():
-    """서비스 초기화"""
-    try:
-        # VLM 프로바이더
-        provider = "azure_openai"
-        azure_key = os.getenv("AZURE_OPENAI_API_KEY")
-        azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-        
-        if not azure_key or not azure_endpoint:
-            provider = "claude"
-        
-        services = {
-            'pdf_processor': PDFProcessor(),
-            'vlm_service': VLMServiceV50(provider=provider),
-            'pipeline': Phase53Pipeline(
-                pdf_processor=PDFProcessor(),
-                vlm_service=VLMServiceV50(provider=provider)
-            ),
-            'tree_builder': TreeBuilder(),
-            'hierarchical_parser': HierarchicalParser(),
-            'llm_adapter': LLMAdapter(),
-            'provider': provider
-        }
-        
-        return services
-    except Exception as e:
-        st.error(f"❌ 서비스 초기화 실패: {e}")
-        return None
+st.markdown('<p class="main-header">🌲 PRISM Phase 5.7.2.2</p>', unsafe_allow_html=True)
+st.markdown("**차세대 지능형 문서 이해 플랫폼 - Pipeline Hotfix**")
+
+# ✅ 버전 정보 표시
+col1, col2, col3 = st.columns(3)
+with col1:
+    st.markdown('<span class="version-badge">HybridExtractor v5.7.2.2</span>', unsafe_allow_html=True)
+with col2:
+    st.markdown('<span class="version-badge">TreeBuilder v5.7.2.1</span>', unsafe_allow_html=True)
+with col3:
+    st.markdown('<span class="version-badge">DoD 母数 수정</span>', unsafe_allow_html=True)
+
+st.divider()
 
 # ==========================================
-# Title
+# 초기화
 # ==========================================
 
-st.markdown('<div class="main-header">🌲 PRISM Phase 5.7.0</div>', unsafe_allow_html=True)
-st.markdown("**PDF → Markdown → 법령 트리 (3단 계층 구조)**")
-
-# ==========================================
-# 모듈 체크
-# ==========================================
-
-if not PHASE_570_AVAILABLE:
-    st.error(f"❌ Phase 5.7.0 모듈 로드 실패: {TREE_IMPORT_ERROR}")
-    st.info("필수 파일: tree_builder.py, hierarchical_parser.py, llm_adapter.py")
-    st.stop()
-
-if not PIPELINE_AVAILABLE:
-    st.error(f"❌ Pipeline 모듈 로드 실패: {PIPELINE_IMPORT_ERROR}")
-    st.info("필수 파일: pdf_processor.py, vlm_service.py, pipeline.py")
-    st.stop()
+if 'markdown' not in st.session_state:
+    st.session_state.markdown = None
+if 'tree_document' not in st.session_state:
+    st.session_state.tree_document = None
+if 'prompt' not in st.session_state:
+    st.session_state.prompt = None
+if 'json_export' not in st.session_state:
+    st.session_state.json_export = None
+if 'doc_title' not in st.session_state:
+    st.session_state.doc_title = None
 
 # ==========================================
 # Sidebar
 # ==========================================
 
 with st.sidebar:
-    st.header("📋 Phase 5.7.0 특징")
-    st.markdown("""
-    **한 번의 클릭으로 완료:**
-    - ✅ PDF → Markdown (Phase 5.6.x)
-    - ✅ Markdown → Tree (Phase 5.7.0)
-    - ✅ 3단 계층 (조문·항·호)
-    - ✅ DoD 자동 검증
-    - ✅ 경계 누수 탐지
-    - ✅ JSON/Markdown 다운로드
-    """)
+    st.header("⚙️ 설정")
+    
+    # 최대 페이지 수
+    max_pages = st.number_input(
+        "최대 페이지 수",
+        min_value=1,
+        max_value=50,
+        value=10,
+        help="처리할 최대 페이지 수"
+    )
     
     st.divider()
     
-    st.header("⚙️ 설정")
+    # 시스템 상태
+    st.subheader("🔍 시스템 상태")
     
-    max_pages = st.slider("최대 페이지 수", 1, 50, 20)
+    if PHASE_570_AVAILABLE:
+        st.success("✅ Phase 5.7.0 컴포넌트")
+    else:
+        st.error("❌ Phase 5.7.0 컴포넌트")
+        with st.expander("오류 상세"):
+            st.code(TREE_IMPORT_ERROR)
     
-    services = init_services()
+    if PIPELINE_AVAILABLE:
+        st.success("✅ Pipeline 컴포넌트")
+    else:
+        st.error("❌ Pipeline 컴포넌트")
+        with st.expander("오류 상세"):
+            st.code(PIPELINE_IMPORT_ERROR)
+    
+    st.divider()
+    
+    # ✅ 캐시 클리어 가이드
+    st.subheader("🧹 캐시 관리")
+    st.info("""
+    **소스 수정 후 필수!**
+    
+    1. __pycache__ 삭제:
+    ```bash
+    find . -type d -name "__pycache__" -exec rm -rf {} +
+    ```
+    
+    2. 앱 재시작:
+    ```bash
+    streamlit run app.py
+    ```
+    """)
+
+# ==========================================
+# 서비스 초기화
+# ==========================================
+
+@st.cache_resource
+def initialize_services():
+    """서비스 초기화"""
+    try:
+        # VLM Provider 결정
+        provider = os.getenv("VLM_PROVIDER", "azure_openai")
+        
+        # Azure OpenAI 우선, 없으면 Claude
+        azure_key = os.getenv("AZURE_OPENAI_API_KEY")
+        if not azure_key:
+            provider = "claude"
+        
+        # VLM Service (✅ model 파라미터 제거)
+        vlm_service = VLMServiceV50(provider=provider)
+        
+        # PDF Processor
+        pdf_processor = PDFProcessor()
+        
+        # Pipeline
+        pipeline = Phase53Pipeline(
+            pdf_processor=pdf_processor,
+            vlm_service=vlm_service
+        )
+        
+        # Tree Builder
+        tree_builder = TreeBuilder()
+        
+        # Hierarchical Parser
+        hierarchical_parser = HierarchicalParser()
+        
+        # LLM Adapter
+        llm_adapter = LLMAdapter()
+        
+        return {
+            'vlm_service': vlm_service,
+            'pdf_processor': pdf_processor,
+            'pipeline': pipeline,
+            'tree_builder': tree_builder,
+            'hierarchical_parser': hierarchical_parser,
+            'llm_adapter': llm_adapter,
+            'provider': provider
+        }
+    except Exception as e:
+        st.error(f"초기화 실패: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
+        return None
+
+services = None
+if PHASE_570_AVAILABLE and PIPELINE_AVAILABLE:
+    services = initialize_services()
+    
     if services:
-        st.success(f"✅ VLM: {services['provider']}")
+        st.sidebar.success(f"🤖 VLM: {services['provider']}")
 
 # ==========================================
-# Main Content
-# ==========================================
-
-# 세션 상태 초기화
-if 'markdown' not in st.session_state:
-    st.session_state.markdown = None
-if 'tree_document' not in st.session_state:
-    st.session_state.tree_document = None
-
-# ==========================================
-# Step 1: PDF 업로드
+# Step 1: 업로드
 # ==========================================
 
 st.header("📄 Step 1: PDF 업로드")
@@ -210,7 +279,7 @@ if uploaded_file:
     st.success(f"✅ 파일 업로드: {uploaded_file.name} ({uploaded_file.size:,} bytes)")
     
     # ==========================================
-    # Step 2: 처리 시작 (Phase 5.6.x → 5.7.0 통합)
+    # Step 2: 처리 시작 (Phase 5.7.2.2 통합)
     # ==========================================
     
     st.divider()
@@ -233,10 +302,10 @@ if uploaded_file:
                 status_text = st.empty()
                 
                 # ==========================================
-                # Phase 5.6.x: Markdown 추출
+                # Phase 5.7.2.2: Markdown 추출 (페이지 구분자 제거)
                 # ==========================================
                 
-                status_text.text("📝 Phase 5.6.x: Markdown 추출 중...")
+                status_text.text("📝 Phase 5.7.2.2: Markdown 추출 중...")
                 progress_bar.progress(10)
                 
                 def progress_callback(msg, progress):
@@ -260,7 +329,11 @@ if uploaded_file:
                 markdown = result['markdown']
                 doc_title = uploaded_file.name.replace('.pdf', '')
                 
-                status_text.text(f"✅ Markdown 추출 완료 ({result['pages_success']}/{result['pages_total']} 페이지)")
+                # ✅ 빈 페이지 카운트 (DoD 母数에서 제외)
+                empty_page_count = result.get('empty_page_count', 0)
+                valid_page_count = result['pages_success'] - empty_page_count
+                
+                status_text.text(f"✅ Markdown 추출 완료 ({valid_page_count}/{result['pages_total']} 페이지, {empty_page_count}개 빈 페이지 제외)")
                 progress_bar.progress(80)
                 time.sleep(0.5)
                 
@@ -338,10 +411,10 @@ if st.session_state.tree_document:
     tree = document['document']['tree']
     
     # ==========================================
-    # DoD 지표
+    # DoD 지표 (✅ 母数 수정)
     # ==========================================
     
-    st.subheader("📈 Phase 5.6.3 DoD 지표")
+    st.subheader("📈 Phase 5.7.2.2 DoD 지표 (빈 페이지 제외)")
     
     col1, col2, col3 = st.columns(3)
     
@@ -379,6 +452,7 @@ if st.session_state.tree_document:
         st.success("✅ **DoD 검증 통과!**")
     else:
         st.error("❌ **DoD 검증 실패!**")
+        st.info("💡 **개선 팁**: 빈 페이지는 이제 DoD 母数에서 자동 제외됩니다.")
     
     # ==========================================
     # Tree 시각화
@@ -401,49 +475,41 @@ if st.session_state.tree_document:
         st.metric("항 수", clause_count)
     
     with col3:
-        item_count = 0
-        for article in tree:
-            for child in article.get('children', []):
-                if isinstance(child, dict) and child.get('level') == 'clause':
-                    item_count += len([
-                        i for i in child.get('children', [])
-                        if isinstance(i, dict) and i.get('level') == 'item'
-                    ])
+        item_count = sum(
+            len([i for c in a.get('children', []) 
+                 if isinstance(c, dict) 
+                 for i in c.get('children', []) 
+                 if isinstance(i, dict) and i.get('level') == 'item'])
+            for a in tree
+        )
         st.metric("호 수", item_count)
     
-    # Tree 표시
-    for i, article in enumerate(tree, 1):
-        article_no = article.get('article_no', '')
-        article_title = article.get('article_title', '')
-        content = article.get('content', '')
-        metadata = article.get('metadata', {})
-        
-        # 조문
-        with st.expander(f"📄 {article_no}{article_title}", expanded=(i <= 3)):
+    # Tree 렌더링
+    for article in tree:
+        with st.container():
+            st.markdown(f"""
+            <div class="tree-node">
+                <strong>{article.get('number', 'N/A')}</strong> {article.get('title', '(제목 없음)')}
+            </div>
+            """, unsafe_allow_html=True)
             
-            # 메타데이터
-            if metadata.get('is_deleted'):
-                st.error("🗑️ 삭제됨")
-            
-            if metadata.get('has_cross_bleed'):
-                st.warning("⚠️ 경계 누수")
-            
-            if metadata.get('amended_dates'):
-                st.info(f"📅 {', '.join(metadata['amended_dates'])}")
-            
-            # 본문
-            if content:
-                st.markdown(f"**본문:** {content}")
-            
-            # 항
+            # Clauses
             for child in article.get('children', []):
                 if isinstance(child, dict) and child.get('level') == 'clause':
-                    st.markdown(f"**{child['clause_no']}** {child.get('content', '')}")
+                    st.markdown(f"""
+                    <div class="clause-node">
+                        <strong>{child.get('number', '')}</strong> {child.get('content', '')[:100]}...
+                    </div>
+                    """, unsafe_allow_html=True)
                     
-                    # 호
+                    # Items
                     for item in child.get('children', []):
                         if isinstance(item, dict) and item.get('level') == 'item':
-                            st.markdown(f"  - **{item['item_no']}** {item.get('content', '')}")
+                            st.markdown(f"""
+                            <div class="item-node">
+                                <strong>{item.get('number', '')}</strong> {item.get('content', '')[:80]}...
+                            </div>
+                            """, unsafe_allow_html=True)
     
     # ==========================================
     # 다운로드
@@ -455,22 +521,24 @@ if st.session_state.tree_document:
     col1, col2 = st.columns(2)
     
     with col1:
-        st.download_button(
-            "📥 JSON 다운로드",
-            data=st.session_state.json_export,
-            file_name=f"{st.session_state.doc_title}_tree.json",
-            mime="application/json",
-            use_container_width=True
-        )
+        if st.session_state.json_export:
+            st.download_button(
+                label="📥 JSON 다운로드",
+                data=json.dumps(st.session_state.json_export, ensure_ascii=False, indent=2),
+                file_name=f"{st.session_state.doc_title}_tree.json",
+                mime="application/json",
+                use_container_width=True
+            )
     
     with col2:
-        st.download_button(
-            "📥 Markdown 다운로드",
-            data=st.session_state.markdown,
-            file_name=f"{st.session_state.doc_title}.md",
-            mime="text/markdown",
-            use_container_width=True
-        )
+        if st.session_state.markdown:
+            st.download_button(
+                label="📥 Markdown 다운로드",
+                data=st.session_state.markdown,
+                file_name=f"{st.session_state.doc_title}_markdown.md",
+                mime="text/markdown",
+                use_container_width=True
+            )
 
 # ==========================================
 # Footer
@@ -478,6 +546,8 @@ if st.session_state.tree_document:
 
 st.divider()
 st.markdown("""
----
-**PRISM Phase 5.7.0** | 법령 트리 구조화 완성 🎉
-""")
+<div style="text-align: center; color: #666; font-size: 0.9rem;">
+    <p>PRISM Phase 5.7.2.2 Hotfix | 마창수산 팀 | 2025-10-31</p>
+    <p><strong>✅ 주요 개선:</strong> 페이지 구분자 자동 제거 + 빈 페이지 DoD 母数 제외 + VLM 초기화 수정</p>
+</div>
+""", unsafe_allow_html=True)
