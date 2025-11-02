@@ -1,48 +1,57 @@
-# PRISM Phase 4.6 - Python Dependencies
+# PRISM Phase 5.7.6 - Python Dependencies (License-Safe Edition)
 # Python 3.11+ 호환 (Python 3.12 완전 지원)
-# 최종 수정: 2025-10-24 (Phase 4.6 - OpenCV 추가)
+# 최종 수정: 2025-11-02 (Phase 5.7.6 - AGPL/GPL 제거)
 
 # ============================================
 # Core Framework
 # ============================================
-streamlit==1.31.0
-python-dotenv==1.0.0
+streamlit==1.31.0          # Apache-2.0
+python-dotenv==1.0.0       # BSD-3
 
 # ============================================
-# PDF Processing (Phase 2.7 핵심)
+# PDF Processing (Phase 5.7.6 라이선스 교체)
 # ============================================
-pymupdf==1.24.14        # Phase 2.7 메인: PDF → 이미지 변환
-pdf2image==1.16.3       # 레거시 호환: Poppler 기반
-Pillow==10.2.0          # 이미지 처리
-PyPDF2==3.0.1          # 레거시 코드
-pdfplumber==0.10.3     # 레거시 코드
+pypdfium2==4.28.0          # BSD-3 (PyMuPDF 대체) ✅ NEW
+pypdf==4.0.1               # BSD-3 (PyPDF2 대체) ✅ NEW
+pdfplumber==0.10.3         # MIT (레거시 호환)
+Pillow==10.2.0             # HPND (PIL License)
+
+# ❌ 제거된 패키지 (AGPL/GPL 리스크)
+# pymupdf==1.24.14         # AGPL-3.0 ❌
+# pdf2image==1.16.3        # GPL-2.0 (Poppler) ❌
+# PyPDF2==3.0.1            # 레거시 (pypdf로 대체) ❌
 
 # ============================================
-# Computer Vision (Phase 4.6 신규)
+# Computer Vision
 # ============================================
-opencv-python==4.9.0.80  # 다이어그램 영역 검출
-numpy==1.26.3            # OpenCV 의존성
+opencv-python==4.9.0.80    # Apache-2.0
+numpy==1.26.3              # BSD-3
 
 # ============================================
-# OCR 기반 패키지
+# OCR
 # ============================================
-pytesseract==0.3.10      # Phase 4.5: OCR 텍스트 추출
-paddlepaddle==2.6.0      # Python 3.12 호환 (레거시)
+pytesseract==0.3.10        # Apache-2.0
+# paddlepaddle==2.6.0      # ❌ 제거 (사용 안 함)
 
 # ============================================
-# VLM APIs (Phase 4.6)
+# VLM APIs
 # ============================================
-anthropic==0.40.0       # Claude API (2025-10 최신)
-openai==1.58.1          # Azure OpenAI
+anthropic==0.40.0          # Apache-2.0
+openai==1.58.1             # Apache-2.0
 
 # ============================================
 # Utilities
 # ============================================
-requests==2.31.0       # HTTP 요청
-setuptools>=65.0.0     # 내부 의존성
+requests==2.31.0           # Apache-2.0
+setuptools>=65.0.0         # MIT
 
 # ============================================
-# 설치 가이드 (Phase 4.6)
+# Phase 5.8.1 준비 (선택)
+# ============================================
+# sentence-transformers==2.2.2  # Apache-2.0 (임베딩 청킹용)
+
+# ============================================
+# 설치 가이드 (Phase 5.7.6)
 # ============================================
 #
 # 1. pip 업그레이드:
@@ -56,13 +65,19 @@ setuptools>=65.0.0     # 내부 의존성
 #    Mac: brew install tesseract tesseract-lang
 #    Linux: sudo apt-get install tesseract-ocr tesseract-ocr-kor
 #
-# 4. poppler-utils 설치:
-#    Windows: https://github.com/oschwartz10612/poppler-windows/releases
-#    Mac: brew install poppler
-#    Linux: sudo apt-get install poppler-utils
+# 4. ❌ Poppler 불필요 (pypdfium2 사용)
 #
 # 5. 설치 확인:
 #    python -c "import cv2; print(f'OpenCV: {cv2.__version__}')"
 #    python -c "import pytesseract; print('Tesseract OK')"
-#    python -c "import fitz; print(f'PyMuPDF: {fitz.__version__}')"
+#    python -c "import pypdfium2; print(f'pypdfium2: OK')"
+#    python -c "import pypdf; print(f'pypdf: {pypdf.__version__}')"
 #    python -c "import anthropic; print(f'Anthropic: {anthropic.__version__}')"
+
+# ============================================
+# 라이선스 요약 (Phase 5.7.6)
+# ============================================
+# 모든 패키지: BSD-3, MIT, Apache-2.0
+# ✅ 상용 배포 안전
+# ✅ 소스 공개 의무 없음
+# ✅ AGPL/GPL 완전 제거
