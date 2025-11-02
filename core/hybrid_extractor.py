@@ -1,45 +1,47 @@
 """
 core/hybrid_extractor.py
-PRISM Phase 5.7.2.2 Hotfix - Hybrid Extractor (Pipeline Fix + Diagnostic Logs)
+PRISM Phase 5.7.4 - Hybrid Extractor (PyMuPDF Fallback)
 
-✅ Phase 5.7.2.2 긴급 수정:
-1. 페이지 구분자 제거 - OCR 직후 실행
-2. 빈 페이지는 Skip (실패로 카운트 안함)
-3. 유니코드 정규화 (NFKC) 추가
-4. 로그 레벨 조정 (INFO)
-5. 🔴 진단 로그 추가 (DOD-DIAG)
+✅ Phase 5.7.4 주요 개선:
+1. PyMuPDF Fallback 메커니즘 추가 (VLM 실패 시)
+2. Fallback 로깅 및 모니터링
+3. 품질 점수 차등 적용 (Fallback: 70점)
+4. VLM 실패율 추적
 
-Author: 이서영 (Backend Lead) + GPT(미송) 의견 반영  
-Date: 2025-10-31
-Version: 5.7.2.2-diag
+(Phase 5.7.2.2 기능 유지)
+
+Author: 이서영 (Backend Lead) + 마창수산 팀
+Date: 2025-11-02
+Version: 5.7.4
 """
 
 import logging
 import re
 import unicodedata
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 logger = logging.getLogger(__name__)
 
 
 class HybridExtractor:
     """
-    Phase 5.7.2.2 통합 추출기 (Pipeline Hotfix + 진단 로그)
+    Phase 5.7.4 통합 추출기 (PyMuPDF Fallback)
     
     플로우:
     0. ✅ _strip_page_dividers → 페이지 구분자 제거
     1. QuickLayoutAnalyzer → CV 힌트
     2. PromptRules → DSL 프롬프트
     3. VLMService → Markdown 추출
-    4. Validation → 검증
-    5. ✅ Empty Guard → 빈 페이지 Skip
-    6. Retry → 재추출
-    7. Merge → Replace 병합
-    8. PostMergeNormalizer → 문장 결속 강화
-    9. TypoNormalizer → 오탈자 교정
-    10. Dedup → 중복 제거
-    11. KVSNormalizer → KVS 정규화
-    12. Amendment Extractor → 개정 메모 추출
+    4. ✅ NEW: PyMuPDF Fallback (VLM 0글자 시)
+    5. Validation → 검증
+    6. ✅ Empty Guard → 빈 페이지 Skip
+    7. Retry → 재추출
+    8. Merge → Replace 병합
+    9. PostMergeNormalizer → 문장 결속 강화
+    10. TypoNormalizer → 오탈자 교정
+    11. Dedup → 중복 제거
+    12. KVSNormalizer → KVS 정규화
+    13. Amendment Extractor → 개정 메모 추출
     """
     
     # ✅ Phase 5.7.2.2: 페이지 구분자 패턴
@@ -51,9 +53,26 @@ class HybridExtractor:
         re.compile(r'^={3,}\s*$'),
     ]
     
-    def __init__(self, vlm_service, analyzer=None, prompt_rules=None, kvs_normalizer=None):
-        """초기화"""
+    def __init__(
+        self, 
+        vlm_service, 
+        analyzer=None, 
+        prompt_rules=None, 
+        kvs_normalizer=None,
+        pdf_path: Optional[str] = None  # ✅ Phase 5.7.4: PDF 경로 추가
+    ):
+        """
+        초기화
+        
+        Args:
+            vlm_service: VLM 서비스
+            analyzer: QuickLayoutAnalyzer (Optional)
+            prompt_rules: PromptRules (Optional)
+            kvs_normalizer: KVSNormalizer (Optional)
+            pdf_path: PDF 파일 경로 (Fallback용, Optional)
+        """
         self.vlm = vlm_service
+        self.pdf_path = pdf_path  # ✅ Fallback용 PDF 경로
         
         if analyzer is None:
             from .quick_layout_analyzer import QuickLayoutAnalyzer
@@ -80,14 +99,28 @@ class HybridExtractor:
         self.post_normalizer = PostMergeNormalizer()
         self.typo_normalizer = TypoNormalizer()
         
-        logger.info("✅ HybridExtractor v5.7.2.2-diag 초기화 완료 (Pipeline Hotfix + 진단)")
+        # ✅ Phase 5.7.4: Fallback 통계
+        self.fallback_count = 0
+        self.vlm_success_count = 0
+        
+        logger.info("✅ HybridExtractor v5.7.4 초기화 완료 (PyMuPDF Fallback)")
+        logger.info("   - VLM 실패 시 자동 Fallback 지원")
     
     def extract(self, image_data: str, page_num: int = 1) -> Dict[str, Any]:
-        """페이지 추출 (진단 로그 포함)"""
+        """
+        페이지 추출 (PyMuPDF Fallback 포함)
+        
+        Args:
+            image_data: Base64 인코딩된 이미지
+            page_num: 페이지 번호
+        
+        Returns:
+            추출 결과
+        """
         import time
         start_time = time.time()
         
-        logger.info(f"   🔧 HybridExtractor v5.7.2.2-diag 추출 시작 (페이지 {page_num})")
+        logger.info(f"   🔧 HybridExtractor v5.7.4 추출 시작 (페이지 {page_num})")
         
         try:
             # Step 1: CV 힌트
@@ -111,51 +144,65 @@ class HybridExtractor:
             content = self._strip_page_dividers(content)
             dividers_removed = content_before_clean - len(content)
             
-            # 🔴 진단 로그: 구분자 제거 결과
-            logger.info(f"[DOD-DIAG] page={page_num}, dividers_stripped={dividers_removed} chars, before={content_before_clean}, after={len(content)}")
-            
             if len(content) < content_before_clean:
                 logger.info(f"      🧹 페이지 구분자 제거: {content_before_clean}자 → {len(content)}자")
+            
+            # ✅ Phase 5.7.4: VLM 0글자 감지 및 Fallback
+            visible_chars = len([c for c in content if c.strip()])
+            
+            if visible_chars < 10:
+                logger.warning(f"      ⚠️ VLM 추출 실패: {visible_chars}자 < 10자")
+                
+                # ✅ PyMuPDF Fallback 시도
+                fallback_result = self._try_pymupdf_fallback(page_num)
+                
+                if fallback_result is not None:
+                    # Fallback 성공
+                    logger.info(f"      ✅ PyMuPDF Fallback 성공: {len(fallback_result)} 글자")
+                    self.fallback_count += 1
+                    
+                    content = fallback_result
+                    visible_chars = len([c for c in content if c.strip()])
+                    
+                    # Fallback 사용 플래그
+                    used_fallback = True
+                else:
+                    # Fallback도 실패 → 빈 페이지로 처리
+                    logger.info(f"      ℹ️ PyMuPDF Fallback도 실패 → 빈 페이지 Skip")
+                    
+                    return {
+                        'content': '',
+                        'doc_type': 'empty',
+                        'confidence': 0.0,
+                        'quality_score': 0.0,
+                        'hints': hints,
+                        'validation': {'passed': False, 'violations': ['EMPTY_PAGE'], 'confidence': 0.0},
+                        'kvs': [],
+                        'amendment_notes': [],
+                        'quality_indicators': {
+                            'statute_mode': False,
+                            'table_confidence': 0.0,
+                            'amendment_count': 0
+                        },
+                        'metrics': {
+                            'cv_time': cv_time,
+                            'prompt_time': prompt_time,
+                            'vlm_time': vlm_time,
+                            'total_time': time.time() - start_time,
+                            'retry_count': 0,
+                            'fallback_used': False
+                        },
+                        'is_empty': True,
+                        'source': 'vlm_failed'
+                    }
+            else:
+                # VLM 정상 추출
+                used_fallback = False
+                self.vlm_success_count += 1
             
             # Step 4: 검증
             validation = self._validate_content(content, hints)
             logger.info(f"      ✅ 검증: {validation['passed']}")
-            
-            # ✅ Step 5: 빈 페이지 Skip (Phase 5.7.2.2)
-            visible_chars = len([c for c in content if c.strip()])
-            
-            # 🔴 진단 로그: 빈 페이지 감지
-            logger.info(f"[DOD-DIAG] page={page_num}, visible_chars={visible_chars}, threshold=10")
-            
-            if visible_chars < 10:
-                logger.info(f"      ℹ️ 빈 페이지 Skip (가시문자 {visible_chars}자)")
-                
-                # 🔴 진단 로그: 빈 페이지 반환
-                logger.info(f"[DOD-DIAG] page={page_num}, is_empty=True, returning_empty_result")
-                
-                return {
-                    'content': '',
-                    'doc_type': 'empty',
-                    'confidence': 0.0,
-                    'quality_score': 0.0,
-                    'hints': hints,
-                    'validation': {'passed': False, 'violations': ['EMPTY_PAGE'], 'confidence': 0.0},
-                    'kvs': [],
-                    'amendment_notes': [],
-                    'quality_indicators': {
-                        'statute_mode': False,
-                        'table_confidence': 0.0,
-                        'amendment_count': 0
-                    },
-                    'metrics': {
-                        'cv_time': cv_time,
-                        'prompt_time': prompt_time,
-                        'vlm_time': vlm_time,
-                        'total_time': time.time() - start_time,
-                        'retry_count': 0
-                    },
-                    'is_empty': True  # ✅ 빈 페이지 플래그
-                }
             
             # Step 6: 재추출 (표 금지)
             retry_count = 0
@@ -192,8 +239,8 @@ class HybridExtractor:
             # Step 11: 개정 메모 추출
             amendment_notes = self._extract_amendment_notes(content)
             
-            # Step 12: 품질
-            quality_score = self._calculate_quality(content, validation)
+            # Step 12: 품질 (✅ Fallback 시 70점 상한)
+            quality_score = self._calculate_quality(content, validation, used_fallback)
             
             # Step 13: 품질 지표 3종
             ocr_text = hints.get('ocr_text', '')
@@ -220,20 +267,94 @@ class HybridExtractor:
                     'prompt_time': prompt_time,
                     'vlm_time': vlm_time,
                     'total_time': total_time,
-                    'retry_count': retry_count
+                    'retry_count': retry_count,
+                    'fallback_used': used_fallback  # ✅ Fallback 사용 여부
                 },
-                'is_empty': False  # ✅ 정상 페이지 플래그
+                'is_empty': False,
+                'source': 'pymupdf_fallback' if used_fallback else 'vlm'  # ✅ 출처 표시
             }
             
-            # 🔴 진단 로그: 최종 결과
-            logger.info(f"[DOD-DIAG] page={page_num}, is_empty=False, content_len={len(content)}, quality={quality_score:.0f}")
-            
-            logger.info(f"   ✅ 추출 완료: 품질 {quality_score:.0f}/100")
+            logger.info(f"   ✅ 추출 완료: 품질 {quality_score:.0f}/100 (출처: {result['source']})")
             return result
         
         except Exception as e:
             logger.error(f"   ❌ 추출 실패: {e}")
             raise
+    
+    def _try_pymupdf_fallback(self, page_num: int) -> Optional[str]:
+        """
+        ✅ Phase 5.7.4: PyMuPDF Fallback 시도
+        
+        Args:
+            page_num: 페이지 번호 (1-based)
+        
+        Returns:
+            추출된 텍스트 or None (실패 시)
+        """
+        if self.pdf_path is None:
+            logger.warning(f"      ⚠️ PyMuPDF Fallback 불가: PDF 경로 없음")
+            return None
+        
+        try:
+            import fitz  # PyMuPDF
+            
+            logger.info(f"      🔄 PyMuPDF Fallback 시도 (페이지 {page_num})...")
+            
+            # PDF 열기
+            doc = fitz.open(self.pdf_path)
+            
+            # 페이지 인덱스 (0-based)
+            page_index = page_num - 1
+            
+            if page_index >= len(doc):
+                logger.warning(f"      ⚠️ 페이지 {page_num}이 존재하지 않음")
+                doc.close()
+                return None
+            
+            # 페이지 텍스트 추출
+            page = doc[page_index]
+            text = page.get_text("text")
+            
+            doc.close()
+            
+            # 추출 성공 여부 확인
+            visible_chars = len([c for c in text if c.strip()])
+            
+            if visible_chars >= 10:
+                logger.info(f"      ✅ PyMuPDF 추출 성공: {visible_chars}자")
+                return text
+            else:
+                logger.warning(f"      ⚠️ PyMuPDF도 텍스트 부족: {visible_chars}자")
+                return None
+        
+        except ImportError:
+            logger.error(f"      ❌ PyMuPDF(fitz) 미설치: pip install pymupdf")
+            return None
+        
+        except Exception as e:
+            logger.error(f"      ❌ PyMuPDF Fallback 실패: {e}")
+            return None
+    
+    def get_fallback_stats(self) -> Dict[str, Any]:
+        """
+        ✅ Phase 5.7.4: Fallback 통계 반환
+        
+        Returns:
+            {
+                'vlm_success_count': int,
+                'fallback_count': int,
+                'total_pages': int,
+                'fallback_rate': float (0~1)
+            }
+        """
+        total = self.vlm_success_count + self.fallback_count
+        
+        return {
+            'vlm_success_count': self.vlm_success_count,
+            'fallback_count': self.fallback_count,
+            'total_pages': total,
+            'fallback_rate': self.fallback_count / max(1, total)
+        }
     
     def _strip_page_dividers(self, text: str) -> str:
         """
@@ -393,8 +514,25 @@ class HybridExtractor:
         
         return list(set(notes))
     
-    def _calculate_quality(self, content: str, validation: Dict[str, Any]) -> float:
-        """품질 점수 계산"""
+    def _calculate_quality(
+        self, 
+        content: str, 
+        validation: Dict[str, Any],
+        used_fallback: bool = False  # ✅ Phase 5.7.4: Fallback 여부
+    ) -> float:
+        """
+        품질 점수 계산
+        
+        ✅ Phase 5.7.4: Fallback 사용 시 70점 상한
+        
+        Args:
+            content: 추출된 내용
+            validation: 검증 결과
+            used_fallback: PyMuPDF Fallback 사용 여부
+        
+        Returns:
+            품질 점수 (0~100)
+        """
         score = 0.0
         
         # 검증 통과 여부 (40점)
@@ -416,4 +554,9 @@ class HybridExtractor:
         structure_score = validation['scores'].get('structure', 0)
         score += structure_score * 10
         
-        return min(score, 100)
+        # ✅ Fallback 사용 시 70점 상한
+        if used_fallback:
+            score = min(score, 70.0)
+            logger.debug(f"         Fallback 사용: 품질 {score:.0f}/100 (상한 70)")
+        
+        return min(score, 100.0)

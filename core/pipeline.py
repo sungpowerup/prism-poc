@@ -1,16 +1,18 @@
 """
 core/pipeline.py
-PRISM Phase 5.7.2.2 Hotfix - Pipeline (Empty Page Count + Diagnostic Logs)
+PRISM Phase 5.7.4 - Pipeline (Fallback Integration)
 
-✅ Phase 5.7.2.2 긴급 수정:
-1. 빈 페이지 카운트 추가 (empty_page_count)
-2. DoD 母수 계산 개선
-3. HybridExtractor v5.7.2.2 통합
-4. 🔴 진단 로그 추가 (DOD-DIAG)
+✅ Phase 5.7.4 주요 개선:
+1. HybridExtractor에 PDF 경로 전달 (Fallback 지원)
+2. Fallback 통계 수집 및 로깅
+3. SemanticChunker v5.7.4 통합 (조문 경계 기반)
+4. 품질 메트릭 개선 (Fallback 고려)
 
-Author: 이서영 (Backend Lead) + GPT(미송) 의견 반영
-Date: 2025-10-31
-Version: 5.7.2.2-diag
+(Phase 5.7.2.2 기능 유지)
+
+Author: 이서영 (Backend Lead) + 마창수산 팀
+Date: 2025-11-02
+Version: 5.7.4
 """
 
 import logging
@@ -21,7 +23,7 @@ import json
 from pathlib import Path
 import statistics
 
-# Phase 5.7.2.2: HybridExtractor v5.7.2.2
+# Phase 5.7.4: HybridExtractor v5.7.4
 try:
     from .hybrid_extractor import HybridExtractor
     from .semantic_chunker import SemanticChunker
@@ -36,19 +38,18 @@ logger = logging.getLogger(__name__)
 
 class Phase53Pipeline:
     """
-    Phase 5.7.2.2 처리 파이프라인 (Empty Page Count + 진단 로그)
+    Phase 5.7.4 처리 파이프라인 (Fallback Integration)
     
     특징:
-    - HybridExtractor v5.7.2.2 통합 (페이지 구분자 제거)
+    - HybridExtractor v5.7.4 통합 (PyMuPDF Fallback)
     - 빈 페이지 자동 Skip (DoD 母수 제외)
     - 빈 페이지 카운트 추적
-    - 🔴 진단 로그 (페이지 처리, DoD 분모)
+    - ✅ Fallback 통계 수집 및 로깅
+    - SemanticChunker v5.7.4 (조문 경계 기반)
     - CV 힌트 기반 지능형 추출
     - DSL 기반 동적 프롬프트
-    - 강화된 검증 + 재추출
     - KVS 정규화 + 별도 저장
     - 관측성 메트릭 수집
-    - SemanticChunker 유지
     """
     
     def __init__(self, pdf_processor, vlm_service, storage=None):
@@ -62,19 +63,19 @@ class Phase53Pipeline:
         self.vlm_service = vlm_service
         self.storage = storage
         
-        # ✅ Phase 5.7.2.2: HybridExtractor v5.7.2.2 초기화
-        self.extractor = HybridExtractor(vlm_service)
+        # ✅ Phase 5.7.4: HybridExtractor는 process_pdf에서 초기화 (PDF 경로 필요)
+        self.extractor = None
         
-        # Phase 5.2.0: SemanticChunker
+        # Phase 5.7.4: SemanticChunker v5.7.4
         self.chunker = SemanticChunker(
             min_chunk_size=600,
             max_chunk_size=1200,
             target_chunk_size=900
         )
         
-        logger.info("✅ Phase 5.7.2.2-diag Pipeline 초기화 완료 (Empty Page Count + 진단)")
-        logger.info("   - HybridExtractor v5.7.2.2-diag: 페이지 구분자 제거 + 빈 페이지 Skip + 진단")
-        logger.info("   - SemanticChunker: 의미 단위 청킹")
+        logger.info("✅ Phase 5.7.4 Pipeline 초기화 완료 (Fallback Integration)")
+        logger.info("   - HybridExtractor v5.7.4: PyMuPDF Fallback 지원")
+        logger.info("   - SemanticChunker v5.7.4: 조문 경계 기반 청킹")
     
     def process_pdf(
         self,
@@ -83,7 +84,7 @@ class Phase53Pipeline:
         progress_callback: Optional[callable] = None
     ) -> Dict[str, Any]:
         """
-        PDF 처리 메인 함수 (Phase 5.7.2.2 + 진단)
+        PDF 처리 메인 함수 (Phase 5.7.4 Fallback)
         
         Args:
             pdf_path: PDF 파일 경로
@@ -91,20 +92,23 @@ class Phase53Pipeline:
             progress_callback: 진행 상황 콜백
         
         Returns:
-            처리 결과 (진단 정보 포함)
+            처리 결과 (Fallback 통계 포함)
         """
         start_time = time.time()
         session_id = str(uuid.uuid4())[:8]
         
-        logger.info(f"🎯 Phase 5.7.2.2-diag 처리 시작")
+        logger.info(f"🎯 Phase 5.7.4 처리 시작")
         logger.info(f"   파일: {pdf_path}")
         logger.info(f"   세션: {session_id}")
         logger.info(f"   최대 페이지: {max_pages}")
         
-        # 🔴 진단 로그: 처리 시작
-        logger.info(f"[DOD-DIAG] pipeline_start, session={session_id}, max_pages={max_pages}")
-        
         try:
+            # ✅ Phase 5.7.4: HybridExtractor 초기화 (PDF 경로 전달)
+            self.extractor = HybridExtractor(
+                vlm_service=self.vlm_service,
+                pdf_path=pdf_path  # Fallback용
+            )
+            
             # Step 1: PDF → Images
             if progress_callback:
                 progress_callback("PDF → 이미지 변환 중...", 0.1)
@@ -118,9 +122,6 @@ class Phase53Pipeline:
             
             total_pages = len(images)
             logger.info(f"   ✅ {total_pages}페이지 변환 완료")
-            
-            # 🔴 진단 로그: 이미지 변환 완료
-            logger.info(f"[DOD-DIAG] images_converted, total_pages={total_pages}")
             
             # Step 2: 페이지별 HybridExtractor 처리
             page_results = []
@@ -140,23 +141,14 @@ class Phase53Pipeline:
                 
                 logger.info(f"📄 페이지 {page_num}/{total_pages} 처리 시작")
                 
-                # ✅ Phase 5.7.2.2: HybridExtractor v5.7.2.2 호출
+                # ✅ Phase 5.7.4: HybridExtractor v5.7.4 호출 (Fallback 지원)
                 result = self.extractor.extract(image_data, page_num=page_num)
-                
-                # 🔴 진단 로그: 페이지별 처리 결과
-                is_empty = result.get('is_empty', False)
-                content_len = len(result.get('content', ''))
-                logger.info(f"[DOD-DIAG] page={page_num}, is_empty={is_empty}, content_len={content_len}, quality={result.get('quality_score', 0):.0f}")
                 
                 # ✅ 빈 페이지 감지 (Phase 5.7.2.2)
                 if result.get('is_empty', False):
                     empty_page_count += 1
                     logger.info(f"   ℹ️ 페이지 {page_num}: 빈 페이지 Skip")
-                    
-                    # 🔴 진단 로그: 빈 페이지 Skip
-                    logger.info(f"[DOD-DIAG] page={page_num}, action=skip_empty, empty_count={empty_page_count}")
-                    
-                    continue  # DoD 母数에서 제외
+                    continue  # DoD 母수에서 제외
                 
                 # 페이지 결과 수집
                 page_results.append({
@@ -164,7 +156,8 @@ class Phase53Pipeline:
                     'content': result['content'],
                     'doc_type': result.get('doc_type', 'unknown'),
                     'confidence': result.get('confidence', 0.0),
-                    'quality_score': result.get('quality_score', 0.0)
+                    'quality_score': result.get('quality_score', 0.0),
+                    'source': result.get('source', 'vlm')  # ✅ Phase 5.7.4: 출처 추적
                 })
                 
                 # KVS 저장
@@ -178,16 +171,18 @@ class Phase53Pipeline:
                 # 메트릭 수집
                 metrics_list.append(result['metrics'])
                 
-                logger.info(f"   ✅ 페이지 {page_num} 완료: 품질 {result['quality_score']:.0f}/100")
+                logger.info(f"   ✅ 페이지 {page_num} 완료: 품질 {result['quality_score']:.0f}/100 (출처: {result['source']})")
             
             valid_pages = len(page_results)
             
-            # 🔴 진단 로그: 전체 페이지 처리 완료
-            logger.info(f"[DOD-DIAG] pages_processed, total={total_pages}, empty={empty_page_count}, valid={valid_pages}")
             logger.info(f"📊 유효 페이지: {valid_pages}/{total_pages} (빈 페이지 {empty_page_count}개 제외)")
             
-            # 🔴 진단 로그: DoD 분모 확인
-            logger.info(f"[DOD-DIAG] dod_denominator_check, pages_total={total_pages}, empty_page_count={empty_page_count}, pages_success={valid_pages}")
+            # ✅ Phase 5.7.4: Fallback 통계 수집
+            fallback_stats = self.extractor.get_fallback_stats()
+            logger.info(f"📊 Fallback 통계:")
+            logger.info(f"   - VLM 성공: {fallback_stats['vlm_success_count']}페이지")
+            logger.info(f"   - Fallback 사용: {fallback_stats['fallback_count']}페이지")
+            logger.info(f"   - Fallback 비율: {fallback_stats['fallback_rate']:.1%}")
             
             # Step 3: Markdown 통합
             if progress_callback:
@@ -199,11 +194,11 @@ class Phase53Pipeline:
             
             logger.info(f"   ✅ Markdown 통합 완료: {len(markdown)} 글자")
             
-            # Step 4: SemanticChunking
+            # Step 4: SemanticChunking v5.7.4
             if progress_callback:
-                progress_callback("의미 단위 청킹 중...", 0.9)
+                progress_callback("조문 경계 기반 청킹 중...", 0.9)
             
-            logger.info("✂️ Step 4: SemanticChunking")
+            logger.info("✂️ Step 4: SemanticChunking v5.7.4 (조문 경계)")
             chunks = self.chunker.chunk(markdown)
             
             logger.info(f"   ✅ {len(chunks)}개 청크 생성")
@@ -218,9 +213,17 @@ class Phase53Pipeline:
             avg_confidence = statistics.mean([p['confidence'] for p in page_results]) if page_results else 0.0
             fidelity_score = avg_confidence * 100
             
-            # 2. 청킹 품질
+            # 2. 청킹 품질 (✅ Phase 5.7.4: 조문 경계 기반으로 개선)
             avg_chunk_size = statistics.mean([len(c['content']) for c in chunks]) if chunks else 0
-            chunking_score = min(avg_chunk_size / 900 * 100, 100)
+            # 목표: 600~1200자, 최적: 900자
+            if 600 <= avg_chunk_size <= 1200:
+                chunking_score = 100.0
+            elif 400 <= avg_chunk_size < 600:
+                chunking_score = 70.0
+            elif avg_chunk_size < 400:
+                chunking_score = max(30.0, avg_chunk_size / 400 * 70)
+            else:
+                chunking_score = max(70.0, 100 - (avg_chunk_size - 1200) / 20)
             
             # 3. RAG 적합도
             rag_score = min(len(chunks) / max(1, valid_pages) * 100, 100)
@@ -241,7 +244,7 @@ class Phase53Pipeline:
             )
             
             logger.info(f"   ✅ 원본 충실도: {fidelity_score:.0f}/100")
-            logger.info(f"   ✅ 청킹 품질: {chunking_score:.0f}/100")
+            logger.info(f"   ✅ 청킹 품질: {chunking_score:.0f}/100 (평균: {avg_chunk_size:.0f}자)")
             logger.info(f"   ✅ RAG 적합도: {rag_score:.0f}/100")
             logger.info(f"   ✅ 범용성: {universality_score:.0f}/100")
             logger.info(f"   ✅ 경쟁력: {competitive_score:.0f}/100")
@@ -252,16 +255,17 @@ class Phase53Pipeline:
             
             result = {
                 'status': 'success',
-                'version': '5.7.2.2-diag',  # ✅ Phase 5.7.2.2-diag
+                'version': '5.7.4',  # ✅ Phase 5.7.4
                 'session_id': session_id,
                 'pages_total': total_pages,
                 'pages_success': valid_pages,  # ✅ 빈 페이지 제외
-                'empty_page_count': empty_page_count,  # ✅ Phase 5.7.2.2 신규
+                'empty_page_count': empty_page_count,  # ✅ Phase 5.7.2.2
                 'processing_time': processing_time,
                 'markdown': markdown,
                 'chunks': chunks,
                 'kvs_payloads': kvs_files,
                 'metrics': metrics_list,
+                'fallback_stats': fallback_stats,  # ✅ Phase 5.7.4: Fallback 통계
                 'fidelity_score': fidelity_score,
                 'chunking_score': chunking_score,
                 'rag_score': rag_score,
@@ -270,12 +274,10 @@ class Phase53Pipeline:
                 'overall_score': overall_score
             }
             
-            # 🔴 진단 로그: 최종 결과
-            logger.info(f"[DOD-DIAG] pipeline_complete, status=success, valid_pages={valid_pages}, empty_pages={empty_page_count}, overall_score={overall_score:.0f}")
-            
-            logger.info(f"✅ Phase 5.7.2.2-diag 처리 완료")
+            logger.info(f"✅ Phase 5.7.4 처리 완료")
             logger.info(f"   - 유효 페이지: {valid_pages}/{total_pages}")
             logger.info(f"   - 빈 페이지: {empty_page_count}")
+            logger.info(f"   - Fallback 사용: {fallback_stats['fallback_count']}")
             logger.info(f"   - 시간: {processing_time:.1f}초")
             logger.info(f"   - 종합: {overall_score:.0f}/100")
             
@@ -286,16 +288,19 @@ class Phase53Pipeline:
             import traceback
             logger.error(traceback.format_exc())
             
-            # 🔴 진단 로그: 에러
-            logger.error(f"[DOD-DIAG] pipeline_error, error={str(e)}")
-            
             return {
                 'status': 'error',
-                'version': '5.7.2.2-diag',
+                'version': '5.7.4',
                 'session_id': session_id,
                 'error': str(e),
                 'pages_total': 0,
                 'pages_success': 0,
                 'empty_page_count': 0,
+                'fallback_stats': {
+                    'vlm_success_count': 0,
+                    'fallback_count': 0,
+                    'total_pages': 0,
+                    'fallback_rate': 0.0
+                },
                 'processing_time': time.time() - start_time
             }
