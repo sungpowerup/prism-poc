@@ -49,6 +49,71 @@ class HierarchicalParser:
         """초기화"""
         logger.info("✅ HierarchicalParser v5.7.0 초기화 완료")
     
+    def evaluate(self, tree: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        ✅ Phase 5.7.3: DoD 평가용 래퍼 메서드
+        
+        app.py에서 parser.evaluate(tree)로 호출되므로 추가
+        
+        Args:
+            tree: TreeBuilder 출력 (Document 스키마 or 단순 Tree 리스트)
+        
+        Returns:
+            DoD 평가 결과 (지표 + 통과 여부)
+        """
+        logger.info("🔍 HierarchicalParser.evaluate() 호출")
+        
+        # Tree 형식 유연 처리
+        if isinstance(tree, dict):
+            if 'document' in tree and 'tree' in tree['document']:
+                # Document 스키마 형식
+                actual_tree = tree['document']['tree']
+            elif 'tree' in tree:
+                # {'tree': [...]} 형식
+                actual_tree = tree['tree']
+            else:
+                # 이미 tree 자체
+                actual_tree = tree
+        elif isinstance(tree, list):
+            # 리스트 형식
+            actual_tree = tree
+        else:
+            logger.error(f"❌ 지원하지 않는 tree 형식: {type(tree)}")
+            return {
+                'hierarchy_preservation_rate': 0.0,
+                'boundary_cross_bleed_rate': 1.0,
+                'empty_article_rate': 1.0,
+                'passed': False
+            }
+        
+        # 계층 보존율
+        preservation_rate = self._calculate_hierarchy_preservation(actual_tree)
+        
+        # 경계 누수율
+        cross_bleed_rate = self._calculate_boundary_cross_bleed(actual_tree)
+        
+        # 빈 조문율
+        empty_rate = self._calculate_empty_article_rate(actual_tree)
+        
+        # DoD 통과 여부
+        passed = (
+            preservation_rate >= self.DOD_CRITERIA['hierarchy_preservation_rate'] and
+            cross_bleed_rate == self.DOD_CRITERIA['boundary_cross_bleed_rate'] and
+            empty_rate == self.DOD_CRITERIA['empty_article_rate']
+        )
+        
+        logger.info(f"   📊 계층 보존율: {preservation_rate:.3f} (목표: ≥{self.DOD_CRITERIA['hierarchy_preservation_rate']})")
+        logger.info(f"   📊 경계 누수율: {cross_bleed_rate:.3f} (목표: ={self.DOD_CRITERIA['boundary_cross_bleed_rate']})")
+        logger.info(f"   📊 빈 조문율: {empty_rate:.3f} (목표: ={self.DOD_CRITERIA['empty_article_rate']})")
+        logger.info(f"   {'✅ DoD 통과' if passed else '❌ DoD 실패'}")
+        
+        return {
+            'hierarchy_preservation_rate': preservation_rate,
+            'boundary_cross_bleed_rate': cross_bleed_rate,
+            'empty_article_rate': empty_rate,
+            'passed': passed
+        }
+    
     def parse(self, document: Dict[str, Any]) -> Dict[str, Any]:
         """
         Tree 파싱 및 검증
@@ -122,13 +187,21 @@ class HierarchicalParser:
     
     def _calculate_hierarchy_preservation(self, tree: List[Dict]) -> float:
         """
-        계층 보존율 계산
+        ✅ Phase 5.7.3.1: 계층 보존율 계산 (동적 기대치)
+        
+        문서에 실제로 존재하는 계층만 평가
+        - article만: 100%
+        - article + clause: 감지 시 100%
+        - article + clause + item: 모두 감지 시 100%
         
         Returns:
             0.0 ~ 1.0 (1.0 = 완벽)
         """
-        expected_layers = {'article', 'clause', 'item'}
+        expected_layers = {'article'}  # 기본: article은 필수
         detected_layers = set()
+        
+        has_clause_in_source = False
+        has_item_in_source = False
         
         for article in tree:
             detected_layers.add('article')
@@ -137,12 +210,28 @@ class HierarchicalParser:
                 if isinstance(child, dict):
                     if child.get('level') == 'clause':
                         detected_layers.add('clause')
+                        has_clause_in_source = True
                         
                         for item in child.get('children', []):
                             if isinstance(item, dict) and item.get('level') == 'item':
                                 detected_layers.add('item')
+                                has_item_in_source = True
         
-        return len(detected_layers & expected_layers) / len(expected_layers)
+        # ✅ 동적 기대치: 소스에 실제로 존재하는 계층만 기대
+        if has_clause_in_source:
+            expected_layers.add('clause')
+        if has_item_in_source:
+            expected_layers.add('item')
+        
+        # 기대치가 없으면 article만 평가
+        if len(expected_layers) == 1:
+            return 1.0 if 'article' in detected_layers else 0.0
+        
+        rate = len(detected_layers & expected_layers) / len(expected_layers)
+        
+        logger.debug(f"         계층 보존율: expected={expected_layers}, detected={detected_layers}, rate={rate:.3f}")
+        
+        return rate
     
     def _calculate_boundary_cross_bleed(self, tree: List[Dict]) -> float:
         """

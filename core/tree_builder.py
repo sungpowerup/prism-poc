@@ -51,19 +51,26 @@ class TreeBuilder:
     - OCR 오탈자 자동 교정
     """
     
-    # 패턴 정의
-    ARTICLE_PATTERN = re.compile(r'^(제\s?\d+조)(?:\s*\(([^)]+)\))?')  # 제1조(목적)
+    # ✅ Phase 5.7.3.1: 패턴 정의 (Markdown 헤더 + 항/호 확장)
+    # Markdown 헤더(#)를 포함한 조문 인식
+    ARTICLE_PATTERN = re.compile(r'^\s{0,3}#{0,6}\s*(제\s?\d+조(?:의\s?\d+)?)(?:\s*\(([^)]+)\))?', re.MULTILINE)
     
-    # ✨ Phase 5.7.1: CLAUSE_PATTERN 확장
-    CLAUSE_PATTERN = re.compile(r'^(?:\(?([①-⑳]|\d+|제\s?\d+항)\)?)')
+    # ✨ Phase 5.7.3.1: CLAUSE_PATTERN 확장 (①, (1), 제1항, 1. 모두 지원)
+    CLAUSE_PATTERN = re.compile(
+        r'^\s{0,3}#{0,6}\s*(?:'
+        r'\(?([①-⑳]|제\s?\d+항)\)?|'  # ①, (①), 제1항
+        r'(\d+)\.\s+'                  # 1., 2., 3.
+        r')',
+        re.MULTILINE
+    )
     
-    # ✨ Phase 5.7.1: ITEM_PATTERN 확장 (호)
-    ITEM_PATTERN = re.compile(r'^(\d{1,2}[.)]|[가-힣][.)])')
+    # ✨ Phase 5.7.3.1: ITEM_PATTERN 확장 (호, 모든 형식 지원)
+    ITEM_PATTERN = re.compile(r'^\s{0,3}[-*]?\s*(\d{1,2}[.)]|[가-힣][.)])', re.MULTILINE)
     
-    SUBITEM_PATTERN = re.compile(r'^([가-힣]\)|[\d]+\))')
+    SUBITEM_PATTERN = re.compile(r'^\s{0,3}([가-힣]\)|[\d]+\))', re.MULTILINE)
     
-    # ✨ Phase 5.7.2: Chapter 패턴 추가
-    CHAPTER_PATTERN = re.compile(r'^(제\s?\d+장)(?:\s+(.+))?')  # 제1장 총칙
+    # ✨ Phase 5.7.3: Chapter 패턴 (헤더 지원)
+    CHAPTER_PATTERN = re.compile(r'^\s{0,3}#{0,6}\s*(제\s?\d+장)(?:\s+(.+))?', re.MULTILINE)
     
     # 삭제 조문 패턴
     DELETED_PATTERN = re.compile(r'<삭제\s*(\d{4}\.\d{2}\.\d{2})>')
