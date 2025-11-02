@@ -1,18 +1,17 @@
 """
 core/hybrid_extractor.py
-PRISM Phase 5.7.2.2 Hotfix - Hybrid Extractor (Pipeline Fix)
+PRISM Phase 5.7.2.2 Hotfix - Hybrid Extractor (Pipeline Fix + Diagnostic Logs)
 
-✅ Phase 5.7.2.2 긴급 수정 (GPT 의견 100% 반영):
+✅ Phase 5.7.2.2 긴급 수정:
 1. 페이지 구분자 제거 - OCR 직후 실행
 2. 빈 페이지는 Skip (실패로 카운트 안함)
 3. 유니코드 정규화 (NFKC) 추가
 4. 로그 레벨 조정 (INFO)
-
-(Phase 5.6.1 기능 유지)
+5. 🔴 진단 로그 추가 (DOD-DIAG)
 
 Author: 이서영 (Backend Lead) + GPT(미송) 의견 반영  
 Date: 2025-10-31
-Version: 5.7.2.2 Hotfix
+Version: 5.7.2.2-diag
 """
 
 import logging
@@ -25,19 +24,19 @@ logger = logging.getLogger(__name__)
 
 class HybridExtractor:
     """
-    Phase 5.7.2.2 통합 추출기 (Pipeline Hotfix)
+    Phase 5.7.2.2 통합 추출기 (Pipeline Hotfix + 진단 로그)
     
     플로우:
-    0. ✅ _strip_page_dividers → 페이지 구분자 제거 (Phase 5.7.2.2)
+    0. ✅ _strip_page_dividers → 페이지 구분자 제거
     1. QuickLayoutAnalyzer → CV 힌트
     2. PromptRules → DSL 프롬프트
     3. VLMService → Markdown 추출
     4. Validation → 검증
-    5. ✅ Empty Guard → 빈 페이지 Skip (Phase 5.7.2.2)
+    5. ✅ Empty Guard → 빈 페이지 Skip
     6. Retry → 재추출
     7. Merge → Replace 병합
-    8. PostMergeNormalizer v5.6.1 → 문장 결속 강화
-    9. TypoNormalizer v5.6.1 → 오탈자 교정 확장
+    8. PostMergeNormalizer → 문장 결속 강화
+    9. TypoNormalizer → 오탈자 교정
     10. Dedup → 중복 제거
     11. KVSNormalizer → KVS 정규화
     12. Amendment Extractor → 개정 메모 추출
@@ -74,21 +73,21 @@ class HybridExtractor:
         else:
             self.kvs_normalizer = kvs_normalizer
         
-        # Phase 5.6.1: 새 컴포넌트 (v5.6.1)
+        # Phase 5.6.1: 새 컴포넌트
         from .post_merge_normalizer import PostMergeNormalizer
         from .typo_normalizer import TypoNormalizer
         
         self.post_normalizer = PostMergeNormalizer()
         self.typo_normalizer = TypoNormalizer()
         
-        logger.info("✅ HybridExtractor v5.7.2.2 초기화 완료 (Pipeline Hotfix)")
+        logger.info("✅ HybridExtractor v5.7.2.2-diag 초기화 완료 (Pipeline Hotfix + 진단)")
     
     def extract(self, image_data: str, page_num: int = 1) -> Dict[str, Any]:
-        """페이지 추출"""
+        """페이지 추출 (진단 로그 포함)"""
         import time
         start_time = time.time()
         
-        logger.info(f"   🔧 HybridExtractor v5.7.2.2 추출 시작 (페이지 {page_num})")
+        logger.info(f"   🔧 HybridExtractor v5.7.2.2-diag 추출 시작 (페이지 {page_num})")
         
         try:
             # Step 1: CV 힌트
@@ -110,6 +109,11 @@ class HybridExtractor:
             # ✅ Step 3.5: 페이지 구분자 제거 (Phase 5.7.2.2)
             content_before_clean = len(content)
             content = self._strip_page_dividers(content)
+            dividers_removed = content_before_clean - len(content)
+            
+            # 🔴 진단 로그: 구분자 제거 결과
+            logger.info(f"[DOD-DIAG] page={page_num}, dividers_stripped={dividers_removed} chars, before={content_before_clean}, after={len(content)}")
+            
             if len(content) < content_before_clean:
                 logger.info(f"      🧹 페이지 구분자 제거: {content_before_clean}자 → {len(content)}자")
             
@@ -117,10 +121,18 @@ class HybridExtractor:
             validation = self._validate_content(content, hints)
             logger.info(f"      ✅ 검증: {validation['passed']}")
             
-            # ✅ Step 5: 빈 페이지 Skip (Phase 5.7.2.2 개선)
+            # ✅ Step 5: 빈 페이지 Skip (Phase 5.7.2.2)
             visible_chars = len([c for c in content if c.strip()])
+            
+            # 🔴 진단 로그: 빈 페이지 감지
+            logger.info(f"[DOD-DIAG] page={page_num}, visible_chars={visible_chars}, threshold=10")
+            
             if visible_chars < 10:
                 logger.info(f"      ℹ️ 빈 페이지 Skip (가시문자 {visible_chars}자)")
+                
+                # 🔴 진단 로그: 빈 페이지 반환
+                logger.info(f"[DOD-DIAG] page={page_num}, is_empty=True, returning_empty_result")
+                
                 return {
                     'content': '',
                     'doc_type': 'empty',
@@ -160,11 +172,11 @@ class HybridExtractor:
                 
                 validation = self._validate_content(content, hints)
             
-            # Step 7: Post-merge Normalizer v5.6.1 (Phase 5.6.1)
+            # Step 7: Post-merge Normalizer
             doc_type = self._determine_doc_type(hints)
             content = self.post_normalizer.normalize(content, doc_type)
             
-            # Step 8: Typo Normalizer v5.6.1 (Phase 5.6.1)
+            # Step 8: Typo Normalizer
             content = self.typo_normalizer.normalize(content, doc_type)
             
             # Step 9: 중복 제거
@@ -177,13 +189,13 @@ class HybridExtractor:
                 kvs = self.kvs_normalizer.normalize_kvs(kvs)
                 logger.info(f"      💾 KVS: {len(kvs)}개")
             
-            # Step 11: 개정 메모 추출 (Phase 5.6.1)
+            # Step 11: 개정 메모 추출
             amendment_notes = self._extract_amendment_notes(content)
             
             # Step 12: 품질
             quality_score = self._calculate_quality(content, validation)
             
-            # Step 13: 품질 지표 3종 (Phase 5.6.1)
+            # Step 13: 품질 지표 3종
             ocr_text = hints.get('ocr_text', '')
             quality_indicators = {
                 'statute_mode': self.prompt_rules._detect_statute_mode(hints, ocr_text),
@@ -213,6 +225,9 @@ class HybridExtractor:
                 'is_empty': False  # ✅ 정상 페이지 플래그
             }
             
+            # 🔴 진단 로그: 최종 결과
+            logger.info(f"[DOD-DIAG] page={page_num}, is_empty=False, content_len={len(content)}, quality={quality_score:.0f}")
+            
             logger.info(f"   ✅ 추출 완료: 품질 {quality_score:.0f}/100")
             return result
         
@@ -227,23 +242,24 @@ class HybridExtractor:
         제거 대상:
         - # Page 1, ## Page 2, Page 3
         - ---, ***, ===
-        
-        특징:
-        - 유니코드 정규화 (NFKC)
-        - 줄 단위 완전 매치
-        - 원문 보존 (raw line 유지)
         """
         cleaned = []
+        removed_lines = 0
+        
         for raw_line in text.splitlines():
             # 유니코드 정규화 (보이지 않는 문자 제거)
             normalized = unicodedata.normalize('NFKC', raw_line).strip()
             
             # 페이지 구분자 패턴 매치
             if any(p.match(normalized) for p in self.PAGE_DIVIDER_PATTERNS):
+                removed_lines += 1
                 continue  # 이 줄은 제거
             
             # 원문 보존
             cleaned.append(raw_line)
+        
+        if removed_lines > 0:
+            logger.debug(f"         구분자 제거: {removed_lines}줄")
         
         return "\n".join(cleaned)
     
@@ -363,7 +379,7 @@ class HybridExtractor:
         return kvs
     
     def _extract_amendment_notes(self, content: str) -> List[str]:
-        """✅ Phase 5.6.1: 개정 메모 추출"""
+        """개정 메모 추출"""
         notes = []
         
         # 패턴 1: [개정 2024.1.1]

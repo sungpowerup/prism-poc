@@ -1,17 +1,16 @@
 """
 core/pipeline.py
-PRISM Phase 5.7.2.2 Hotfix - Pipeline (Empty Page Count)
+PRISM Phase 5.7.2.2 Hotfix - Pipeline (Empty Page Count + Diagnostic Logs)
 
 ✅ Phase 5.7.2.2 긴급 수정:
 1. 빈 페이지 카운트 추가 (empty_page_count)
 2. DoD 母수 계산 개선
 3. HybridExtractor v5.7.2.2 통합
-
-(Phase 5.3.0 기능 유지)
+4. 🔴 진단 로그 추가 (DOD-DIAG)
 
 Author: 이서영 (Backend Lead) + GPT(미송) 의견 반영
 Date: 2025-10-31
-Version: 5.7.2.2 Hotfix
+Version: 5.7.2.2-diag
 """
 
 import logging
@@ -37,31 +36,19 @@ logger = logging.getLogger(__name__)
 
 class Phase53Pipeline:
     """
-    Phase 5.7.2.2 처리 파이프라인 (Empty Page Count)
+    Phase 5.7.2.2 처리 파이프라인 (Empty Page Count + 진단 로그)
     
     특징:
     - HybridExtractor v5.7.2.2 통합 (페이지 구분자 제거)
     - 빈 페이지 자동 Skip (DoD 母수 제외)
     - 빈 페이지 카운트 추적
+    - 🔴 진단 로그 (페이지 처리, DoD 분모)
     - CV 힌트 기반 지능형 추출
     - DSL 기반 동적 프롬프트
     - 강화된 검증 + 재추출
     - KVS 정규화 + 별도 저장
     - 관측성 메트릭 수집
     - SemanticChunker 유지
-    
-    처리 플로우:
-    1. PDF → Images (300 DPI)
-    2. FOR EACH PAGE:
-       - 페이지 구분자 제거 (Phase 5.7.2.2)
-       - 빈 페이지 감지 → Skip
-       - CV 힌트 생성
-       - DSL 프롬프트 생성
-       - VLM 추출
-       - 검증 + 재추출
-       - KVS 정규화 + 저장
-    3. SemanticChunking (전체 페이지)
-    4. 5가지 체크리스트 평가
     """
     
     def __init__(self, pdf_processor, vlm_service, storage=None):
@@ -78,15 +65,15 @@ class Phase53Pipeline:
         # ✅ Phase 5.7.2.2: HybridExtractor v5.7.2.2 초기화
         self.extractor = HybridExtractor(vlm_service)
         
-        # Phase 5.2.0 성과 유지: SemanticChunker
+        # Phase 5.2.0: SemanticChunker
         self.chunker = SemanticChunker(
             min_chunk_size=600,
             max_chunk_size=1200,
             target_chunk_size=900
         )
         
-        logger.info("✅ Phase 5.7.2.2 Pipeline 초기화 완료 (Empty Page Count)")
-        logger.info("   - HybridExtractor v5.7.2.2: 페이지 구분자 제거 + 빈 페이지 Skip")
+        logger.info("✅ Phase 5.7.2.2-diag Pipeline 초기화 완료 (Empty Page Count + 진단)")
+        logger.info("   - HybridExtractor v5.7.2.2-diag: 페이지 구분자 제거 + 빈 페이지 Skip + 진단")
         logger.info("   - SemanticChunker: 의미 단위 청킹")
     
     def process_pdf(
@@ -96,41 +83,26 @@ class Phase53Pipeline:
         progress_callback: Optional[callable] = None
     ) -> Dict[str, Any]:
         """
-        PDF 처리 메인 함수 (Phase 5.7.2.2)
+        PDF 처리 메인 함수 (Phase 5.7.2.2 + 진단)
         
         Args:
             pdf_path: PDF 파일 경로
             max_pages: 최대 처리 페이지 수
-            progress_callback: 진행 상황 콜백 (msg: str, progress: float)
+            progress_callback: 진행 상황 콜백
         
         Returns:
-            {
-                'status': 'success' | 'error',
-                'version': '5.7.2.2',
-                'session_id': str,
-                'pages_total': int,
-                'pages_success': int,
-                'empty_page_count': int,  # ✅ Phase 5.7.2.2 신규
-                'processing_time': float,
-                'markdown': str,
-                'chunks': List[Dict],
-                'kvs_payloads': List[str],
-                'metrics': List[Dict],
-                'fidelity_score': float,
-                'chunking_score': float,
-                'rag_score': float,
-                'universality_score': float,
-                'competitive_score': float,
-                'overall_score': float
-            }
+            처리 결과 (진단 정보 포함)
         """
         start_time = time.time()
         session_id = str(uuid.uuid4())[:8]
         
-        logger.info(f"🎯 Phase 5.7.2.2 처리 시작")
+        logger.info(f"🎯 Phase 5.7.2.2-diag 처리 시작")
         logger.info(f"   파일: {pdf_path}")
         logger.info(f"   세션: {session_id}")
         logger.info(f"   최대 페이지: {max_pages}")
+        
+        # 🔴 진단 로그: 처리 시작
+        logger.info(f"[DOD-DIAG] pipeline_start, session={session_id}, max_pages={max_pages}")
         
         try:
             # Step 1: PDF → Images
@@ -146,6 +118,9 @@ class Phase53Pipeline:
             
             total_pages = len(images)
             logger.info(f"   ✅ {total_pages}페이지 변환 완료")
+            
+            # 🔴 진단 로그: 이미지 변환 완료
+            logger.info(f"[DOD-DIAG] images_converted, total_pages={total_pages}")
             
             # Step 2: 페이지별 HybridExtractor 처리
             page_results = []
@@ -168,11 +143,20 @@ class Phase53Pipeline:
                 # ✅ Phase 5.7.2.2: HybridExtractor v5.7.2.2 호출
                 result = self.extractor.extract(image_data, page_num=page_num)
                 
+                # 🔴 진단 로그: 페이지별 처리 결과
+                is_empty = result.get('is_empty', False)
+                content_len = len(result.get('content', ''))
+                logger.info(f"[DOD-DIAG] page={page_num}, is_empty={is_empty}, content_len={content_len}, quality={result.get('quality_score', 0):.0f}")
+                
                 # ✅ 빈 페이지 감지 (Phase 5.7.2.2)
                 if result.get('is_empty', False):
                     empty_page_count += 1
                     logger.info(f"   ℹ️ 페이지 {page_num}: 빈 페이지 Skip")
-                    continue  # DoD 母수에서 제외
+                    
+                    # 🔴 진단 로그: 빈 페이지 Skip
+                    logger.info(f"[DOD-DIAG] page={page_num}, action=skip_empty, empty_count={empty_page_count}")
+                    
+                    continue  # DoD 母数에서 제외
                 
                 # 페이지 결과 수집
                 page_results.append({
@@ -197,7 +181,13 @@ class Phase53Pipeline:
                 logger.info(f"   ✅ 페이지 {page_num} 완료: 품질 {result['quality_score']:.0f}/100")
             
             valid_pages = len(page_results)
+            
+            # 🔴 진단 로그: 전체 페이지 처리 완료
+            logger.info(f"[DOD-DIAG] pages_processed, total={total_pages}, empty={empty_page_count}, valid={valid_pages}")
             logger.info(f"📊 유효 페이지: {valid_pages}/{total_pages} (빈 페이지 {empty_page_count}개 제외)")
+            
+            # 🔴 진단 로그: DoD 분모 확인
+            logger.info(f"[DOD-DIAG] dod_denominator_check, pages_total={total_pages}, empty_page_count={empty_page_count}, pages_success={valid_pages}")
             
             # Step 3: Markdown 통합
             if progress_callback:
@@ -225,18 +215,18 @@ class Phase53Pipeline:
             logger.info("📊 Step 5: 체크리스트 평가")
             
             # 1. 원본 충실도
-            avg_confidence = statistics.mean([p['confidence'] for p in page_results])
+            avg_confidence = statistics.mean([p['confidence'] for p in page_results]) if page_results else 0.0
             fidelity_score = avg_confidence * 100
             
             # 2. 청킹 품질
-            avg_chunk_size = statistics.mean([len(c['content']) for c in chunks])
+            avg_chunk_size = statistics.mean([len(c['content']) for c in chunks]) if chunks else 0
             chunking_score = min(avg_chunk_size / 900 * 100, 100)
             
             # 3. RAG 적합도
-            rag_score = min(len(chunks) / valid_pages * 100, 100)
+            rag_score = min(len(chunks) / max(1, valid_pages) * 100, 100)
             
             # 4. 범용성
-            universality_score = 95.0  # 고정값
+            universality_score = 95.0
             
             # 5. 경쟁력
             competitive_score = (fidelity_score + chunking_score + rag_score) / 3
@@ -262,10 +252,10 @@ class Phase53Pipeline:
             
             result = {
                 'status': 'success',
-                'version': '5.7.2.2',  # ✅ Phase 5.7.2.2
+                'version': '5.7.2.2-diag',  # ✅ Phase 5.7.2.2-diag
                 'session_id': session_id,
                 'pages_total': total_pages,
-                'pages_success': valid_pages,
+                'pages_success': valid_pages,  # ✅ 빈 페이지 제외
                 'empty_page_count': empty_page_count,  # ✅ Phase 5.7.2.2 신규
                 'processing_time': processing_time,
                 'markdown': markdown,
@@ -280,7 +270,10 @@ class Phase53Pipeline:
                 'overall_score': overall_score
             }
             
-            logger.info(f"✅ Phase 5.7.2.2 처리 완료")
+            # 🔴 진단 로그: 최종 결과
+            logger.info(f"[DOD-DIAG] pipeline_complete, status=success, valid_pages={valid_pages}, empty_pages={empty_page_count}, overall_score={overall_score:.0f}")
+            
+            logger.info(f"✅ Phase 5.7.2.2-diag 처리 완료")
             logger.info(f"   - 유효 페이지: {valid_pages}/{total_pages}")
             logger.info(f"   - 빈 페이지: {empty_page_count}")
             logger.info(f"   - 시간: {processing_time:.1f}초")
@@ -293,9 +286,12 @@ class Phase53Pipeline:
             import traceback
             logger.error(traceback.format_exc())
             
+            # 🔴 진단 로그: 에러
+            logger.error(f"[DOD-DIAG] pipeline_error, error={str(e)}")
+            
             return {
                 'status': 'error',
-                'version': '5.7.2.2',
+                'version': '5.7.2.2-diag',
                 'session_id': session_id,
                 'error': str(e),
                 'pages_total': 0,
