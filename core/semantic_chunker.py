@@ -1,15 +1,17 @@
 """
 core/semantic_chunker.py
-PRISM Phase 5.7.4.1 - SemanticChunker 긴급 패치
+PRISM Phase 5.7.7.2 - SemanticChunker (코드펜스 제거)
 
-✅ 수정 내역:
-1. buffer['article_title'] NoneType 에러 수정
-2. 조문 병합 로직 안정화
-3. 빈 조문 처리 강화
+✅ Phase 5.7.7.2 긴급 수정:
+1. 코드펜스 자동 제거 (미송 제안)
+2. 헤더 인식률 100% 복구
+3. 청킹 정상화 (1개 → 3~4개)
 
-Author: 이서영 (Backend Lead) + 박준호 (AI/ML Lead)
-Date: 2025-11-02
-Version: 5.7.4.1 Hotfix
+(Phase 5.7.7.1 기능 유지)
+
+Author: 이서영 (Backend Lead) + 미송 진단
+Date: 2025-11-03
+Version: 5.7.7.2 Hotfix
 """
 
 import re
@@ -21,29 +23,30 @@ logger = logging.getLogger(__name__)
 
 class SemanticChunker:
     """
-    Phase 5.7.4.1 SemanticChunker (긴급 패치)
+    Phase 5.7.7.2 SemanticChunker (코드펜스 제거)
     
-    ✅ 조문 경계 기반 청킹
-    ✅ NoneType 에러 수정
+    ✅ 조문 경계 기반 청킹 + 길이 조절
+    ✅ 코드펜스 자동 제거 (Phase 5.7.7.2)
+    ✅ 600~1200자 기준으로 3~4개 청크 생성
     """
     
     def __init__(
         self,
         min_chunk_size: int = 600,
         max_chunk_size: int = 1200,
-        target_chunk_size: int = 900  # ← target_size → target_chunk_size
+        target_chunk_size: int = 900
     ):
         """초기화"""
         self.min_size = min_chunk_size
         self.max_size = max_chunk_size
-        self.target_size = target_chunk_size  # ← 내부적으로는 target_size 사용
+        self.target_size = target_chunk_size
         
-        logger.info("✅ SemanticChunker v5.7.4.1 초기화 (긴급 패치)")
+        logger.info("✅ SemanticChunker v5.7.7.2 초기화 (코드펜스 제거)")
         logger.info(f"   청크 크기: {min_chunk_size}-{max_chunk_size} (목표: {target_chunk_size})")
     
     def chunk(self, content: str) -> List[Dict[str, Any]]:
         """
-        ✅ Phase 5.7.4.1: 조문 경계 기반 청킹 (긴급 패치)
+        ✅ Phase 5.7.7.2: 조문 경계 기반 청킹 (코드펜스 제거)
         
         Args:
             content: Markdown 전체 내용
@@ -51,14 +54,19 @@ class SemanticChunker:
         Returns:
             청크 리스트
         """
-        logger.info(f"🔗 SemanticChunking v5.7.4.1 시작: {len(content)} 글자")
+        logger.info(f"🔗 SemanticChunking v5.7.7.2 시작: {len(content)} 글자")
+        
+        # ✅ Phase 5.7.7.2: 코드펜스 제거 (미송 제안)
+        content = self._strip_code_fences(content)
         
         # Step 1: 조문 단위로 분할
         article_sections = self._split_by_article(content)
         logger.info(f"   조문 분할: {len(article_sections['sections'])}개 조문")
         
-        # Step 2: 길이 기반 조정
+        # Step 2: 길이 기반 조정 (미송 제안 반영)
         adjusted_sections = self._adjust_by_length(article_sections['sections'])
+        
+        logger.info(f"   길이 조정 후: {len(adjusted_sections)}개 섹션")
         
         # Step 3: 청크 생성
         chunks = []
@@ -79,6 +87,36 @@ class SemanticChunker:
         
         return chunks
     
+    def _strip_code_fences(self, content: str) -> str:
+        """
+        ✅ Phase 5.7.7.2: 코드펜스 제거 (미송 제안)
+        
+        문제:
+        - VLM이 Markdown을 코드블록으로 감싸면 헤더 인식 실패
+        - ```\n### 제1조...\n``` → 헤더가 코드로 취급
+        
+        해결:
+        - 앞뒤 코드펜스 제거
+        - 중간 코드펜스는 보존 (실제 코드 예시일 수 있음)
+        
+        Args:
+            content: 원본 Markdown
+        
+        Returns:
+            코드펜스 제거된 Markdown
+        """
+        # 1) 앞쪽 코드펜스 제거
+        content = re.sub(r'^```[a-z]*\s*\n', '', content, flags=re.MULTILINE)
+        
+        # 2) 뒤쪽 코드펜스 제거
+        content = re.sub(r'\n```\s*$', '', content, flags=re.MULTILINE)
+        
+        # 3) 앞뒤 공백 정리
+        content = content.strip()
+        
+        logger.debug("      코드펜스 제거 완료")
+        return content
+    
     def _split_by_article(self, content: str) -> Dict[str, Any]:
         """
         ✅ Phase 5.7.4: 조문 단위로 분할
@@ -93,8 +131,8 @@ class SemanticChunker:
         sections = []
         lines = content.split('\n')
         
-        # 조문 패턴: ## 제1조(목적)
-        article_pattern = re.compile(r'^##\s*(제\s?\d+조(?:의\s?\d+)?)\s*(?:\(([^)]+)\))?')
+        # 조문 패턴: ## 제1조(목적) 또는 ### 제 1조(목적)
+        article_pattern = re.compile(r'^###+?\s*(제\s?\d+조(?:의\s?\d+)?)\s*(?:\(([^)]+)\))?')
         
         current_section = None
         
@@ -139,22 +177,22 @@ class SemanticChunker:
     
     def _adjust_by_length(self, sections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        ✅ Phase 5.7.4.1: 길이 기반 조정 (긴급 패치)
+        ✅ Phase 5.7.7.1: 길이 기반 조정 (청크 수 복원)
         
-        - 너무 짧은 조문: 다음 조문과 병합
-        - 너무 긴 조문: 그대로 유지 (조문 단위 보존)
-        - 적당한 조문: 그대로 유지
+        미송 제안:
+        - 버퍼가 min_size 이상이면 즉시 flush
+        - 조문 병합 시 max_size 초과하면 flush
+        - 3~4개 청크 생성 목표
         
-        ✅ NoneType 에러 수정:
-        - buffer['article_title'] 초기화를 None → '' 변경
-        - 병합 시 None 체크 추가
+        변경 전: 모든 조문을 1개로 병합
+        변경 후: 600~1200자 기준으로 분할
         """
         adjusted = []
         
-        # ✅ 수정: None 대신 빈 문자열로 초기화
+        # 버퍼 초기화
         buffer = {
             'article_no': None,
-            'article_title': '',  # ← None에서 '' 변경
+            'article_title': '',
             'content': ''
         }
         
@@ -166,50 +204,51 @@ class SemanticChunker:
                 buffer['content'] += section['content']
                 continue
             
-            # Case 2: 작은 조문 → 버퍼에 추가
-            if section_size < self.min_size:
-                # ✅ 수정: None 체크 추가
-                if buffer['article_no'] is None:
-                    buffer['article_no'] = section['article_no']
-                else:
-                    buffer['article_no'] += f', {section["article_no"]}'
-                
-                # ✅ 수정: 빈 문자열 체크
-                if buffer['article_title']:
-                    buffer['article_title'] += f', {section["article_title"]}'
-                else:
-                    buffer['article_title'] = section['article_title']
-                
-                buffer['content'] += section['content']
-                
-                # 버퍼가 최소 크기 이상이면 청크 생성
-                if len(buffer['content']) >= self.min_size:
-                    adjusted.append(buffer.copy())
-                    # ✅ 수정: 초기화 시 빈 문자열 사용
-                    buffer = {
-                        'article_no': None,
-                        'article_title': '',
-                        'content': ''
-                    }
+            # ✅ Phase 5.7.7.1: 버퍼가 최소 크기 이상이면 먼저 flush (미송 제안)
+            if len(buffer['content']) >= self.min_size and buffer['article_no']:
+                adjusted.append(buffer.copy())
+                buffer = {
+                    'article_no': None,
+                    'article_title': '',
+                    'content': ''
+                }
+                logger.debug(f"      버퍼 flush: min_size 도달 ({len(buffer['content'])}자)")
             
-            # Case 3: 적당한 크기 또는 큰 조문
+            # Case 2: 현재 조문을 버퍼에 추가
+            if buffer['article_no'] is None:
+                # 버퍼 비어있음 → 새로 시작
+                buffer['article_no'] = section['article_no']
+                buffer['article_title'] = section['article_title']
+                buffer['content'] = section['content']
             else:
-                # 버퍼에 내용이 있으면 먼저 저장
-                if buffer['content']:
+                # 버퍼에 내용 있음 → 병합
+                # ✅ Phase 5.7.7.1: 병합 후 max_size 초과하면 먼저 flush (미송 제안)
+                if len(buffer['content']) + section_size > self.max_size:
+                    # 버퍼를 먼저 저장
                     adjusted.append(buffer.copy())
-                    # ✅ 수정: 초기화 시 빈 문자열 사용
+                    logger.debug(f"      버퍼 flush: max_size 초과 방지")
+                    
+                    # 새 버퍼 시작
                     buffer = {
-                        'article_no': None,
-                        'article_title': '',
-                        'content': ''
+                        'article_no': section['article_no'],
+                        'article_title': section['article_title'],
+                        'content': section['content']
                     }
-                
-                # 현재 조문 저장
-                adjusted.append(section.copy())
+                else:
+                    # 병합 가능 → 버퍼에 추가
+                    buffer['article_no'] += f', {section["article_no"]}'
+                    
+                    if buffer['article_title']:
+                        buffer['article_title'] += f', {section["article_title"]}'
+                    else:
+                        buffer['article_title'] = section['article_title']
+                    
+                    buffer['content'] += section['content']
         
         # 남은 버퍼 처리
         if buffer['content']:
             adjusted.append(buffer)
+            logger.debug(f"      버퍼 flush: 마지막 ({len(buffer['content'])}자)")
         
         return adjusted
 

@@ -1,18 +1,17 @@
 """
 core/hybrid_extractor.py
-PRISM Phase 5.7.6 - Hybrid Extractor (License-Safe Fallback)
+PRISM Phase 5.7.7.2 - Hybrid Extractor (인라인 페이지 마커 제거)
 
-✅ Phase 5.7.6 주요 변경:
-1. PyMuPDF Fallback → pypdf + pdfminer.six 이중 Fallback
-2. Fallback 후 _strip_page_dividers 재적용 (미송 제안)
-3. Fallback 출처 로깅 강화
-4. 성능 최적화
+✅ Phase 5.7.7.2 긴급 수정:
+1. 인라인 페이지 마커 제거 (미송 제안)
+2. "402-21." → "1." 분리
+3. Fallback 후 정제 강화
 
-(Phase 5.7.4 기능 유지)
+(Phase 5.7.7.1 기능 유지)
 
-Author: 이서영 (Backend Lead) + 박준호 (AI/ML Lead)
-Date: 2025-11-02
-Version: 5.7.6 License-Safe
+Author: 이서영 (Backend Lead) + 미송 진단
+Date: 2025-11-03
+Version: 5.7.7.2 Hotfix
 """
 
 import logging
@@ -45,16 +44,16 @@ logger = logging.getLogger(__name__)
 
 class HybridExtractor:
     """
-    Phase 5.7.6 통합 추출기 (라이선스-세이프 Fallback)
+    Phase 5.7.7.2 통합 추출기 (인라인 페이지 마커 제거)
     
-    변경 사항:
-    - PyMuPDF → pypdf + pdfminer.six
-    - Fallback 후 정제 강화 (미송 제안)
-    - 이중 Fallback 구조
+    ✅ Phase 5.7.7.2 개선:
+    - 인라인 페이지 마커 제거 (미송 제안)
+    - "402-2" + "1." 분리 → "1."만 남김
+    - Fallback 후 정제 강화
     
     Fallback 전략:
     1. VLM 실패 (0자) → pypdf 시도
-    2. pypdf 실패 → pdfminer.six 시도
+    2. pypdf 성공 시 → 인라인 마커 제거 + 정규화
     3. 모두 실패 → 빈 페이지 처리
     """
     
@@ -77,17 +76,17 @@ class HybridExtractor:
         self.vlm_success_count = 0
         self.total_pages = 0
         
-        logger.info("✅ HybridExtractor v5.7.6 초기화 완료 (License-Safe)")
+        logger.info("✅ HybridExtractor v5.7.7.2 초기화 완료 (인라인 마커 제거)")
         logger.info("   - pypdf (BSD-3) Fallback")
-        logger.info("   - 이중 Fallback 구조")
+        logger.info("   - 인라인 페이지 마커 제거 강화")
     
     def extract(self, image_data: str, page_num: int) -> Dict[str, Any]:
         """
-        Phase 5.7.6 페이지 추출 (Fallback 강화)
+        Phase 5.7.7.2 페이지 추출 (인라인 마커 제거)
         
-        (Phase 5.7.4 플로우 유지)
+        (Phase 5.7.7.1 플로우 유지)
         """
-        logger.info(f"   🔧 HybridExtractor v5.7.6 추출 시작 (페이지 {page_num})")
+        logger.info(f"   🔧 HybridExtractor v5.7.7.2 추출 시작 (페이지 {page_num})")
         
         self.total_pages += 1
         
@@ -116,7 +115,7 @@ class HybridExtractor:
         
         logger.info(f"      ✅ 검증: {is_valid}")
         
-        # ✅ Phase 5.7.6: 이중 Fallback
+        # ✅ Phase 5.7.7.2: Fallback + 인라인 마커 제거
         if not is_valid:
             logger.warning(f"      ⚠️ VLM 추출 실패: {len(content)}자 < 10자")
             
@@ -144,10 +143,10 @@ class HybridExtractor:
             source = "vlm"
             confidence = 1.0
         
-        # Step 5: 후처리 (Phase 5.7.4 유지)
+        # Step 5: 후처리 (Phase 5.7.7.2 강화)
         doc_type = hints.get('doc_type', 'general')
         
-        # PostMergeNormalizer
+        # PostMergeNormalizer (v5.7.7.1 - 띄어쓰기 복원 포함)
         content = self.post_normalizer.normalize(content, doc_type)
         
         # TypoNormalizer
@@ -187,11 +186,12 @@ class HybridExtractor:
     
     def _fallback_extract(self, page_num: int) -> str:
         """
-        ✅ Phase 5.7.6: 이중 Fallback 텍스트 추출
+        ✅ Phase 5.7.7.2: Fallback 텍스트 추출 (인라인 마커 제거)
         
         전략:
         1. pypdf 시도 (빠름, 구조 보존 우수)
-        2. 실패 시 pdfminer.six 시도 (느림, 정확도 높음)
+        2. ✅ 인라인 페이지 마커 제거 강화 (미송 제안)
+        3. 정규화 적용
         
         Args:
             page_num: 페이지 번호
@@ -211,15 +211,13 @@ class HybridExtractor:
         if text and len(text) >= 10:
             logger.info(f"      ✅ pypdf 추출 성공: {len(text)}자")
             
-            # ✅ 미송 제안: Fallback 후 정제
+            # ✅ Phase 5.7.7.2: 인라인 페이지 마커 제거 강화 (미송 제안)
+            text = self._remove_inline_page_markers(text)
             text = self._strip_page_dividers(text)
             text = self._normalize_fallback_text(text)
             
             logger.info(f"      ✅ Fallback 성공: {len(text)} 글자")
             return text
-        
-        # ✅ 2차 Fallback: pdfminer.six (선택)
-        # TODO: Phase 5.7.7에서 추가
         
         logger.warning(f"      ⚠️ Fallback 실패: 텍스트 없음")
         return ""
@@ -250,11 +248,17 @@ class HybridExtractor:
             logger.error(f"      ❌ pypdf 추출 실패: {e}")
             return ""
     
-    def _strip_page_dividers(self, content: str) -> str:
+    def _remove_inline_page_markers(self, content: str) -> str:
         """
-        ✅ Phase 5.7.6: 페이지 구분자 제거 (Fallback 후에도 적용)
+        ✅ Phase 5.7.7.2: 인라인 페이지 마커 제거 (미송 제안)
         
-        미송 제안: Fallback 경로에서도 반드시 실행
+        문제:
+        - "402-2" + "1." → "402-21."로 합쳐짐
+        - 페이지 번호가 항목 번호와 결합
+        
+        해결:
+        - 인라인 패턴 감지 및 제거
+        - "402-21." → "1."로 복구
         
         Args:
             content: 원본 텍스트
@@ -262,26 +266,60 @@ class HybridExtractor:
         Returns:
             정제된 텍스트
         """
-        # 페이지 구분자 패턴
-        patterns = [
-            r'^[-=*_]{3,}$',  # ---, ===, ***, ___
-            r'^Page\s+\d+\s*$',  # Page 1, Page 2
-            r'^\d+\s*$',  # 단독 숫자
-            r'^[0-9]{3,4}-[0-9]{1,2}\s*$',  # 402-1, 402-2
-        ]
+        # 1) 페이지 마커 + 항목 번호 패턴
+        # "402-21." → "1."
+        content = re.sub(r'\b\d{3,4}-\d{1,2}\s*(\d+[.)])', r'\1', content)
         
+        # 2) 페이지 마커 + 공백 + 항목 번호
+        # "402-2 1." → "1."
+        content = re.sub(r'\b\d{3,4}-\d{1,2}\s+(\d+[.)])', r'\1', content)
+        
+        # 3) 페이지 마커만 단독 (줄 중간)
+        # "...내용 402-2 내용..." → "...내용 내용..."
+        content = re.sub(r'\s+\d{3,4}-\d{1,2}\s+', ' ', content)
+        
+        logger.debug(f"      인라인 페이지 마커 제거 완료")
+        return content
+    
+    def _strip_page_dividers(self, content: str) -> str:
+        """
+        ✅ Phase 5.7.7.1: 페이지 구분자 제거 강화 (미송 제안)
+        
+        개선 사항:
+        - "인사규정" 헤더 제거 추가
+        - "402-1", "402-2", "402-3" 패턴 강화
+        - 단독 숫자 제거 강화
+        
+        Args:
+            content: 원본 텍스트
+        
+        Returns:
+            정제된 텍스트
+        """
         lines = content.split('\n')
         filtered_lines = []
+        
+        # ✅ Phase 5.7.7.1: 페이지 구분자 패턴 강화
+        page_patterns = [
+            r'^[-=*_]{3,}$',  # ---, ===, ***, ___
+            r'^Page\s+\d+\s*$',  # Page 1, Page 2
+            r'^\d{1,2}$',  # 단독 숫자 (1, 2, 3)
+            r'^[0-9]{3,4}-[0-9]{1,2}$',  # 402-1, 402-2 (정확히 매칭)
+            r'^인사규정$',  # "인사규정" 헤더 (미송 제안)
+        ]
         
         for line in lines:
             stripped = line.strip()
             
             # 패턴 매칭
-            is_divider = any(re.match(pattern, stripped) for pattern in patterns)
+            is_divider = any(re.match(pattern, stripped) for pattern in page_patterns)
             
             if not is_divider:
                 filtered_lines.append(line)
+            else:
+                logger.debug(f"      페이지 마커 제거: '{stripped}'")
         
+        logger.debug(f"      페이지 마커 제거 완료: {len(lines)} → {len(filtered_lines)} 줄")
         return '\n'.join(filtered_lines)
     
     def _normalize_fallback_text(self, text: str) -> str:
