@@ -1,17 +1,17 @@
 """
 core/typo_normalizer.py
-PRISM Phase 5.6.2 - Typo Normalizer (Emergency Patch)
+PRISM Phase 5.7.7 - Typo Normalizer (오탈자 사전 확장)
 
-🚨 Phase 5.6.2 긴급 패치:
-- 위험한 OCR 교정 제거 (조문 번호 훼손 방지)
-- 동일치환 항목 제거 (사전 효율화)
-- 한자 오류 보수적 적용
+✅ Phase 5.7.7 개선:
+- "사 제" → "삭제" 추가
+- "기함" → "기하" 추가 (띄어쓰기와 연동)
+- "정함" → "정함" (이미 올바름, 사전 제외)
 
-(Phase 5.6.1 기능 유지)
+(Phase 5.6.2 기능 유지)
 
-Author: 정수아 (QA Lead)
-Date: 2025-10-27
-Version: 5.6.2
+Author: 정수아 (QA Lead) + 박준호 (AI/ML Lead)
+Date: 2025-11-02
+Version: 5.7.7
 """
 
 import re
@@ -23,22 +23,27 @@ logger = logging.getLogger(__name__)
 
 class TypoNormalizer:
     """
-    Phase 5.6.2 오탈자 정규화 (Emergency Patch)
+    Phase 5.7.7 오탈자 정규화 (사전 확장)
     
     목적:
     - OCR 오탈자 교정 (안전한 패턴만)
-    - 규정 용어 표준화
+    - ✅ 규정 용어 표준화 확장 (Phase 5.7.7)
     - 특수문자 정규화
     
     처리 순서:
-    1. 규정 용어 사전 적용 (동일치환 제거)
+    1. 규정 용어 사전 적용 (확장)
     2. OCR 오류 패턴 교정 (위험 규칙 제거)
     3. 특수문자 정규화
     """
     
-    # ✅ Phase 5.6.2: 규정 용어 사전 (동일치환 제거)
+    # ✅ Phase 5.7.7: 규정 용어 사전 (확장)
     STATUTE_TERMS = {
-        # OCR 오탈자 (실제 치환만)
+        # ✅ Phase 5.7.7 추가: 테스트에서 발견된 오류
+        '사 제': '삭제',
+        '사제': '삭제',
+        '무기직': '공무직',  # "무기계약직" → "공무직" (테스트 결과 기반)
+        
+        # Phase 5.6.2: OCR 오탈자 (실제 치환만)
         '임용·용훈': '임용권',
         '성과계재선발자': '성과개선대상자',
         '공급인사위원회': '상급인사위원회',
@@ -56,13 +61,8 @@ class TypoNormalizer:
         '징계처분결정': '확정판결',
     }
     
-    # 🚨 Phase 5.6.2: OCR 오류 패턴 (위험 규칙 제거)
+    # Phase 5.6.2: OCR 오류 패턴 (위험 규칙 제거)
     OCR_PATTERNS = [
-        # ❌ 제거: 숫자 축소 규칙 (조문 번호 훼손 위험)
-        # (r'제(\d+)3조', r'제\1조'),  # ← 삭제
-        # (r'제(\d+)4조', r'제\1조'),  # ← 삭제
-        # (r'제(\d+)0조', r'제\1조'),  # ← 삭제
-        
         # ✅ 유지: 특수문자 오인식 (안전)
         (r'·', '·'),  # 중점 통일
         (r'‧', '·'),
@@ -83,7 +83,7 @@ class TypoNormalizer:
     
     def __init__(self):
         """초기화"""
-        logger.info("✅ TypoNormalizer v5.6.2 초기화 완료 (Emergency Patch)")
+        logger.info("✅ TypoNormalizer v5.7.7 초기화 완료 (사전 확장)")
         logger.info(f"   📖 규정 용어 사전: {len(self.STATUTE_TERMS)}개")
         logger.info(f"   🔍 OCR 패턴: {len(self.OCR_PATTERNS)}개 (위험 규칙 제거)")
     
@@ -98,7 +98,7 @@ class TypoNormalizer:
         Returns:
             정규화된 텍스트
         """
-        logger.info(f"   🔧 TypoNormalizer v5.6.2 시작 (doc_type: {doc_type})")
+        logger.info(f"   🔧 TypoNormalizer v5.7.7 시작 (doc_type: {doc_type})")
         
         original_len = len(content)
         corrections = 0
@@ -144,7 +144,7 @@ class TypoNormalizer:
     
     def _apply_ocr_patterns(self, content: str) -> tuple:
         """
-        🚨 Phase 5.6.2: OCR 오류 패턴 교정 (안전 모드)
+        Phase 5.6.2: OCR 오류 패턴 교정 (안전 모드)
         
         위험한 규칙 제거:
         - 조문 번호 축소 (제73조 → 제7조) ← 삭제

@@ -1,18 +1,16 @@
 """
 core/pipeline.py
-PRISM Phase 5.7.4 - Pipeline (Fallback Integration)
+PRISM Phase 5.7.6.1 - Pipeline (긴급 패치)
 
-✅ Phase 5.7.4 주요 개선:
-1. HybridExtractor에 PDF 경로 전달 (Fallback 지원)
-2. Fallback 통계 수집 및 로깅
-3. SemanticChunker v5.7.4 통합 (조문 경계 기반)
-4. 품질 메트릭 개선 (Fallback 고려)
+✅ Phase 5.7.6.1 긴급 수정:
+1. 이미지 데이터 튜플 언패킹 수정
+2. 빈 페이지 처리 안정화
 
-(Phase 5.7.2.2 기능 유지)
+(Phase 5.7.4 기능 유지)
 
 Author: 이서영 (Backend Lead) + 마창수산 팀
 Date: 2025-11-02
-Version: 5.7.4
+Version: 5.7.6.1 Hotfix
 """
 
 import logging
@@ -38,16 +36,14 @@ logger = logging.getLogger(__name__)
 
 class Phase53Pipeline:
     """
-    Phase 5.7.4 처리 파이프라인 (Fallback Integration)
+    Phase 5.7.6.1 처리 파이프라인 (긴급 패치)
     
     특징:
-    - HybridExtractor v5.7.4 통합 (PyMuPDF Fallback)
+    - ✅ 이미지 데이터 튜플 언패킹 수정
+    - HybridExtractor v5.7.6 통합 (pypdf Fallback)
     - 빈 페이지 자동 Skip (DoD 母수 제외)
-    - 빈 페이지 카운트 추적
-    - ✅ Fallback 통계 수집 및 로깅
-    - SemanticChunker v5.7.4 (조문 경계 기반)
+    - SemanticChunker v5.7.4.1 (조문 경계 기반)
     - CV 힌트 기반 지능형 추출
-    - DSL 기반 동적 프롬프트
     - KVS 정규화 + 별도 저장
     - 관측성 메트릭 수집
     """
@@ -66,16 +62,16 @@ class Phase53Pipeline:
         # ✅ Phase 5.7.4: HybridExtractor는 process_pdf에서 초기화 (PDF 경로 필요)
         self.extractor = None
         
-        # Phase 5.7.4: SemanticChunker v5.7.4
+        # Phase 5.7.4: SemanticChunker v5.7.4.1
         self.chunker = SemanticChunker(
             min_chunk_size=600,
             max_chunk_size=1200,
             target_chunk_size=900
         )
         
-        logger.info("✅ Phase 5.7.4 Pipeline 초기화 완료 (Fallback Integration)")
-        logger.info("   - HybridExtractor v5.7.4: PyMuPDF Fallback 지원")
-        logger.info("   - SemanticChunker v5.7.4: 조문 경계 기반 청킹")
+        logger.info("✅ Phase 5.7.6.1 Pipeline 초기화 완료 (긴급 패치)")
+        logger.info("   - HybridExtractor v5.7.6: pypdf Fallback 지원")
+        logger.info("   - SemanticChunker v5.7.4.1: 조문 경계 기반 청킹")
     
     def process_pdf(
         self,
@@ -84,7 +80,7 @@ class Phase53Pipeline:
         progress_callback: Optional[callable] = None
     ) -> Dict[str, Any]:
         """
-        PDF 처리 메인 함수 (Phase 5.7.4 Fallback)
+        PDF 처리 메인 함수 (Phase 5.7.6.1 긴급 패치)
         
         Args:
             pdf_path: PDF 파일 경로
@@ -97,7 +93,7 @@ class Phase53Pipeline:
         start_time = time.time()
         session_id = str(uuid.uuid4())[:8]
         
-        logger.info(f"🎯 Phase 5.7.4 처리 시작")
+        logger.info(f"🎯 Phase 5.7.6.1 처리 시작 (긴급 패치)")
         logger.info(f"   파일: {pdf_path}")
         logger.info(f"   세션: {session_id}")
         logger.info(f"   최대 페이지: {max_pages}")
@@ -127,10 +123,12 @@ class Phase53Pipeline:
             page_results = []
             kvs_files = []
             metrics_list = []
-            empty_page_count = 0  # ✅ Phase 5.7.2.2: 빈 페이지 카운터
+            empty_page_count = 0
             
-            for i, image_data in enumerate(images):
-                page_num = i + 1
+            for i, image_tuple in enumerate(images):
+                # ✅ Phase 5.7.6.1: 튜플 언패킹 (base64_str, page_num)
+                image_data, page_num = image_tuple
+                
                 progress = 0.1 + (0.7 * (i / max(1, total_pages)))
                 
                 if progress_callback:
@@ -141,10 +139,10 @@ class Phase53Pipeline:
                 
                 logger.info(f"📄 페이지 {page_num}/{total_pages} 처리 시작")
                 
-                # ✅ Phase 5.7.4: HybridExtractor v5.7.4 호출 (Fallback 지원)
+                # ✅ Phase 5.7.6: HybridExtractor v5.7.6 호출 (pypdf Fallback)
                 result = self.extractor.extract(image_data, page_num=page_num)
                 
-                # ✅ 빈 페이지 감지 (Phase 5.7.2.2)
+                # ✅ 빈 페이지 감지
                 if result.get('is_empty', False):
                     empty_page_count += 1
                     logger.info(f"   ℹ️ 페이지 {page_num}: 빈 페이지 Skip")
@@ -157,7 +155,7 @@ class Phase53Pipeline:
                     'doc_type': result.get('doc_type', 'unknown'),
                     'confidence': result.get('confidence', 0.0),
                     'quality_score': result.get('quality_score', 0.0),
-                    'source': result.get('source', 'vlm')  # ✅ Phase 5.7.4: 출처 추적
+                    'source': result.get('source', 'vlm')  # ✅ 출처 추적
                 })
                 
                 # KVS 저장
@@ -177,7 +175,7 @@ class Phase53Pipeline:
             
             logger.info(f"📊 유효 페이지: {valid_pages}/{total_pages} (빈 페이지 {empty_page_count}개 제외)")
             
-            # ✅ Phase 5.7.4: Fallback 통계 수집
+            # ✅ Phase 5.7.6: Fallback 통계 수집
             fallback_stats = self.extractor.get_fallback_stats()
             logger.info(f"📊 Fallback 통계:")
             logger.info(f"   - VLM 성공: {fallback_stats['vlm_success_count']}페이지")
@@ -194,11 +192,11 @@ class Phase53Pipeline:
             
             logger.info(f"   ✅ Markdown 통합 완료: {len(markdown)} 글자")
             
-            # Step 4: SemanticChunking v5.7.4
+            # Step 4: SemanticChunking v5.7.4.1
             if progress_callback:
                 progress_callback("조문 경계 기반 청킹 중...", 0.9)
             
-            logger.info("✂️ Step 4: SemanticChunking v5.7.4 (조문 경계)")
+            logger.info("✂️ Step 4: SemanticChunking v5.7.4.1 (조문 경계)")
             chunks = self.chunker.chunk(markdown)
             
             logger.info(f"   ✅ {len(chunks)}개 청크 생성")
@@ -213,7 +211,7 @@ class Phase53Pipeline:
             avg_confidence = statistics.mean([p['confidence'] for p in page_results]) if page_results else 0.0
             fidelity_score = avg_confidence * 100
             
-            # 2. 청킹 품질 (✅ Phase 5.7.4: 조문 경계 기반으로 개선)
+            # 2. 청킹 품질
             avg_chunk_size = statistics.mean([len(c['content']) for c in chunks]) if chunks else 0
             # 목표: 600~1200자, 최적: 900자
             if 600 <= avg_chunk_size <= 1200:
@@ -255,17 +253,17 @@ class Phase53Pipeline:
             
             result = {
                 'status': 'success',
-                'version': '5.7.4',  # ✅ Phase 5.7.4
+                'version': '5.7.6.1',  # ✅ Phase 5.7.6.1
                 'session_id': session_id,
                 'pages_total': total_pages,
-                'pages_success': valid_pages,  # ✅ 빈 페이지 제외
-                'empty_page_count': empty_page_count,  # ✅ Phase 5.7.2.2
+                'pages_success': valid_pages,
+                'empty_page_count': empty_page_count,
                 'processing_time': processing_time,
                 'markdown': markdown,
                 'chunks': chunks,
                 'kvs_payloads': kvs_files,
                 'metrics': metrics_list,
-                'fallback_stats': fallback_stats,  # ✅ Phase 5.7.4: Fallback 통계
+                'fallback_stats': fallback_stats,  # ✅ Fallback 통계
                 'fidelity_score': fidelity_score,
                 'chunking_score': chunking_score,
                 'rag_score': rag_score,
@@ -274,7 +272,7 @@ class Phase53Pipeline:
                 'overall_score': overall_score
             }
             
-            logger.info(f"✅ Phase 5.7.4 처리 완료")
+            logger.info(f"✅ Phase 5.7.6.1 처리 완료")
             logger.info(f"   - 유효 페이지: {valid_pages}/{total_pages}")
             logger.info(f"   - 빈 페이지: {empty_page_count}")
             logger.info(f"   - Fallback 사용: {fallback_stats['fallback_count']}")
@@ -290,7 +288,7 @@ class Phase53Pipeline:
             
             return {
                 'status': 'error',
-                'version': '5.7.4',
+                'version': '5.7.6.1',
                 'session_id': session_id,
                 'error': str(e),
                 'pages_total': 0,

@@ -1,22 +1,23 @@
 """
 app.py
-PRISM Phase 5.7.4.3 완전 패치
+PRISM Phase 5.7.6.1 긴급 패치
 
 ✅ 수정 사항:
-1. logger import 추가
-2. Phase53Pipeline import 추가
-3. 모든 필수 모듈 import 확인
-4. 에러 처리 강화
+1. 임시 파일 삭제 에러 처리 개선
+2. finally 블록 추가
+3. 파일 핸들 안전 종료
 
 Author: 마창수산 팀
 Date: 2025-11-02
-Version: 5.7.4.3 완전 패치
+Version: 5.7.6.1 Hotfix
 """
 
 import streamlit as st
 import logging
 import sys
 from pathlib import Path
+import os
+import time
 
 # ✅ 로거 초기화 (최상단)
 logging.basicConfig(
@@ -29,7 +30,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ✅ core 모듈 import (Phase 5.7.4)
+# ✅ core 모듈 import (Phase 5.7.6)
 try:
     from core.pdf_processor import PDFProcessor
     from core.vlm_service import VLMServiceV50
@@ -42,7 +43,7 @@ except ImportError as e:
 
 
 def main():
-    st.title("🎯 PRISM Phase 5.7.4 - 문서 처리 시스템")
+    st.title("🎯 PRISM Phase 5.7.6.1 - 문서 처리 시스템 (긴급 패치)")
     
     # 초기화
     try:
@@ -64,29 +65,53 @@ def main():
         if 'last_processed_file' not in st.session_state or st.session_state['last_processed_file'] != file_key:
             # 새 파일이거나 아직 처리 안 했으면 처리
             with st.spinner('🔄 PDF 처리 중...'):
+                temp_path = None
+                
                 try:
-                    # 임시 파일 저장
-                    temp_path = Path(f"temp_{uploaded_file.name}")
+                    # ✅ Phase 5.7.6.1: 임시 파일 저장 (타임스탬프 추가)
+                    temp_filename = f"temp_{int(time.time())}_{uploaded_file.name}"
+                    temp_path = Path(temp_filename)
+                    
                     with open(temp_path, 'wb') as f:
                         f.write(uploaded_file.getvalue())
+                    
+                    logger.info(f"✅ 임시 파일 저장: {temp_path}")
                     
                     # Pipeline 초기화 및 처리
                     pipeline = Phase53Pipeline(pdf_processor, vlm_service)
                     result = pipeline.process_pdf(str(temp_path))
-                    
-                    # 임시 파일 삭제
-                    temp_path.unlink()
                     
                     # ✅ 결과를 session_state에 저장
                     st.session_state['last_processed_file'] = file_key
                     st.session_state['result'] = result
                     st.session_state['processing_error'] = None
                     
+                    logger.info("✅ 처리 완료 및 결과 저장")
+                    
                 except Exception as e:
-                    logger.error(f"처리 오류: {str(e)}", exc_info=True)
+                    logger.error(f"❌ 처리 오류: {str(e)}", exc_info=True)
                     st.session_state['processing_error'] = str(e)
                     st.error(f"❌ 처리 중 오류 발생: {str(e)}")
                     return
+                
+                finally:
+                    # ✅ Phase 5.7.6.1: 임시 파일 안전 삭제
+                    if temp_path and temp_path.exists():
+                        try:
+                            # 잠시 대기 (파일 핸들 해제 대기)
+                            time.sleep(0.5)
+                            
+                            # 삭제 시도
+                            temp_path.unlink()
+                            logger.info(f"✅ 임시 파일 삭제: {temp_path}")
+                        
+                        except PermissionError as pe:
+                            # Windows 파일 잠금 오류 - 무시
+                            logger.warning(f"⚠️ 임시 파일 삭제 실패 (파일 잠금): {temp_path}")
+                            logger.warning("   → 시스템이 나중에 자동 정리할 예정")
+                        
+                        except Exception as cleanup_e:
+                            logger.error(f"❌ 임시 파일 삭제 오류: {cleanup_e}")
         
         # ✅ 캐시된 결과 사용
         if 'processing_error' in st.session_state and st.session_state['processing_error']:
