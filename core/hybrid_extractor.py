@@ -250,15 +250,17 @@ class HybridExtractor:
     
     def _remove_inline_page_markers(self, content: str) -> str:
         """
-        ✅ Phase 5.7.7.2: 인라인 페이지 마커 제거 (미송 제안)
+        ✅ Phase 5.7.7.3: 인라인 페이지 마커 제거 강화 (미송 제안)
         
         문제:
         - "402-2" + "1." → "402-21."로 합쳐짐
-        - 페이지 번호가 항목 번호와 결합
+        - "402-3" + "용을" → "402-3용을"로 합쳐짐 (신규 발견)
+        - 페이지 번호가 항목 번호 또는 한글과 결합
         
         해결:
-        - 인라인 패턴 감지 및 제거
+        - 인라인 패턴 감지 및 제거 강화
         - "402-21." → "1."로 복구
+        - "402-3용을" → "용을"로 복구
         
         Args:
             content: 원본 텍스트
@@ -274,11 +276,15 @@ class HybridExtractor:
         # "402-2 1." → "1."
         content = re.sub(r'\b\d{3,4}-\d{1,2}\s+(\d+[.)])', r'\1', content)
         
-        # 3) 페이지 마커만 단독 (줄 중간)
+        # ✅ Phase 5.7.7.3: 3) 페이지 마커 + 한글 결합 (신규)
+        # "402-3용을" → "용을"
+        content = re.sub(r'\b\d{3,4}-\d{1,2}([가-힣])', r'\1', content)
+        
+        # 4) 페이지 마커만 단독 (줄 중간)
         # "...내용 402-2 내용..." → "...내용 내용..."
         content = re.sub(r'\s+\d{3,4}-\d{1,2}\s+', ' ', content)
         
-        logger.debug(f"      인라인 페이지 마커 제거 완료")
+        logger.debug(f"      인라인 페이지 마커 제거 완료 (Phase 5.7.7.3)")
         return content
     
     def _strip_page_dividers(self, content: str) -> str:

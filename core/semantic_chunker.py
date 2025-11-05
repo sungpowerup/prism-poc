@@ -131,8 +131,14 @@ class SemanticChunker:
         sections = []
         lines = content.split('\n')
         
-        # 조문 패턴: ## 제1조(목적) 또는 ### 제 1조(목적)
-        article_pattern = re.compile(r'^###+?\s*(제\s?\d+조(?:의\s?\d+)?)\s*(?:\(([^)]+)\))?')
+        # ✅ Phase 5.7.8: 헤더 패턴 완전 수정 (미송 제안)
+        # 1) "## 제 1조", "### 제1조", "# 제 10조" 모두 허용
+        # 2) 앵커(^) 강제 + 공백 유연 + 레벨 1~3 허용
+        # 패턴: ^\s{0,3}#{1,3}\s*제\s*\d+\s*조
+        article_pattern = re.compile(
+            r'^\s{0,3}#{1,3}\s*제\s*(\d+)\s*조\s*(?:\(([^)]*)\))?',
+            re.MULTILINE
+        )
         
         current_section = None
         
@@ -146,9 +152,12 @@ class SemanticChunker:
                     sections.append(current_section)
                 
                 # 새 섹션 시작
+                article_num = match.group(1)  # 숫자만
+                article_title = match.group(2) or ''  # 제목
+                
                 current_section = {
-                    'article_no': match.group(1),  # 제1조
-                    'article_title': match.group(2) or '',  # 목적
+                    'article_no': f'제{article_num}조',  # "제1조" 형식으로 통일
+                    'article_title': article_title,
                     'content': line + '\n'
                 }
             else:
