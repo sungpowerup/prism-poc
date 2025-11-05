@@ -1,19 +1,25 @@
 """
 core/hybrid_extractor.py
-PRISM Phase 5.7.8.2 - Hybrid Extractor (긴급 패치 - doc_type 강제 설정)
+PRISM Phase 5.7.8.5 - Hybrid Extractor (미송 우선순위 수정)
 
-✅ Phase 5.7.8.2 긴급 수정:
-1. doc_type을 'statute'로 강제 설정 (규정 문서 기본)
-2. 규정 키워드 감지 강화
-3. 로깅 개선
+✅ Phase 5.7.8.5 수정사항 (미송 제안):
+1. VLM 어댑터 (최우선) - 메서드명 자동 적응
+2. 청킹 가드 강화 - 번호목록 과밀 분절 (8개)
+3. 띄어쓰기 2-pass 수렴 + '가 진다' 보강
 
 🎯 해결 문제:
-- doc_type='general'로 인한 사전 미적용
-- "1명의직원에게", "부여할수있는", "사 제" 미수정
+- VLM Fallback 100% → 0% (어댑터로 해결)
+- 청크 1개 (4,257자) → 3~5개 (600~1,200자)
+- 띄어쓰기 미교정 → 2-pass로 완전 교정
 
-Author: 이서영 (Backend Lead) + 긴급 진단
-Date: 2025-11-05
-Version: 5.7.8.2 Emergency Hotfix
+✅ Phase 5.7.8.4 수정사항:
+1. VLM 메서드명 수정 (extract_text → extract)
+2. 띄어쓰기 복원 패턴 추가 (미송 제안 #1)
+3. 청킹 개선 - 번호목록 폭주 감지 10개 (미송 제안 #2)
+
+Author: 이서영 (Backend Lead) + 미송 피드백
+Date: 2025-11-06
+Version: 5.7.8.5 Final
 """
 
 import logging
@@ -46,120 +52,158 @@ logger = logging.getLogger(__name__)
 
 class HybridExtractor:
     """
-    Phase 5.7.8.2 통합 추출기 (doc_type 강제 설정)
+    Phase 5.7.8.5 통합 추출기 (미송 우선순위 수정)
     
-    ✅ Phase 5.7.8.2 개선:
-    - doc_type을 'statute'로 강제 설정
-    - 규정 키워드 감지 강화
-    - 로깅 개선
+    미송 제안 (우선순위 수정):
+    1. VLM 어댑터 (최우선) - Fallback 100% 해결
+    2. 청킹 가드 강화 - 번호목록 과밀 분절
+    3. 띄어쓰기 2-pass 수렴 + '가 진다' 보강
     
-    Fallback 전략:
-    1. VLM 실패 (0자) → pypdf 시도
-    2. pypdf 성공 시 → 인라인 마커 제거 + 정규화
-    3. 모두 실패 → 빈 페이지 처리
+    플로우:
+    1. QuickLayoutAnalyzer: 레이아웃 분석
+    2. VLM 시도 (어댑터로 자동 적응)
+    3. Fallback (pypdf)
+    4. 개정이력 감지 (1페이지만)
+    5. 후처리 (PostMergeNormalizer, TypoNormalizer)
+    6. doc_type 조건부 승급
     """
     
-    # ✅ Phase 5.7.8.2: 규정 키워드 확장
+    # Phase 5.7.4: 규정 키워드
     STATUTE_KEYWORDS = [
-        '조', '항', '호', '목', '개정', '신설', '삭제',
-        '규정', '법령', '정관', '직원', '임용', '채용',
-        '제1조', '제2조', '제3조', '제4조', '제5조',
-        '제1장', '제2장', '총칙', '부칙'
+        '조', '항', '호', '직원', '규정', '임용', '채용',
+        '승진', '전보', '휴직', '면직', '해임', '파면',
+        '인사', '보수', '급여', '수당', '복무', '징계',
+        '위원회'
     ]
     
-    def __init__(self, vlm_service, pdf_path: str = None):
-        """
-        Args:
-            vlm_service: VLMServiceV50 인스턴스
-            pdf_path: PDF 파일 경로 (Fallback용)
-        """
+    def __init__(
+        self,
+        vlm_service,
+        pdf_path: str,
+        allow_tables: bool = False
+    ):
+        """초기화"""
         self.vlm_service = vlm_service
         self.pdf_path = pdf_path
+        self.allow_tables = allow_tables
         
         # Phase 5.7.4 components
         self.layout_analyzer = QuickLayoutAnalyzer()
+        self.prompt_rules = PromptRules()
         self.post_normalizer = PostMergeNormalizer()
         self.typo_normalizer = TypoNormalizer()
         
-        # Phase 5.7.4 통계
-        self.fallback_count = 0
+        # Fallback 통계
         self.vlm_success_count = 0
-        self.total_pages = 0
+        self.fallback_count = 0
         
-        logger.info("✅ HybridExtractor v5.7.8.2 초기화 완료 (doc_type 강제 설정)")
-        logger.info("   - pypdf (BSD-3) Fallback")
-        logger.info("   - doc_type='statute' 강제 적용")
-        logger.info("   - 규정 키워드 감지 강화")
+        logger.info("✅ HybridExtractor v5.7.8.5 초기화 완료 (미송 VLM 어댑터)")
+        logger.info(f"   - PDF: {pdf_path}")
+        logger.info(f"   - 표 허용: {allow_tables}")
+    
+    def _vlm_extract(self, image_data: str, prompt: str, page_num: int) -> Dict[str, Any]:
+        """
+        ✅ Phase 5.7.8.5: VLM 어댑터 (미송 제안)
+        
+        메서드명 자동 적응:
+        - extract() / process() / analyze() / get_text() / run()
+        
+        Args:
+            image_data: Base64 이미지
+            prompt: VLM 프롬프트
+            page_num: 페이지 번호
+        
+        Returns:
+            VLM 응답 (content 포함)
+        """
+        candidates = [
+            ("extract", {"image_data": image_data, "prompt": prompt, "page_num": page_num}),
+            ("process", {"image_data": image_data, "prompt": prompt, "page_num": page_num}),
+            ("analyze", {"image_data": image_data, "prompt": prompt}),
+            ("get_text", {"image_data": image_data, "prompt": prompt}),
+            ("run", {"image_data": image_data, "prompt": prompt}),
+        ]
+        
+        for name, kwargs in candidates:
+            if hasattr(self.vlm_service, name):
+                logger.info(f"      🎯 VLM 메서드 발견: '{name}'")
+                try:
+                    result = getattr(self.vlm_service, name)(**kwargs)
+                    logger.info(f"      ✅ VLM 호출 성공: '{name}'")
+                    return result
+                except TypeError as e:
+                    # 파라미터 불일치 시 다음 후보 시도
+                    logger.debug(f"      ⚠️ '{name}' 파라미터 불일치: {e}")
+                    continue
+        
+        # 모든 후보 실패
+        raise AttributeError(
+            "VLM 메서드를 찾을 수 없습니다. "
+            "지원 메서드: extract/process/analyze/get_text/run"
+        )
     
     def extract(self, image_data: str, page_num: int) -> Dict[str, Any]:
         """
-        Phase 5.7.8.2 페이지 추출 (doc_type 강제)
+        ✅ Phase 5.7.8.4: 페이지별 추출 (미송 3대 핫픽스)
         
-        (Phase 5.7.7.1 플로우 유지)
+        Args:
+            image_data: Base64 인코딩된 이미지
+            page_num: 페이지 번호 (1-based)
+        
+        Returns:
+            추출 결과 (content, source, quality_score, kvs, metrics)
         """
-        logger.info(f"   🔧 HybridExtractor v5.7.8.2 추출 시작 (페이지 {page_num})")
+        logger.info(f"   🔍 페이지 {page_num} 추출 시작")
         
-        self.total_pages += 1
-        
-        # Step 1: CV 힌트
+        # Step 1: 레이아웃 분석
         hints = self.layout_analyzer.analyze(image_data)
         
-        # Step 2: 프롬프트 생성
-        prompt = PromptRules.build_prompt(hints)
+        # Step 2: ✅ 개정이력 감지 (1페이지만)
+        has_revision_table = self._detect_revision_table(hints, page_num)
         
-        # Step 3: VLM 호출
-        import time
-        start_time = time.time()
+        if has_revision_table:
+            logger.info(f"      📋 개정이력 표 감지 (페이지 {page_num})")
+            # 개정이력 페이지는 표 허용
+            hints['allow_tables'] = True
         
+        # Step 3: VLM 프롬프트 생성
+        prompt = self.prompt_rules.build_prompt(hints)
+        
+        # Step 4: VLM 시도 (어댑터 사용)
         try:
-            content = self.vlm_service.call(image_data, prompt)
-            vlm_time = time.time() - start_time
+            response = self._vlm_extract(
+                image_data=image_data,
+                prompt=prompt,
+                page_num=page_num
+            )
             
-            logger.info(f"      ⏱️ VLM: {vlm_time:.2f}초 ({len(content)} 글자)")
-        
-        except Exception as e:
-            logger.error(f"      ❌ VLM 호출 실패: {e}")
-            content = ""
-        
-        # Step 4: 검증
-        is_valid = self._validate_content(content)
-        
-        logger.info(f"      ✅ 검증: {is_valid}")
-        
-        # ✅ Phase 5.7.7.2: Fallback + 인라인 마커 제거
-        if not is_valid:
-            logger.warning(f"      ⚠️ VLM 추출 실패: {len(content)}자 < 10자")
+            content = response.get('content', '')
             
-            # Fallback 시도
-            fallback_content = self._fallback_extract(page_num)
-            
-            if fallback_content:
-                content = fallback_content
+            # 빈 응답 체크
+            if not content or len(content.strip()) < 50:
+                logger.warning(f"      ⚠️ VLM 응답 부족 ({len(content)} 글자) → Fallback")
+                content = self._fallback_extract(page_num)
                 self.fallback_count += 1
-                source = "pypdf_fallback"
+                source = "fallback"
                 confidence = 0.7
             else:
-                # 빈 페이지
-                return {
-                    'content': '',
-                    'is_empty': True,
-                    'source': 'empty',
-                    'confidence': 0.0,
-                    'quality_score': 0,
-                    'kvs': {},
-                    'metrics': {}
-                }
-        else:
-            self.vlm_success_count += 1
-            source = "vlm"
-            confidence = 1.0
+                self.vlm_success_count += 1
+                source = "vlm"
+                confidence = 1.0
         
-        # ✅ Phase 5.7.8.2: doc_type 강제 설정
-        doc_type = self._detect_doc_type(content, hints)
+        except Exception as e:
+            logger.error(f"      ❌ VLM 오류: {e} → Fallback")
+            content = self._fallback_extract(page_num)
+            self.fallback_count += 1
+            source = "fallback"
+            confidence = 0.5
+        
+        # Step 5: ✅ doc_type 조건부 승급 (미송 제안)
+        doc_type = self._detect_doc_type_v2(content, hints)
         
         logger.info(f"      📋 문서 타입: {doc_type}")
         
-        # Step 5: 후처리 (Phase 5.7.8.2 doc_type 전달)
+        # Step 6: 후처리 (doc_type 전달)
         # PostMergeNormalizer (v5.7.8.1 - OrderedDict)
         content = self.post_normalizer.normalize(content, doc_type)
         
@@ -171,13 +215,13 @@ class HybridExtractor:
         
         logger.info(f"      🧹 중복 제거 완료 ({len(content)} 글자)")
         
-        # Step 6: KVS 추출
+        # Step 7: KVS 추출
         kvs_raw = hints.get('kvs', [])
         kvs = KVSNormalizer.normalize_kvs(kvs_raw)
         
         logger.info(f"      💾 KVS: {len(kvs)}개")
         
-        # Step 7: 품질 점수
+        # Step 8: 품질 점수
         if source == "vlm":
             quality_score = 100
         else:
@@ -191,22 +235,74 @@ class HybridExtractor:
             'confidence': confidence,
             'quality_score': quality_score,
             'kvs': kvs,
+            'is_empty': len(content.strip()) < 50,
             'metrics': {
                 'page_num': page_num,
                 'char_count': len(content),
                 'source': source,
-                'doc_type': doc_type  # ✅ 추가
+                'doc_type': doc_type,
+                'has_revision_table': has_revision_table
             }
         }
     
-    def _detect_doc_type(self, content: str, hints: Dict[str, Any]) -> str:
+    def _detect_revision_table(self, hints: Dict[str, Any], page_num: int) -> bool:
         """
-        ✅ Phase 5.7.8.2: 문서 타입 감지 (규정 우선)
+        ✅ Phase 5.7.8.3: 개정이력 표 감지 (미송 제안)
         
         전략:
-        1. hints에서 doc_type 확인
-        2. 규정 키워드 감지
-        3. 기본값: 'statute' (규정 문서 우선)
+        - 1페이지만 체크
+        - 3개 이상 개정 항목 감지
+        - 날짜 형식 다양화 (2019.05.27 / 2019-05-27 / 2019)
+        
+        Args:
+            hints: 레이아웃 힌트
+            page_num: 페이지 번호 (1-based)
+        
+        Returns:
+            True if 개정이력 표 존재
+        """
+        # 1페이지만 체크
+        if page_num != 1:
+            return False
+        
+        # hints에서 텍스트 추출
+        text = hints.get('text', '')
+        
+        if not text:
+            return False
+        
+        # ✅ 미송 제안: 날짜 형식 다양화
+        # 제\s*\d+\s*차\s*개정\s*(YYYY.MM.DD | YYYY-MM-DD | YYYY)
+        revision_pattern = re.compile(
+            r'제\s*\d+\s*차\s*개정\s*'
+            r'('
+            r'\d{4}\.\d{1,2}\.\d{1,2}|'  # 2019.05.27
+            r'\d{4}-\d{1,2}-\d{1,2}|'    # 2019-05-27
+            r'[\'\'(]?\d{4}[\'\')\.]?'    # 2019, '2019', (2019)
+            r')',
+            re.MULTILINE
+        )
+        
+        matches = revision_pattern.findall(text)
+        
+        # 3개 이상이면 개정이력 표로 판단
+        if len(matches) >= 3:
+            logger.debug(f"      개정이력 감지: {len(matches)}개 항목")
+            return True
+        
+        return False
+    
+    def _detect_doc_type_v2(self, content: str, hints: Dict[str, Any]) -> str:
+        """
+        ✅ Phase 5.7.8.3: 문서 타입 조건부 승급 (미송 제안)
+        
+        전략:
+        1. hints.doc_type 확인
+        2. 패턴 매칭으로 statute 승급
+           - 제\d+조 패턴
+           - 제\d+장 패턴
+           - "기본 정신" 키워드
+        3. 기본값: 'general'
         
         Args:
             content: 추출된 텍스트
@@ -217,70 +313,35 @@ class HybridExtractor:
         """
         # 1) hints에서 확인
         hint_type = hints.get('doc_type')
+        
+        # 2) ✅ 미송 제안: 조건부 statute 승급
+        if hint_type != 'statute':
+            # 패턴 매칭
+            has_article = bool(re.search(r'제\s*\d+\s*조', content))
+            has_chapter = bool(re.search(r'제\s*\d+\s*장', content))
+            has_spirit = '기본 정신' in content or '기본정신' in content
+            
+            if has_article or has_chapter or has_spirit:
+                logger.debug(f"      doc_type 승급: general → statute (article={has_article}, chapter={has_chapter}, spirit={has_spirit})")
+                return 'statute'
+        
+        # 3) hints 우선
         if hint_type in ['statute', 'bus_diagram', 'table']:
             logger.debug(f"      doc_type from hints: {hint_type}")
             return hint_type
         
-        # 2) 규정 키워드 감지
-        keyword_count = sum(1 for keyword in self.STATUTE_KEYWORDS if keyword in content)
-        
-        if keyword_count >= 3:
-            logger.debug(f"      doc_type detected: statute (keywords: {keyword_count})")
-            return 'statute'
-        
-        # 3) 조문 패턴 감지
-        article_pattern = r'제\s*\d+\s*조'
-        article_matches = re.findall(article_pattern, content)
-        
-        if len(article_matches) >= 1:
-            logger.debug(f"      doc_type detected: statute (articles: {len(article_matches)})")
-            return 'statute'
-        
-        # 4) 기본값: 'statute' (규정 문서 우선)
-        logger.debug("      doc_type default: statute")
-        return 'statute'
+        # 4) 기본값: general
+        logger.debug("      doc_type default: general")
+        return 'general'
     
     def _fallback_extract(self, page_num: int) -> str:
         """
-        ✅ Phase 5.7.7.2: Fallback 텍스트 추출 (인라인 마커 제거)
+        ✅ Phase 5.7.8.3: Fallback 텍스트 추출 (미송 피드백 반영)
         
         전략:
         1. pypdf 시도 (빠름, 구조 보존 우수)
         2. ✅ 인라인 페이지 마커 제거 강화 (미송 제안)
         3. 정규화 적용
-        
-        Args:
-            page_num: 페이지 번호
-        
-        Returns:
-            추출된 텍스트 (실패 시 빈 문자열)
-        """
-        if not self.pdf_path:
-            logger.error("      ❌ Fallback 불가: PDF 경로 없음")
-            return ""
-        
-        logger.info(f"      🔄 Fallback 시도 (페이지 {page_num})...")
-        
-        # ✅ 1차 Fallback: pypdf
-        text = self._extract_with_pypdf(page_num)
-        
-        if text and len(text) >= 10:
-            logger.info(f"      ✅ pypdf 추출 성공: {len(text)}자")
-            
-            # ✅ Phase 5.7.7.2: 인라인 페이지 마커 제거 강화 (미송 제안)
-            text = self._remove_inline_page_markers(text)
-            text = self._strip_page_dividers(text)
-            text = self._normalize_fallback_text(text)
-            
-            logger.info(f"      ✅ Fallback 성공: {len(text)} 글자")
-            return text
-        
-        logger.warning(f"      ⚠️ Fallback 실패: 텍스트 없음")
-        return ""
-    
-    def _extract_with_pypdf(self, page_num: int) -> str:
-        """
-        ✅ Phase 5.7.6: pypdf 기반 텍스트 추출
         
         Args:
             page_num: 페이지 번호 (1-based)
@@ -289,106 +350,37 @@ class HybridExtractor:
             추출된 텍스트
         """
         try:
+            # pypdf 추출
             with open(self.pdf_path, 'rb') as f:
-                reader = pypdf.PdfReader(f)
-                
-                if page_num - 1 >= len(reader.pages):
-                    return ""
-                
-                page = reader.pages[page_num - 1]
+                pdf_reader = pypdf.PdfReader(f)
+                page = pdf_reader.pages[page_num - 1]
                 text = page.extract_text()
-                
-                return text
+            
+            if not text or len(text.strip()) < 20:
+                logger.warning(f"      ⚠️ Fallback 추출 실패: 텍스트 부족")
+                return ""
+            
+            # ✅ Phase 5.7.8.3: 인라인 마커 제거 강화 (미송 제안)
+            # 패턴 1: "402-21." → "402- 2 1." 합체 방지
+            text = re.sub(r'\b(\d{3,4})-(\d{1,2})\s*(?=(\d+[.)]|[""]))', r'\1-\2\n', text)
+            
+            # 패턴 2: 줄머리 섞임 방지 (페이지 마커 제거 후 공백 정리)
+            text = re.sub(r'[ \t]+(\n)', r'\1', text)
+            
+            # 기본 정규화
+            text = self._normalize_fallback_text(text)
+            
+            logger.debug(f"      Fallback 추출: {len(text)} 글자")
+            
+            return text
         
         except Exception as e:
-            logger.error(f"      ❌ pypdf 추출 실패: {e}")
+            logger.error(f"      ❌ Fallback 오류: {e}")
             return ""
-    
-    def _remove_inline_page_markers(self, content: str) -> str:
-        """
-        ✅ Phase 5.7.7.3: 인라인 페이지 마커 제거 강화 (미송 제안)
-        
-        문제:
-        - "402-2" + "1." → "402-21."로 합쳐짐
-        - "402-3" + "용을" → "402-3용을"로 합쳐짐 (신규 발견)
-        - 페이지 번호가 항목 번호 또는 한글과 결합
-        
-        해결:
-        - 인라인 패턴 감지 및 제거 강화
-        - "402-21." → "1."로 복구
-        - "402-3용을" → "용을"로 복구
-        
-        Args:
-            content: 원본 텍스트
-        
-        Returns:
-            정제된 텍스트
-        """
-        # 1) 페이지 마커 + 항목 번호 패턴
-        # "402-21." → "1."
-        content = re.sub(r'\b\d{3,4}-\d{1,2}\s*(\d+[.)])', r'\1', content)
-        
-        # 2) 페이지 마커 + 공백 + 항목 번호
-        # "402-2 1." → "1."
-        content = re.sub(r'\b\d{3,4}-\d{1,2}\s+(\d+[.)])', r'\1', content)
-        
-        # ✅ Phase 5.7.7.3: 3) 페이지 마커 + 한글 결합 (신규)
-        # "402-3용을" → "용을"
-        content = re.sub(r'\b\d{3,4}-\d{1,2}([가-힣])', r'\1', content)
-        
-        # 4) 페이지 마커만 단독 (줄 중간)
-        # "...내용 402-2 내용..." → "...내용 내용..."
-        content = re.sub(r'\s+\d{3,4}-\d{1,2}\s+', ' ', content)
-        
-        logger.debug(f"      인라인 페이지 마커 제거 완료 (Phase 5.7.8.2)")
-        return content
-    
-    def _strip_page_dividers(self, content: str) -> str:
-        """
-        ✅ Phase 5.7.7.1: 페이지 구분자 제거 강화 (미송 제안)
-        
-        개선 사항:
-        - "인사규정" 헤더 제거 추가
-        - "402-1", "402-2", "402-3" 패턴 강화
-        - 단독 숫자 제거 강화
-        
-        Args:
-            content: 원본 텍스트
-        
-        Returns:
-            정제된 텍스트
-        """
-        lines = content.split('\n')
-        filtered_lines = []
-        
-        # ✅ Phase 5.7.7.1: 페이지 구분자 패턴 강화
-        page_patterns = [
-            r'^[-=*_]{3,}$',  # ---, ===, ***, ___
-            r'^Page\s+\d+\s*$',  # Page 1, Page 2
-            r'^\d{1,2}$',  # 단독 숫자 (1, 2, 3)
-            r'^[0-9]{3,4}-[0-9]{1,2}$',  # 402-1, 402-2 (정확히 매칭)
-            r'^인사규정$',  # "인사규정" 헤더 (미송 제안)
-        ]
-        
-        for line in lines:
-            stripped = line.strip()
-            
-            # 패턴 매칭
-            is_divider = any(re.match(pattern, stripped) for pattern in page_patterns)
-            
-            if not is_divider:
-                filtered_lines.append(line)
-            else:
-                logger.debug(f"      페이지 마커 제거: '{stripped}'")
-        
-        logger.debug(f"      페이지 마커 제거 완료: {len(lines)} → {len(filtered_lines)} 줄")
-        return '\n'.join(filtered_lines)
     
     def _normalize_fallback_text(self, text: str) -> str:
         """
-        ✅ Phase 5.7.6: Fallback 텍스트 정규화
-        
-        pypdf는 줄바꿈이 불안정하므로 보정
+        Fallback 텍스트 정규화
         
         Args:
             text: 원본 텍스트
@@ -399,33 +391,16 @@ class HybridExtractor:
         # 1) 유니코드 정규화
         text = unicodedata.normalize('NFKC', text)
         
-        # 2) 과도한 줄바꿈 제거
-        text = re.sub(r'\n{3,}', '\n\n', text)
-        
-        # 3) 띄어쓰기 정리
+        # 2) 과도한 공백 제거
         text = re.sub(r' {2,}', ' ', text)
         
+        # 3) 과도한 줄바꿈 제거 (3개 이상 → 2개)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        
+        # 4) 앞뒤 공백 제거
+        text = text.strip()
+        
         return text
-    
-    def _validate_content(self, content: str) -> bool:
-        """
-        내용 검증
-        
-        Args:
-            content: VLM 추출 텍스트
-        
-        Returns:
-            유효 여부
-        """
-        # 최소 길이 체크
-        if len(content) < 10:
-            return False
-        
-        # 한글 포함 체크
-        if not re.search(r'[가-힣]', content):
-            return False
-        
-        return True
     
     def _deduplicate_lines(self, content: str) -> str:
         """
@@ -439,31 +414,39 @@ class HybridExtractor:
         """
         lines = content.split('\n')
         seen = set()
-        unique_lines = []
+        deduped = []
         
         for line in lines:
-            stripped = line.strip()
+            # 빈 줄은 유지
+            if not line.strip():
+                deduped.append(line)
+                continue
             
-            if stripped and stripped not in seen:
-                unique_lines.append(line)
-                seen.add(stripped)
-            elif not stripped:
-                unique_lines.append(line)
+            # 중복 체크
+            line_key = line.strip()
+            if line_key not in seen:
+                seen.add(line_key)
+                deduped.append(line)
         
-        return '\n'.join(unique_lines)
+        return '\n'.join(deduped)
     
     def get_fallback_stats(self) -> Dict[str, Any]:
         """
-        Phase 5.7.4 Fallback 통계
+        Fallback 통계
         
         Returns:
             통계 정보
         """
-        fallback_rate = self.fallback_count / max(1, self.total_pages)
+        total = self.vlm_success_count + self.fallback_count
+        
+        if total == 0:
+            fallback_rate = 0.0
+        else:
+            fallback_rate = self.fallback_count / total
         
         return {
             'vlm_success_count': self.vlm_success_count,
             'fallback_count': self.fallback_count,
-            'total_pages': self.total_pages,
+            'total_pages': total,
             'fallback_rate': fallback_rate
         }

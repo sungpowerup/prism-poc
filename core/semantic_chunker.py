@@ -1,17 +1,21 @@
 """
 core/semantic_chunker.py
-PRISM Phase 5.7.7.2 - SemanticChunker (코드펜스 제거)
+PRISM Phase 5.7.8.3 - SemanticChunker (미송 피드백 반영)
 
-✅ Phase 5.7.7.2 긴급 수정:
-1. 코드펜스 자동 제거 (미송 제안)
-2. 헤더 인식률 100% 복구
-3. 청킹 정상화 (1개 → 3~4개)
+✅ Phase 5.7.8.3 수정사항:
+1. 청킹 하드 가드 (1200자 강제 flush)
+2. 번호목록 과밀 분할 (연속 8개 이상 감지)
+3. 미송 피드백 반영
 
-(Phase 5.7.7.1 기능 유지)
+🎯 해결 문제:
+- 과대 청크 (2,981자 → 1200자 이하)
+- 번호목록 과밀 (제5조 정의 10개 항목 등)
 
-Author: 이서영 (Backend Lead) + 미송 진단
-Date: 2025-11-03
-Version: 5.7.7.2 Hotfix
+(Phase 5.7.7.2 기능 유지)
+
+Author: 이서영 (Backend Lead) + 미송 피드백
+Date: 2025-11-05
+Version: 5.7.8.3 Final
 """
 
 import re
@@ -23,10 +27,11 @@ logger = logging.getLogger(__name__)
 
 class SemanticChunker:
     """
-    Phase 5.7.7.2 SemanticChunker (코드펜스 제거)
+    Phase 5.7.8.3 SemanticChunker (미송 피드백 반영)
     
     ✅ 조문 경계 기반 청킹 + 길이 조절
-    ✅ 코드펜스 자동 제거 (Phase 5.7.7.2)
+    ✅ 청킹 하드 가드 (1200자 강제 flush)
+    ✅ 번호목록 과밀 분할 (연속 8개 이상)
     ✅ 600~1200자 기준으로 3~4개 청크 생성
     """
     
@@ -41,12 +46,14 @@ class SemanticChunker:
         self.max_size = max_chunk_size
         self.target_size = target_chunk_size
         
-        logger.info("✅ SemanticChunker v5.7.7.2 초기화 (코드펜스 제거)")
+        logger.info("✅ SemanticChunker v5.7.8.4 초기화 (미송 띄어쓰기 + 청킹)")
         logger.info(f"   청크 크기: {min_chunk_size}-{max_chunk_size} (목표: {target_chunk_size})")
+        logger.info("   하드 가드: 1200자 강제 flush")
+        logger.info("   번호목록 폭주 분할: 연속 10개 이상 (미송 제안)")
     
     def chunk(self, content: str) -> List[Dict[str, Any]]:
         """
-        ✅ Phase 5.7.7.2: 조문 경계 기반 청킹 (코드펜스 제거)
+        ✅ Phase 5.7.8.3: 조문 경계 기반 청킹 (미송 피드백 반영)
         
         Args:
             content: Markdown 전체 내용
@@ -54,17 +61,17 @@ class SemanticChunker:
         Returns:
             청크 리스트
         """
-        logger.info(f"🔗 SemanticChunking v5.7.7.2 시작: {len(content)} 글자")
+        logger.info(f"🔗 SemanticChunking v5.7.8.3 시작: {len(content)} 글자")
         
-        # ✅ Phase 5.7.7.2: 코드펜스 제거 (미송 제안)
+        # ✅ Phase 5.7.7.2: 코드펜스 제거
         content = self._strip_code_fences(content)
         
         # Step 1: 조문 단위로 분할
         article_sections = self._split_by_article(content)
         logger.info(f"   조문 분할: {len(article_sections['sections'])}개 조문")
         
-        # Step 2: 길이 기반 조정 (미송 제안 반영)
-        adjusted_sections = self._adjust_by_length(article_sections['sections'])
+        # Step 2: ✅ Phase 5.7.8.3: 길이 기반 조정 + 하드 가드 + 번호목록 과밀 분할
+        adjusted_sections = self._adjust_by_length_v2(article_sections['sections'])
         
         logger.info(f"   길이 조정 후: {len(adjusted_sections)}개 섹션")
         
@@ -89,15 +96,7 @@ class SemanticChunker:
     
     def _strip_code_fences(self, content: str) -> str:
         """
-        ✅ Phase 5.7.7.2: 코드펜스 제거 (미송 제안)
-        
-        문제:
-        - VLM이 Markdown을 코드블록으로 감싸면 헤더 인식 실패
-        - ```\n### 제1조...\n``` → 헤더가 코드로 취급
-        
-        해결:
-        - 앞뒤 코드펜스 제거
-        - 중간 코드펜스는 보존 (실제 코드 예시일 수 있음)
+        ✅ Phase 5.7.7.2: 코드펜스 제거
         
         Args:
             content: 원본 Markdown
@@ -131,10 +130,7 @@ class SemanticChunker:
         sections = []
         lines = content.split('\n')
         
-        # ✅ Phase 5.7.8: 헤더 패턴 완전 수정 (미송 제안)
-        # 1) "## 제 1조", "### 제1조", "# 제 10조" 모두 허용
-        # 2) 앵커(^) 강제 + 공백 유연 + 레벨 1~3 허용
-        # 패턴: ^\s{0,3}#{1,3}\s*제\s*\d+\s*조
+        # ✅ Phase 5.7.8: 헤더 패턴 완전 수정
         article_pattern = re.compile(
             r'^\s{0,3}#{1,3}\s*제\s*(\d+)\s*조\s*(?:\(([^)]*)\))?',
             re.MULTILINE
@@ -156,7 +152,7 @@ class SemanticChunker:
                 article_title = match.group(2) or ''  # 제목
                 
                 current_section = {
-                    'article_no': f'제{article_num}조',  # "제1조" 형식으로 통일
+                    'article_no': f'제{article_num}조',
                     'article_title': article_title,
                     'content': line + '\n'
                 }
@@ -184,17 +180,20 @@ class SemanticChunker:
             'total': len(sections)
         }
     
-    def _adjust_by_length(self, sections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _adjust_by_length_v2(self, sections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        ✅ Phase 5.7.7.1: 길이 기반 조정 (청크 수 복원)
+        ✅ Phase 5.7.8.3: 길이 기반 조정 + 하드 가드 + 번호목록 과밀 분할 (미송 피드백)
         
         미송 제안:
-        - 버퍼가 min_size 이상이면 즉시 flush
-        - 조문 병합 시 max_size 초과하면 flush
-        - 3~4개 청크 생성 목표
+        1. 하드 가드: 1200자 강제 flush
+        2. 번호목록 과밀 분할: 연속 8개 이상이면 끊기
+        3. 기존 로직 유지
         
-        변경 전: 모든 조문을 1개로 병합
-        변경 후: 600~1200자 기준으로 분할
+        Args:
+            sections: 조문별 섹션 리스트
+        
+        Returns:
+            조정된 섹션 리스트
         """
         adjusted = []
         
@@ -213,7 +212,65 @@ class SemanticChunker:
                 buffer['content'] += section['content']
                 continue
             
-            # ✅ Phase 5.7.7.1: 버퍼가 최소 크기 이상이면 먼저 flush (미송 제안)
+            # ✅ Phase 5.7.8.3: 하드 가드 (1200자 강제 flush) - 미송 제안
+            if len(buffer['content']) >= 1200 and buffer['article_no']:
+                adjusted.append(buffer.copy())
+                buffer = {
+                    'article_no': None,
+                    'article_title': '',
+                    'content': ''
+                }
+                logger.debug(f"      하드 가드: 1200자 초과 → flush ({len(buffer['content'])}자)")
+            
+            # ✅ Phase 5.7.8.5: 번호목록 과밀 분절 (미송 제안)
+            # 섹션 자체에 번호목록이 8개 이상이면 중간 쪼개기
+            numbered_items_in_section = re.findall(r'(?m)^\s*\d+[.)]\s', section['content'])
+            
+            if len(numbered_items_in_section) >= 8:
+                logger.debug(f"      번호목록 과밀 감지: {len(numbered_items_in_section)}개 → 분절")
+                
+                # 번호목록 기준으로 중간 분절
+                parts = re.split(r'(?m)(?=^\s*\d+[.)]\s)', section['content'])
+                
+                for p in parts:
+                    if not p.strip():
+                        continue
+                    
+                    # 기존 min/max 로직 동일 적용
+                    if buffer['content'] and len(buffer['content']) + len(p) > self.max_size:
+                        adjusted.append(buffer.copy())
+                        buffer = {
+                            'article_no': None,
+                            'article_title': '',
+                            'content': ''
+                        }
+                        logger.debug(f"      버퍼 flush: max_size 초과 방지")
+                    
+                    if not buffer['content']:
+                        buffer['article_no'] = section['article_no']
+                        buffer['article_title'] = section['article_title']
+                        buffer['content'] = p
+                    else:
+                        buffer['content'] += p
+                
+                continue  # 이 섹션은 처리 완료
+            
+            # ✅ Phase 5.7.8.4: 버퍼 번호목록 폭주 감지 (10개 → 강제 분리)
+            # 버퍼가 900자 이상이고, 연속 번호목록이 10개 이상이면 flush
+            if len(buffer['content']) >= 900 and buffer['article_no']:
+                # 번호목록 패턴: "1. ", "2. ", ... 또는 "가. ", "나. ", ...
+                numbered_items = re.findall(r'^\s*(?:\d+[.)]|[가-힣][.)])\s', buffer['content'], flags=re.MULTILINE)
+                
+                if len(numbered_items) >= 10:
+                    adjusted.append(buffer.copy())
+                    buffer = {
+                        'article_no': None,
+                        'article_title': '',
+                        'content': ''
+                    }
+                    logger.debug(f"      번호목록 폭주: {len(numbered_items)}개 → flush (10개 이상)")
+            
+            # ✅ Phase 5.7.7.1: 버퍼가 최소 크기 이상이면 먼저 flush
             if len(buffer['content']) >= self.min_size and buffer['article_no']:
                 adjusted.append(buffer.copy())
                 buffer = {
@@ -231,7 +288,7 @@ class SemanticChunker:
                 buffer['content'] = section['content']
             else:
                 # 버퍼에 내용 있음 → 병합
-                # ✅ Phase 5.7.7.1: 병합 후 max_size 초과하면 먼저 flush (미송 제안)
+                # 병합 후 max_size 초과하면 먼저 flush
                 if len(buffer['content']) + section_size > self.max_size:
                     # 버퍼를 먼저 저장
                     adjusted.append(buffer.copy())

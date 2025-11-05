@@ -1,21 +1,21 @@
 """
 core/post_merge_normalizer.py
-PRISM Phase 5.7.8.1 - PostMergeNormalizer (긴급 패치 - 순서 명시)
+PRISM Phase 5.7.8.3 - PostMergeNormalizer (미송 피드백 반영)
 
-✅ Phase 5.7.8.1 긴급 수정:
-1. OrderedDict로 사전 순서 명시
-2. Longest-First 정책 적용
-3. 헤더 라인 보호 (### 제n조는 스킵)
-4. 적용 순서 로깅
+✅ Phase 5.7.8.3 수정사항:
+1. 헤더 보호 강화 ("기본 정신", "제n장" 추가)
+2. 헤더 삽입 금지 (보호만)
+3. 미송 피드백 반영
 
 🎯 해결 문제:
-- 복합 띄어쓰기 패턴 미적용
+- "기본 정신", "제1장 총칙" 누락 방지
 - 헤더 라인 오수정 방지
-- Dict 순서 불안정
 
-Author: 이서영 (Backend Lead) + GPT 제안 반영
+(Phase 5.7.8.1 기능 유지 - OrderedDict)
+
+Author: 이서영 (Backend Lead) + 미송 피드백
 Date: 2025-11-05
-Version: 5.7.8.1 Hotfix
+Version: 5.7.8.3 Final
 """
 
 import re
@@ -28,17 +28,18 @@ logger = logging.getLogger(__name__)
 
 class PostMergeNormalizer:
     """
-    Phase 5.7.8.1 후처리 정규화 (순서 최적화)
+    Phase 5.7.8.3 후처리 정규화 (미송 피드백 반영)
     
     핵심 개선:
     - OrderedDict로 순서 보장
     - Longest-First 정책
-    - 헤더 라인 보호
+    - ✅ 헤더 보호 강화 (미송 제안)
     
     역할:
     - Fallback 후 텍스트 정리
     - 띄어쓰기 복원
     - 줄바꿈 정규화
+    - ✅ 헤더 라인 보호 (제n조, 제n장, 기본 정신)
     """
     
     # ✅ Phase 5.7.8.1: OrderedDict로 순서 명시 (Longest-First)
@@ -47,7 +48,7 @@ class PostMergeNormalizer:
         # 🔥 복합 패턴 (긴 것부터) - 최우선 적용
         # ========================================
         
-        # Phase 5.7.8: 고빈도 띄어쓰기 (미송 제안)
+        # Phase 5.7.8: 고빈도 띄어쓰기
         ('1명의직원에게부여할수있는', '1명의 직원에게 부여할 수 있는'),
         ('직원에게부여할수있는', '직원에게 부여할 수 있는'),
         ('1명의 직원에게부여할수있는', '1명의 직원에게 부여할 수 있는'),
@@ -89,14 +90,14 @@ class PostMergeNormalizer:
     
     def __init__(self):
         """초기화"""
-        logger.info("✅ PostMergeNormalizer v5.7.8.1 초기화 완료 (순서 최적화)")
+        logger.info("✅ PostMergeNormalizer v5.7.8.3 초기화 완료 (미송 피드백 반영)")
         logger.info(f"   📖 고빈도 사전: {len(self.HIGH_FREQ_TERMS)}개 (OrderedDict)")
         logger.info("   🎯 적용 정책: Longest-First (긴 패턴 우선)")
-        logger.info("   🛡️ 헤더 보호: ### 제n조 라인 스킵")
+        logger.info("   🛡️ 헤더 보호: ### 제n조, 제n장, 기본 정신")
     
     def normalize(self, content: str, doc_type: str = 'general') -> str:
         """
-        ✅ Phase 5.7.8.1: 후처리 정규화 (헤더 보호)
+        ✅ Phase 5.7.8.3: 후처리 정규화 (헤더 보호 강화 - 미송 피드백)
         
         Args:
             content: Markdown 텍스트
@@ -105,17 +106,17 @@ class PostMergeNormalizer:
         Returns:
             정규화된 텍스트
         """
-        logger.info(f"   🔧 PostMergeNormalizer v5.7.8.1 시작 (doc_type: {doc_type})")
+        logger.info(f"   🔧 PostMergeNormalizer v5.7.8.3 시작 (doc_type: {doc_type})")
         
         original_len = len(content)
         
-        # ✅ Phase 5.7.8.1: 헤더 라인 보호
+        # ✅ Phase 5.7.8.3: 헤더 라인 보호 강화 (미송 제안)
         lines = content.split('\n')
         protected_lines = []
         
         for line in lines:
-            # 헤더 라인 감지 (### 제n조)
-            if re.match(r'^\s*#{1,3}\s*제\s*\d+\s*조', line):
+            # ✅ 헤더 감지 (제n조, 제n장, 기본 정신)
+            if self._is_protected_header(line):
                 # 헤더는 그대로 보존
                 protected_lines.append(line)
                 logger.debug(f"      헤더 보호: {line[:50]}")
@@ -138,6 +139,35 @@ class PostMergeNormalizer:
         
         return content
     
+    def _is_protected_header(self, line: str) -> bool:
+        """
+        ✅ Phase 5.7.8.3: 헤더 라인 판단 (미송 제안)
+        
+        보호 대상:
+        - ### 제n조 (기존)
+        - ### 제n장 (NEW)
+        - 기본 정신 (NEW)
+        
+        Args:
+            line: 텍스트 라인
+        
+        Returns:
+            True if 헤더 라인
+        """
+        # 1) 제n조 헤더
+        if re.match(r'^\s*#{1,3}\s*제\s*\d+\s*조', line):
+            return True
+        
+        # 2) ✅ NEW: 제n장 헤더
+        if re.match(r'^\s*#{0,3}\s*제\s*\d+\s*장', line):
+            return True
+        
+        # 3) ✅ NEW: 기본 정신
+        if re.search(r'기본\s*정신', line):
+            return True
+        
+        return False
+    
     def _normalize_line(self, line: str, doc_type: str) -> str:
         """
         개별 라인 정규화
@@ -149,8 +179,6 @@ class PostMergeNormalizer:
         Returns:
             정규화된 라인
         """
-        original_line = line
-        
         # 고빈도 용어 사전 적용 (규정 모드만)
         if doc_type == 'statute':
             for wrong, correct in self.HIGH_FREQ_TERMS.items():
@@ -178,6 +206,10 @@ class PostMergeNormalizer:
         # 조문 헤더 앞뒤 정리
         content = re.sub(r'\n+(#{1,3}\s*제\s*\d+\s*조)', r'\n\n\1', content)
         content = re.sub(r'(#{1,3}\s*제\s*\d+\s*조[^\n]*)\n+', r'\1\n', content)
+        
+        # ✅ 제n장 헤더 앞뒤 정리
+        content = re.sub(r'\n+(#{0,3}\s*제\s*\d+\s*장)', r'\n\n\1', content)
+        content = re.sub(r'(#{0,3}\s*제\s*\d+\s*장[^\n]*)\n+', r'\1\n', content)
         
         return content
     
