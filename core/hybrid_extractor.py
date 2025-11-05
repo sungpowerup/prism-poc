@@ -1,17 +1,19 @@
 """
 core/hybrid_extractor.py
-PRISM Phase 5.7.7.2 - Hybrid Extractor (인라인 페이지 마커 제거)
+PRISM Phase 5.7.8.2 - Hybrid Extractor (긴급 패치 - doc_type 강제 설정)
 
-✅ Phase 5.7.7.2 긴급 수정:
-1. 인라인 페이지 마커 제거 (미송 제안)
-2. "402-21." → "1." 분리
-3. Fallback 후 정제 강화
+✅ Phase 5.7.8.2 긴급 수정:
+1. doc_type을 'statute'로 강제 설정 (규정 문서 기본)
+2. 규정 키워드 감지 강화
+3. 로깅 개선
 
-(Phase 5.7.7.1 기능 유지)
+🎯 해결 문제:
+- doc_type='general'로 인한 사전 미적용
+- "1명의직원에게", "부여할수있는", "사 제" 미수정
 
-Author: 이서영 (Backend Lead) + 미송 진단
-Date: 2025-11-03
-Version: 5.7.7.2 Hotfix
+Author: 이서영 (Backend Lead) + 긴급 진단
+Date: 2025-11-05
+Version: 5.7.8.2 Emergency Hotfix
 """
 
 import logging
@@ -44,18 +46,26 @@ logger = logging.getLogger(__name__)
 
 class HybridExtractor:
     """
-    Phase 5.7.7.2 통합 추출기 (인라인 페이지 마커 제거)
+    Phase 5.7.8.2 통합 추출기 (doc_type 강제 설정)
     
-    ✅ Phase 5.7.7.2 개선:
-    - 인라인 페이지 마커 제거 (미송 제안)
-    - "402-2" + "1." 분리 → "1."만 남김
-    - Fallback 후 정제 강화
+    ✅ Phase 5.7.8.2 개선:
+    - doc_type을 'statute'로 강제 설정
+    - 규정 키워드 감지 강화
+    - 로깅 개선
     
     Fallback 전략:
     1. VLM 실패 (0자) → pypdf 시도
     2. pypdf 성공 시 → 인라인 마커 제거 + 정규화
     3. 모두 실패 → 빈 페이지 처리
     """
+    
+    # ✅ Phase 5.7.8.2: 규정 키워드 확장
+    STATUTE_KEYWORDS = [
+        '조', '항', '호', '목', '개정', '신설', '삭제',
+        '규정', '법령', '정관', '직원', '임용', '채용',
+        '제1조', '제2조', '제3조', '제4조', '제5조',
+        '제1장', '제2장', '총칙', '부칙'
+    ]
     
     def __init__(self, vlm_service, pdf_path: str = None):
         """
@@ -76,17 +86,18 @@ class HybridExtractor:
         self.vlm_success_count = 0
         self.total_pages = 0
         
-        logger.info("✅ HybridExtractor v5.7.7.2 초기화 완료 (인라인 마커 제거)")
+        logger.info("✅ HybridExtractor v5.7.8.2 초기화 완료 (doc_type 강제 설정)")
         logger.info("   - pypdf (BSD-3) Fallback")
-        logger.info("   - 인라인 페이지 마커 제거 강화")
+        logger.info("   - doc_type='statute' 강제 적용")
+        logger.info("   - 규정 키워드 감지 강화")
     
     def extract(self, image_data: str, page_num: int) -> Dict[str, Any]:
         """
-        Phase 5.7.7.2 페이지 추출 (인라인 마커 제거)
+        Phase 5.7.8.2 페이지 추출 (doc_type 강제)
         
         (Phase 5.7.7.1 플로우 유지)
         """
-        logger.info(f"   🔧 HybridExtractor v5.7.7.2 추출 시작 (페이지 {page_num})")
+        logger.info(f"   🔧 HybridExtractor v5.7.8.2 추출 시작 (페이지 {page_num})")
         
         self.total_pages += 1
         
@@ -143,13 +154,16 @@ class HybridExtractor:
             source = "vlm"
             confidence = 1.0
         
-        # Step 5: 후처리 (Phase 5.7.7.2 강화)
-        doc_type = hints.get('doc_type', 'general')
+        # ✅ Phase 5.7.8.2: doc_type 강제 설정
+        doc_type = self._detect_doc_type(content, hints)
         
-        # PostMergeNormalizer (v5.7.7.1 - 띄어쓰기 복원 포함)
+        logger.info(f"      📋 문서 타입: {doc_type}")
+        
+        # Step 5: 후처리 (Phase 5.7.8.2 doc_type 전달)
+        # PostMergeNormalizer (v5.7.8.1 - OrderedDict)
         content = self.post_normalizer.normalize(content, doc_type)
         
-        # TypoNormalizer
+        # TypoNormalizer (v5.7.8.1 - OrderedDict)
         content = self.typo_normalizer.normalize(content, doc_type)
         
         # 중복 제거
@@ -169,7 +183,7 @@ class HybridExtractor:
         else:
             quality_score = 70  # Fallback
         
-        logger.info(f"   ✅ 추출 완료: 품질 {quality_score}/100 (출처: {source})")
+        logger.info(f"   ✅ 추출 완료: 품질 {quality_score}/100 (출처: {source}, 타입: {doc_type})")
         
         return {
             'content': content,
@@ -180,9 +194,51 @@ class HybridExtractor:
             'metrics': {
                 'page_num': page_num,
                 'char_count': len(content),
-                'source': source
+                'source': source,
+                'doc_type': doc_type  # ✅ 추가
             }
         }
+    
+    def _detect_doc_type(self, content: str, hints: Dict[str, Any]) -> str:
+        """
+        ✅ Phase 5.7.8.2: 문서 타입 감지 (규정 우선)
+        
+        전략:
+        1. hints에서 doc_type 확인
+        2. 규정 키워드 감지
+        3. 기본값: 'statute' (규정 문서 우선)
+        
+        Args:
+            content: 추출된 텍스트
+            hints: 레이아웃 힌트
+        
+        Returns:
+            'statute', 'general', 'bus_diagram', 'table'
+        """
+        # 1) hints에서 확인
+        hint_type = hints.get('doc_type')
+        if hint_type in ['statute', 'bus_diagram', 'table']:
+            logger.debug(f"      doc_type from hints: {hint_type}")
+            return hint_type
+        
+        # 2) 규정 키워드 감지
+        keyword_count = sum(1 for keyword in self.STATUTE_KEYWORDS if keyword in content)
+        
+        if keyword_count >= 3:
+            logger.debug(f"      doc_type detected: statute (keywords: {keyword_count})")
+            return 'statute'
+        
+        # 3) 조문 패턴 감지
+        article_pattern = r'제\s*\d+\s*조'
+        article_matches = re.findall(article_pattern, content)
+        
+        if len(article_matches) >= 1:
+            logger.debug(f"      doc_type detected: statute (articles: {len(article_matches)})")
+            return 'statute'
+        
+        # 4) 기본값: 'statute' (규정 문서 우선)
+        logger.debug("      doc_type default: statute")
+        return 'statute'
     
     def _fallback_extract(self, page_num: int) -> str:
         """
@@ -284,7 +340,7 @@ class HybridExtractor:
         # "...내용 402-2 내용..." → "...내용 내용..."
         content = re.sub(r'\s+\d{3,4}-\d{1,2}\s+', ' ', content)
         
-        logger.debug(f"      인라인 페이지 마커 제거 완료 (Phase 5.7.7.3)")
+        logger.debug(f"      인라인 페이지 마커 제거 완료 (Phase 5.7.8.2)")
         return content
     
     def _strip_page_dividers(self, content: str) -> str:
