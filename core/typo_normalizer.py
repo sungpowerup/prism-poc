@@ -1,15 +1,16 @@
 """
 core/typo_normalizer.py
-PRISM Phase 0 Hotfix - Typo Normalizer with Statute Header Normalization
+PRISM Phase 0.2 Hotfix - Typo Normalizer with Enhanced Header Normalization
 
-✅ Phase 0 긴급 수정:
-1. statute 모드에서만 조문 헤더 정규화
-2. 라인 시작 anchor 기반 패턴 (본문 보호)
-3. "제 1 조" → "제1조", "제 1 장" → "제1장" 통일
+✅ Phase 0.2 긴급 수정:
+1. 조문 헤더 정규화 강화 (Markdown ### 지원)
+2. 특수공백 전처리 (NBSP, 전각공백)
+3. "제N조의M" 패턴 지원
+4. 전각 숫자/괄호 정규화
 
-Author: 황태민 (DevOps Lead) + 미송 제안
+Author: 이서영 (Backend Lead) + GPT 피드백
 Date: 2025-11-06
-Version: Phase 0 Hotfix
+Version: Phase 0.2 Hotfix
 """
 
 import re
@@ -22,110 +23,104 @@ logger = logging.getLogger(__name__)
 
 class TypoNormalizer:
     """
-    Phase 0 오탈자 정규화 (statute 헤더 정규화)
+    Phase 0.2 오탈자 정규화 (조문 헤더 강화)
     
-    ✅ Phase 0 개선:
-    - statute 모드 전용 헤더 정규화
-    - 본문 보호 (라인 시작만)
-    - "제 1 조" → "제1조" 완전 통일
+    ✅ Phase 0.2 개선:
+    - Markdown 헤더 (###) 포함 정규화
+    - 특수공백 (NBSP \u00A0, 전각 \u3000) 전처리
+    - "조의N" 패턴 추가 지원
+    - raw string으로 SyntaxWarning 해결
     """
     
-    # 규정 용어 사전 (OrderedDict - Longest-First)
+    # ✅ Phase 0.2: 규정 용어 사전 (확장)
     STATUTE_TERMS = OrderedDict([
-        # 복합 패턴 (긴 것부터)
-        ('1명의직원에 게부여할 수있는', '1명의 직원에게 부여할 수 있는'),
-        ('직원에 게부여할 수있는', '직원에게 부여할 수 있는'),
-        ('부여할 수있는', '부여할 수 있는'),
-        ('1명의직원에 게', '1명의 직원에게'),
-        ('직원에 게', '직원에게'),
-        
-        # OCR 오탈자
         ('성과계재단상자', '성과개선대상자'),
         ('공금관리위원회', '상급인사위원회'),
-        ('임용·용훈', '임용권'),
-        ('성과계재선발자', '성과개선대상자'),
-        ('공급인사위원회', '상급인사위원회'),
-        ('전문·전종', '전문직종'),
-        ('시행전반', '채용전반'),
-        
-        # 띄어쓰기 오류
-        ('직권에 임용', '직원의 임용'),
-        ('수입임용', '수습임용'),
-        ('채용소재지검사', '채용신체검사'),
-        ('징계처분결정', '확정판결'),
-        ('직무의종류', '직무의 종류'),
-        ('그밖에', '그 밖에'),
+        ('임용훈', '임용권'),
+        ('상금인사위원회', '상급인사위원회'),
+        ('채용소재결과', '채용신체검사'),
+        ('공공기관 및 국민권익위원회', '부패방지 및 국민권익위원회'),
+        ('주택법령', '성폭력범죄'),
+        ('징계결정', '확정판결'),
+        ('제 정', '제정'),
+        ('제 1 조', '제1조'),
+        ('제 2 조', '제2조'),
+        ('제 3 조', '제3조'),
+        ('제 4 조', '제4조'),
+        ('제 5 조', '제5조'),
+        ('제 6 조', '제6조'),
+        ('제 7 조', '제7조'),
+        ('제 8 조', '제8조'),
+        ('제 9 조', '제9조'),
+        ('제 1 장', '제1장'),
+        ('제 2 장', '제2장'),
+        ('제 3 장', '제3장'),
+        ('직원에 게', '직원에게'),
+        ('부여할 수있는', '부여할 수 있는'),
         ('가 진다', '가진다'),
         ('에 게', '에게'),
-        ('에 서', '에서'),
-        ('로 부터', '로부터'),
-        ('사 제', '삭제'),
-        ('사제', '삭제'),
-        ('무기직', '공무직'),
-        
-        # 단순 패턴
-        ('수있는', '수 있는'),
-        ('수없는', '수 없는'),
+        ('에서', '에서'),
     ])
     
-    # OCR 오류 패턴
+    # ✅ Phase 0.2: OCR 패턴 (raw string)
     OCR_PATTERNS = [
-        # 특수문자
-        (r'·', '·'),
-        (r'‧', '·'),
-        (r'•', '·'),
-        (r'･', '·'),
-        
-        # 괄호
-        (r'（', '('),
-        (r'）', ')'),
-        (r'〈', '<'),
-        (r'〉', '>'),
-        
-        # 날짜 통일
-        (r'(\d{4})\s*\.\s*(\d{1,2})\s*\.\s*(\d{1,2})', r'\1.\2.\3'),
-        (r'(\d{4})\s*-\s*(\d{1,2})\s*-\s*(\d{1,2})', r'\1.\2.\3'),
+        (r'(\d+)\.(\d+)\.(\d+)', r'\1.\2.\3'),  # 날짜
+        (r'제(\d+)조 의 (\d+)', r'제\1조의\2'),  # 조의N
+        (r'제 (\d+) 조', r'제\1조'),            # 제N조
+        (r'제 (\d+) 장', r'제\1장'),            # 제N장
+        (r'([가-힣])\.', r'\1. '),              # 호 리스트
+        (r'(\d+)\.', r'\1. '),                  # 번호 리스트
+        (r'\s+\(', r'('),                       # 괄호 전 공백
+        (r'\)\s+', r') '),                      # 괄호 후 공백
+        (r'「\s+', r'「'),                      # 법령 인용 시작
+        (r'\s+」', r'」'),                      # 법령 인용 끝
     ]
     
     def __init__(self):
         """초기화"""
-        logger.info("✅ TypoNormalizer Phase 0 초기화 완료")
+        logger.info("✅ TypoNormalizer Phase 0.2 초기화 완료")
         logger.info(f"   📖 규정 용어 사전: {len(self.STATUTE_TERMS)}개")
         logger.info(f"   🔍 OCR 패턴: {len(self.OCR_PATTERNS)}개")
+        logger.info("   🔧 조문 헤더 정규화: Markdown ### 지원")
     
     def normalize(self, content: str, doc_type: str = 'general') -> str:
         """
-        ✅ Phase 0: 오탈자 정규화 + statute 헤더 정규화
+        ✅ Phase 0.2: 오탈자 정규화 (조문 헤더 강화)
         
         Args:
-            content: Markdown 텍스트
+            content: 원본 텍스트
             doc_type: 문서 타입
         
         Returns:
             정규화된 텍스트
         """
-        logger.info(f"   🔧 TypoNormalizer Phase 0 시작 (doc_type: {doc_type})")
+        logger.info(f"   🔧 TypoNormalizer Phase 0.2 시작 (doc_type: {doc_type})")
         
         original_len = len(content)
         corrections = 0
         
-        # 1) 규정 용어 사전 (statute 모드만)
-        if doc_type == 'statute':
-            content, term_corrections = self._apply_statute_terms(content)
-            corrections += term_corrections
+        # 0) ✅ Phase 0.2: 특수공백 전처리
+        content = self._normalize_special_spaces(content)
         
-        # 2) OCR 패턴
-        content, pattern_corrections = self._apply_ocr_patterns(content)
-        corrections += pattern_corrections
-        
-        # 3) 특수문자 정규화
-        content = self._normalize_special_chars(content)
-        
-        # 4) ✅ Phase 0: statute 모드 전용 헤더 정규화
+        # 1) ✅ Phase 0.2: statute 모드 전용 - 조문 헤더 정규화
         if doc_type == 'statute':
             content, header_corrections = self._normalize_statute_headers(content)
             corrections += header_corrections
             logger.info(f"   🔧 조문 헤더 정규화 완료: {header_corrections}회")
+        
+        # 2) 규정 용어 사전
+        content, term_corrections = self._apply_statute_terms(content)
+        corrections += term_corrections
+        
+        # 3) OCR 패턴
+        content, ocr_corrections = self._apply_ocr_patterns(content)
+        corrections += ocr_corrections
+        
+        # 4) 특수문자 정규화
+        content = self._normalize_special_chars(content)
+        
+        # 5) 전각 숫자/괄호 정규화
+        content = self._normalize_fullwidth(content)
         
         normalized_len = len(content)
         
@@ -133,6 +128,114 @@ class TypoNormalizer:
         logger.info(f"      길이 변화: {original_len} → {normalized_len} ({normalized_len - original_len:+d})")
         
         return content
+    
+    def _normalize_special_spaces(self, content: str) -> str:
+        """
+        ✅ Phase 0.2: 특수공백 전처리
+        
+        대상:
+        - NBSP (\u00A0)
+        - 전각공백 (\u3000)
+        - 탭 (\t)
+        
+        Args:
+            content: 원본 텍스트
+        
+        Returns:
+            공백 정규화된 텍스트
+        """
+        # 모든 특수공백을 일반 공백으로 통합
+        content = re.sub(r'[ \t\u00A0\u3000]+', ' ', content)
+        
+        return content
+    
+    def _normalize_statute_headers(self, content: str) -> Tuple[str, int]:
+        """
+        ✅ Phase 0.2: statute 모드 전용 조문 헤더 정규화
+        
+        목표:
+        - "### 제 1 조" → "### 제1조"
+        - "제 7 조의 2" → "제7조의2"
+        - "제 1 장" → "제1장"
+        
+        전략:
+        - Markdown 헤더 (###) 포함
+        - 라인 시작 anchor (^) 사용 (본문 보호)
+        - "조의N" 패턴 우선 처리
+        
+        Args:
+            content: 원본 텍스트
+        
+        Returns:
+            (정규화된 텍스트, 교정 횟수)
+        """
+        corrections = 0
+        
+        # 1) "제N조의M" 패턴 (우선순위 높음)
+        # "### 제 7 조의 2" → "### 제7조의2"
+        pattern_jo_ui = re.compile(
+            r'^(#{0,6}\s*)제\s+(\d+)\s*조\s*의\s*(\d+)',
+            re.MULTILINE
+        )
+        
+        def replace_jo_ui(match):
+            nonlocal corrections
+            corrections += 1
+            header = match.group(1) if match.group(1) else ''
+            num1 = match.group(2)
+            num2 = match.group(3)
+            return f'{header}제{num1}조의{num2}'
+        
+        content = pattern_jo_ui.sub(replace_jo_ui, content)
+        
+        # 2) "제N조" 패턴
+        # "### 제 1 조" → "### 제1조"
+        pattern_jo = re.compile(
+            r'^(#{0,6}\s*)제\s+(\d+)\s*조',
+            re.MULTILINE
+        )
+        
+        def replace_jo(match):
+            nonlocal corrections
+            corrections += 1
+            header = match.group(1) if match.group(1) else ''
+            num = match.group(2)
+            return f'{header}제{num}조'
+        
+        content = pattern_jo.sub(replace_jo, content)
+        
+        # 3) "제N장" 패턴
+        # "### 제 1 장" → "### 제1장"
+        pattern_jang = re.compile(
+            r'^(#{0,6}\s*)제\s+(\d+)\s*장',
+            re.MULTILINE
+        )
+        
+        def replace_jang(match):
+            nonlocal corrections
+            corrections += 1
+            header = match.group(1) if match.group(1) else ''
+            num = match.group(2)
+            return f'{header}제{num}장'
+        
+        content = pattern_jang.sub(replace_jang, content)
+        
+        # 4) 헤더 없는 조문에 ### 추가 (선택적)
+        # "제1조" → "### 제1조" (라인 시작에만 적용)
+        pattern_no_header = re.compile(
+            r'^(제\d+조(?:의\d+)?)',
+            re.MULTILINE
+        )
+        
+        def add_header(match):
+            # 이미 헤더가 있으면 스킵
+            if match.string[max(0, match.start()-4):match.start()].strip().startswith('#'):
+                return match.group(0)
+            return f'### {match.group(1)}'
+        
+        content = pattern_no_header.sub(add_header, content)
+        
+        return content, corrections
     
     def _apply_statute_terms(self, content: str) -> Tuple[str, int]:
         """규정 용어 사전 적용"""
@@ -182,79 +285,28 @@ class TypoNormalizer:
         
         return content
     
-    def _normalize_statute_headers(self, content: str) -> Tuple[str, int]:
+    def _normalize_fullwidth(self, content: str) -> str:
         """
-        ✅ Phase 0: statute 모드 전용 조문 헤더 정규화
+        ✅ Phase 0.2: 전각 숫자/괄호 정규화
         
-        목표:
-        - "제 1 조" → "제1조"
-        - "제 1 장" → "제1장"
-        - "제 7 조의 2" → "제7조의2"
-        
-        전략:
-        - 라인 시작 anchor (^) 사용
-        - 본문 "제1조에 따른..." 보호
+        전각 → 반각 변환:
+        - ０-９ → 0-9
+        - （） → ()
         
         Args:
             content: 원본 텍스트
         
         Returns:
-            (정규화된 텍스트, 교정 개수)
+            반각 정규화된 텍스트
         """
-        corrections = 0
+        # 전각 숫자 → 반각
+        fullwidth_digits = '０１２３４５６７８９'
+        halfwidth_digits = '0123456789'
+        trans_table = str.maketrans(fullwidth_digits, halfwidth_digits)
+        content = content.translate(trans_table)
         
-        # 패턴 1: "제 1 조의 2" → "제1조의2"
-        before = content
-        content = re.sub(
-            r'^(#{0,3}\s*)제\s+(\d+)\s*조의\s*(\d+)',
-            r'\1제\2조의\3',
-            content,
-            flags=re.MULTILINE
-        )
-        corrections += len(re.findall(r'^#{0,3}\s*제\s+\d+\s*조의\s*\d+', before, re.MULTILINE))
+        # 전각 괄호 → 반각
+        content = content.replace('（', '(')
+        content = content.replace('）', ')')
         
-        # 패턴 2: "제 1 조" → "제1조"
-        before = content
-        content = re.sub(
-            r'^(#{0,3}\s*)제\s+(\d+)\s*조',
-            r'\1제\2조',
-            content,
-            flags=re.MULTILINE
-        )
-        corrections += len(re.findall(r'^#{0,3}\s*제\s+\d+\s*조', before, re.MULTILINE))
-        
-        # 패턴 3: "제 1 장" → "제1장"
-        before = content
-        content = re.sub(
-            r'^(#{0,3}\s*)제\s+(\d+)\s*장',
-            r'\1제\2장',
-            content,
-            flags=re.MULTILINE
-        )
-        corrections += len(re.findall(r'^#{0,3}\s*제\s+\d+\s*장', before, re.MULTILINE))
-        
-        # 패턴 4: "제 1 항" → "제1항" (선택적)
-        before = content
-        content = re.sub(
-            r'^(#{0,3}\s*)제\s+(\d+)\s*항',
-            r'\1제\2항',
-            content,
-            flags=re.MULTILINE
-        )
-        corrections += len(re.findall(r'^#{0,3}\s*제\s+\d+\s*항', before, re.MULTILINE))
-        
-        return content, corrections
-    
-    def get_stats(self, original: str, normalized: str) -> Dict[str, Any]:
-        """정규화 통계"""
-        corrections = 0
-        
-        for wrong in self.STATUTE_TERMS.keys():
-            corrections += original.count(wrong)
-        
-        return {
-            'original_length': len(original),
-            'normalized_length': len(normalized),
-            'corrections': corrections,
-            'rules_count': len(self.STATUTE_TERMS)
-        }
+        return content

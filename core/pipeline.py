@@ -1,17 +1,16 @@
 """
 core/pipeline.py
-PRISM Phase 5.7.7.2 - Pipeline (코드펜스 제거)
+PRISM Phase 0.2 Hotfix - Pipeline with DocType Hardening
 
-✅ Phase 5.7.7.2 긴급 수정:
-1. Markdown 통합 후 코드펜스 제거 (미송 제안)
-2. SemanticChunker 전달 전 정제
-3. 헤더 인식률 100% 복구
+✅ Phase 0.2 긴급 수정:
+1. DocType 전역 고정 (statute)
+2. 페이지별 page_role과 분리
+3. 후처리에 일관된 doc_type 전달
+4. 코드펜스 제거 유지
 
-(Phase 5.7.6.1 기능 유지)
-
-Author: 이서영 (Backend Lead) + 미송 진단
-Date: 2025-11-03
-Version: 5.7.7.2 Hotfix
+Author: 이서영 (Backend Lead) + GPT 피드백
+Date: 2025-11-06
+Version: Phase 0.2 Hotfix
 """
 
 import logging
@@ -24,39 +23,60 @@ from typing import Dict, List, Any, Optional
 logger = logging.getLogger(__name__)
 
 
-class PipelineV576:
+class Phase53Pipeline:
     """
-    Phase 5.7.7.2 통합 파이프라인 (코드펜스 제거)
+    Phase 0.2 통합 파이프라인 (DocType 일관성)
     
-    ✅ Phase 5.7.7.2 개선:
-    - Markdown 통합 후 코드펜스 제거
-    - 헤더 인식률 복구 (### 제n조)
-    - 청킹 정상화 (1개 → 3~4개)
+    ✅ Phase 0.2 개선:
+    - DocType 전역 고정 (statute)
+    - 페이지 역할(page_role)과 분리
+    - 후처리 일관성 보장
+    - 코드펜스 제거 유지
+    - app.py 호환성 유지 (Phase53Pipeline)
     
     플로우:
     1. PDF → 이미지 변환
-    2. HybridExtractor: 페이지별 추출
-    3. ✅ Markdown 통합 + 코드펜스 제거 (Phase 5.7.7.2)
-    4. SemanticChunker: 조문 경계 기반 청킹
-    5. 체크리스트 평가
+    2. HybridExtractor: 페이지별 추출 (page_role 전달)
+    3. ✅ Markdown 통합 + 코드펜스 제거
+    4. ✅ 후처리: doc_type=statute 고정 전달
+    5. SemanticChunker: 조문 경계 기반 청킹
+    6. 체크리스트 평가
     """
     
     def __init__(
         self,
         pdf_processor,
-        classifier,
         vlm_service,
         max_pages: int = 20,
         session_id: str = None
     ):
-        """초기화"""
+        """
+        초기화 (app.py 호환)
+        
+        Args:
+            pdf_processor: PDFProcessor 인스턴스
+            vlm_service: VLMServiceV50 인스턴스 (classifier 포함)
+            max_pages: 최대 페이지 수
+            session_id: 세션 ID (선택)
+        """
         self.pdf_processor = pdf_processor
-        self.classifier = classifier
         self.vlm_service = vlm_service
         self.max_pages = max_pages
         self.session_id = session_id or self._generate_session_id()
         
-        # Phase 5.7.4.1 components
+        # classifier는 vlm_service에서 가져옴
+        self.classifier = getattr(vlm_service, 'classifier', None)
+        
+        if not self.classifier:
+            logger.warning("⚠️ VLM Service에 classifier 없음 - 기본 분류기 사용")
+            try:
+                from core.document_classifier import DocumentClassifierV50
+                self.classifier = DocumentClassifierV50()
+            except:
+                logger.error("❌ DocumentClassifierV50 로드 실패")
+                self.classifier = None
+        
+        # Components
         from core.semantic_chunker import SemanticChunker
         self.chunker = SemanticChunker(
             min_chunk_size=600,
@@ -64,14 +84,18 @@ class PipelineV576:
             target_chunk_size=900
         )
         
-        logger.info("✅ Phase 5.7.7.2 Pipeline 초기화 완료 (코드펜스 제거)")
-        logger.info("   - HybridExtractor v5.7.7.1: pypdf Fallback + 페이지 마커 제거")
-        logger.info("   - SemanticChunker v5.7.7.1: 조문 경계 기반 청킹")
-        logger.info("   - Markdown 정제: 코드펜스 제거 (Phase 5.7.7.2)")
+        logger.info("✅ Phase 0.2 Pipeline 초기화 완료 (DocType 일관성)")
+        logger.info("   - HybridExtractor: page_role 전달")
+        logger.info("   - PostMerge/Typo: doc_type=statute 고정")
+        logger.info("   - SemanticChunker: Fail-safe 지원")
     
-    def process(self, pdf_path: str) -> Dict[str, Any]:
+    def process_pdf(self, pdf_path: str) -> Dict[str, Any]:
         """
-        Phase 5.7.7.2 전체 처리 (코드펜스 제거)
+        ✅ app.py 호환성 메서드
+        
+        기존 API:
+            pipeline = Phase53Pipeline(pdf_processor, vlm_service)
+            result = pipeline.process_pdf(pdf_path)
         
         Args:
             pdf_path: PDF 파일 경로
@@ -79,7 +103,19 @@ class PipelineV576:
         Returns:
             처리 결과
         """
-        logger.info(f"🎯 Phase 5.7.7.2 처리 시작 (코드펜스 제거)")
+        return self.process(pdf_path)
+    
+    def process(self, pdf_path: str) -> Dict[str, Any]:
+        """
+        Phase 0.2 전체 처리 (DocType 일관성)
+        
+        Args:
+            pdf_path: PDF 파일 경로
+        
+        Returns:
+            처리 결과
+        """
+        logger.info(f"🎯 Phase 0.2 처리 시작 (DocType 일관성)")
         logger.info(f"   파일: {pdf_path}")
         logger.info(f"   세션: {self.session_id}")
         logger.info(f"   최대 페이지: {self.max_pages}")
@@ -88,104 +124,144 @@ class PipelineV576:
         
         # Step 1: PDF → 이미지
         logger.info("📄 Step 1: PDF → 이미지 변환")
-        # pdf_to_images는 [(base64_image, page_num), ...] 형식 반환
-        image_tuples = self.pdf_processor.pdf_to_images(pdf_path, self.max_pages)
-        logger.info(f"   ✅ {len(image_tuples)}페이지 변환 완료")
+        images = self.pdf_processor.pdf_to_images(
+            pdf_path=pdf_path,
+            max_pages=self.max_pages
+        )
+        logger.info(f"   ✅ {len(images)}페이지 변환 완료")
         
-        # Step 2: 페이지별 추출 (HybridExtractor)
+        # Step 2: 문서 분류 (전역 doc_type 결정)
+        logger.info("📊 Step 2: 문서 분류")
+        first_image = images[0][0] if images else None
+        
+        if first_image:
+            doc_classification = self.classifier.classify(first_image)
+            global_doc_type = doc_classification.get('domain', 'statute')
+        else:
+            global_doc_type = 'statute'
+        
+        logger.info(f"   ✅ 전역 doc_type: {global_doc_type}")
+        
+        # Step 3: HybridExtractor 초기화 (전역 allow_tables)
         from core.hybrid_extractor import HybridExtractor
+        
+        allow_tables = (global_doc_type == 'statute')
+        
         extractor = HybridExtractor(
             vlm_service=self.vlm_service,
-            pdf_path=pdf_path
+            pdf_path=pdf_path,
+            allow_tables=allow_tables
         )
         
-        pages_data = []
+        # Step 4: 페이지별 추출
+        logger.info("📝 Step 3: 페이지별 추출 (page_role 전달)")
         
-        for image_data, page_num in image_tuples:
-            logger.info(f"📄 페이지 {page_num}/{len(image_tuples)} 처리 시작")
+        page_results = []
+        empty_page_count = 0
+        
+        for i, (image_data, page_num) in enumerate(images, 1):
+            result = extractor.extract(image_data, page_num)
             
-            page_result = extractor.extract(image_data, page_num)
-            
-            if not page_result.get('is_empty', False):
-                pages_data.append(page_result)
-                logger.info(f"   ✅ 페이지 {page_num} 완료: 품질 {page_result['quality_score']}/100 (출처: {page_result['source']})")
+            # 빈 페이지 필터링
+            if result['quality_score'] >= 50:
+                page_results.append(result)
             else:
-                logger.warning(f"   ⚠️ 페이지 {page_num} 빈 페이지 제외")
+                empty_page_count += 1
+                logger.debug(f"      빈 페이지 제외: {page_num}")
+        
+        logger.info(f"📊 유효 페이지: {len(page_results)}/{len(images)} (빈 페이지 {empty_page_count}개 제외)")
         
         # Fallback 통계
-        fallback_stats = extractor.get_fallback_stats()
-        logger.info(f"📊 유효 페이지: {len(pages_data)}/{len(image_tuples)} (빈 페이지 {len(image_tuples) - len(pages_data)}개 제외)")
-        logger.info(f"📊 Fallback 통계:")
-        logger.info(f"   - VLM 성공: {fallback_stats['vlm_success_count']}페이지")
-        logger.info(f"   - Fallback 사용: {fallback_stats['fallback_count']}페이지")
-        logger.info(f"   - Fallback 비율: {fallback_stats['fallback_rate']*100:.1f}%")
+        fallback_count = sum(1 for r in page_results if r['source'] == 'fallback')
+        fallback_rate = (fallback_count / len(page_results) * 100) if page_results else 0
         
-        # Step 3: Markdown 통합 + 코드펜스 제거
-        logger.info("📝 Step 3: Markdown 통합 + 코드펜스 제거")
+        logger.info("📊 Fallback 통계:")
+        logger.info(f"   - VLM 성공: {len(page_results) - fallback_count}페이지")
+        logger.info(f"   - Fallback 사용: {fallback_count}페이지")
+        logger.info(f"   - Fallback 비율: {fallback_rate:.1f}%")
+        
+        # Step 5: Markdown 통합 + 코드펜스 제거
+        logger.info("📝 Step 4: Markdown 통합 + 코드펜스 제거")
         
         markdown_parts = []
-        for page_data in pages_data:
-            content = page_data.get('content', '')
-            if content:
-                markdown_parts.append(content)
+        for result in page_results:
+            content = result['content']
+            
+            # 코드펜스 제거
+            content = self._strip_code_fences(content)
+            
+            markdown_parts.append(content)
         
         full_markdown = '\n\n'.join(markdown_parts)
         
-        # ✅ Phase 5.7.7.2: 코드펜스 제거 (미송 제안)
-        full_markdown = self._remove_code_fences(full_markdown)
-        
         logger.info(f"   ✅ Markdown 통합 완료: {len(full_markdown)} 글자")
         
-        # Step 4: SemanticChunking
-        logger.info("✂️ Step 4: SemanticChunking v5.7.7.1 (조문 경계)")
+        # ✅ Phase 0.2: 후처리에 global_doc_type 전달
+        logger.info(f"🔧 Step 5: 후처리 (doc_type={global_doc_type})")
+        
+        from core.post_merge_normalizer import PostMergeNormalizer
+        from core.typo_normalizer import TypoNormalizer
+        
+        post_normalizer = PostMergeNormalizer()
+        typo_normalizer = TypoNormalizer()
+        
+        # 후처리 적용
+        full_markdown = post_normalizer.normalize(full_markdown, global_doc_type)
+        full_markdown = typo_normalizer.normalize(full_markdown, global_doc_type)
+        
+        # Step 6: SemanticChunking
+        logger.info("✂️ Step 6: SemanticChunking Phase 0.2 (Fail-safe)")
+        
         chunks = self.chunker.chunk(full_markdown)
+        
         logger.info(f"   ✅ {len(chunks)}개 청크 생성")
         
-        # Step 5: 체크리스트 평가
-        logger.info("📊 Step 5: 체크리스트 평가")
-        checklist = self._evaluate_checklist(pages_data, chunks, full_markdown)
+        # Step 7: 체크리스트 평가
+        logger.info("📊 Step 7: 체크리스트 평가")
         
-        for key, score in checklist.items():
-            logger.info(f"   ✅ {key}: {score}/100")
+        checklist_score = self._evaluate_checklist(
+            markdown=full_markdown,
+            chunks=chunks,
+            page_results=page_results,
+            doc_type=global_doc_type
+        )
         
-        overall_score = checklist['overall_score']
-        logger.info(f"   🎯 종합: {overall_score}/100")
+        logger.info(f"   ✅ 원본 충실도: {checklist_score['fidelity']}/100")
+        logger.info(f"   ✅ 청킹 품질: {checklist_score['chunking']}/100")
+        logger.info(f"   ✅ RAG 적합도: {checklist_score['rag']}/100")
+        logger.info(f"   ✅ 범용성: {checklist_score['generality']}/100")
+        logger.info(f"   ✅ 경쟁력: {checklist_score['competitiveness']}/100")
+        logger.info(f"   🎯 종합: {checklist_score['overall']}/100")
         
-        # 최종 결과
-        elapsed = time.time() - start_time
+        # 종료
+        elapsed_time = time.time() - start_time
         
-        logger.info("✅ Phase 5.7.7.2 처리 완료")
-        logger.info(f"   - 유효 페이지: {len(pages_data)}/{len(image_tuples)}")
-        logger.info(f"   - 빈 페이지: {len(image_tuples) - len(pages_data)}")
-        logger.info(f"   - Fallback 사용: {fallback_stats['fallback_count']}")
-        logger.info(f"   - 시간: {elapsed:.1f}초")
-        logger.info(f"   - 종합: {overall_score}/100")
+        logger.info("✅ Phase 0.2 처리 완료")
+        logger.info(f"   - 유효 페이지: {len(page_results)}/{len(images)}")
+        logger.info(f"   - 빈 페이지: {empty_page_count}")
+        logger.info(f"   - Fallback 사용: {fallback_count}")
+        logger.info(f"   - 시간: {elapsed_time:.1f}초")
+        logger.info(f"   - 종합: {checklist_score['overall']}/100")
         
         return {
             'session_id': self.session_id,
             'markdown': full_markdown,
             'chunks': chunks,
-            'pages_processed': len(pages_data),
-            'total_pages': len(image_tuples),
-            'empty_pages': len(image_tuples) - len(pages_data),
-            'fallback_count': fallback_stats['fallback_count'],
-            'fallback_rate': fallback_stats['fallback_rate'],
-            'processing_time': elapsed,
-            'checklist': checklist,
-            'overall_score': overall_score
+            'metadata': {
+                'total_pages': len(images),
+                'valid_pages': len(page_results),
+                'empty_pages': empty_page_count,
+                'fallback_count': fallback_count,
+                'fallback_rate': fallback_rate,
+                'doc_type': global_doc_type,
+                'elapsed_time': elapsed_time
+            },
+            'checklist': checklist_score
         }
     
-    def _remove_code_fences(self, content: str) -> str:
+    def _strip_code_fences(self, content: str) -> str:
         """
-        ✅ Phase 5.7.7.2: 코드펜스 제거 (미송 제안)
-        
-        문제:
-        - VLM이 Markdown을 코드블록으로 감싸면 헤더 인식 실패
-        - ```\n### 제1조...\n``` → 헤더가 코드로 취급
-        
-        해결:
-        - 앞뒤 코드펜스 제거
-        - 중간 코드펜스는 보존 (실제 코드 예시일 수 있음)
+        코드펜스 제거
         
         Args:
             content: 원본 Markdown
@@ -193,152 +269,217 @@ class PipelineV576:
         Returns:
             코드펜스 제거된 Markdown
         """
-        # 1) 앞쪽 코드펜스 제거
+        # 앞쪽 코드펜스 제거
         content = re.sub(r'^```[a-z]*\s*\n', '', content, flags=re.MULTILINE)
         
-        # 2) 뒤쪽 코드펜스 제거
+        # 뒤쪽 코드펜스 제거
         content = re.sub(r'\n```\s*$', '', content, flags=re.MULTILINE)
         
-        # 3) 앞뒤 공백 정리
+        # 앞뒤 공백 정리
         content = content.strip()
         
-        logger.debug(f"      코드펜스 제거 완료: {len(content)} 글자")
         return content
     
     def _evaluate_checklist(
         self,
-        pages_data: List[Dict[str, Any]],
+        markdown: str,
         chunks: List[Dict[str, Any]],
-        full_markdown: str
+        page_results: List[Dict[str, Any]],
+        doc_type: str
     ) -> Dict[str, int]:
         """
-        Phase 5.7.4.1 체크리스트 평가 (보수적)
-        
-        5가지 기준:
-        1. 원본 충실도 (90~100)
-        2. 청킹 품질 (60~100)
-        3. RAG 적합도 (60~100)
-        4. 범용성 (90~100)
-        5. 경쟁력 (60~80)
+        5대 체크리스트 평가
         
         Args:
-            pages_data: 페이지별 추출 결과
+            markdown: 통합 Markdown
             chunks: 청크 리스트
-            full_markdown: 전체 Markdown
+            page_results: 페이지별 추출 결과
+            doc_type: 문서 타입
         
         Returns:
             체크리스트 점수
         """
-        # 1. 원본 충실도
-        avg_quality = sum(p['quality_score'] for p in pages_data) / max(1, len(pages_data))
-        fidelity_score = int(avg_quality * 0.9)  # 보수적
+        # 1) 원본 충실도 (Fidelity)
+        fidelity_score = self._evaluate_fidelity(markdown, doc_type)
         
-        # 2. 청킹 품질
-        avg_chunk_size = sum(len(c['content']) for c in chunks) / max(1, len(chunks))
+        # 2) 청킹 품질 (Chunking Quality)
+        chunking_score = self._evaluate_chunking(chunks, markdown)
         
-        if 600 <= avg_chunk_size <= 1200:
-            chunking_score = 100
-        elif 400 <= avg_chunk_size < 600:
-            chunking_score = 80
-        elif 1200 < avg_chunk_size <= 1800:
-            chunking_score = 80
-        else:
-            chunking_score = 70
+        # 3) RAG 적합도 (RAG Suitability)
+        rag_score = self._evaluate_rag(chunks, markdown)
         
-        # 3. RAG 적합도
-        if len(chunks) >= 3:
-            rag_score = min(100, 70 + len(chunks) * 5)
-        elif len(chunks) == 2:
-            rag_score = 60
-        else:
-            rag_score = 33  # 1개 청크는 RAG에 부적합
+        # 4) 범용성 (Generality)
+        generality_score = self._evaluate_generality(page_results)
         
-        # 4. 범용성
-        versatility_score = 95  # HybridExtractor + pypdf Fallback
-        
-        # 5. 경쟁력
-        if fidelity_score >= 90 and chunking_score >= 80:
-            competitiveness_score = 80
-        elif fidelity_score >= 80:
-            competitiveness_score = 70
-        else:
-            competitiveness_score = 64
+        # 5) 경쟁력 (Competitiveness)
+        competitiveness_score = self._evaluate_competitiveness(markdown, chunks)
         
         # 종합 점수
         overall_score = int(
-            fidelity_score * 0.25 +
-            chunking_score * 0.20 +
-            rag_score * 0.25 +
-            versatility_score * 0.15 +
+            fidelity_score * 0.3 +
+            chunking_score * 0.2 +
+            rag_score * 0.2 +
+            generality_score * 0.15 +
             competitiveness_score * 0.15
         )
         
         return {
-            '원본 충실도': fidelity_score,
-            '청킹 품질': chunking_score,
-            'RAG 적합도': rag_score,
-            '범용성': versatility_score,
-            '경쟁력': competitiveness_score,
-            'overall_score': overall_score
+            'fidelity': fidelity_score,
+            'chunking': chunking_score,
+            'rag': rag_score,
+            'generality': generality_score,
+            'competitiveness': competitiveness_score,
+            'overall': overall_score
         }
+    
+    def _evaluate_fidelity(self, markdown: str, doc_type: str) -> int:
+        """원본 충실도 평가"""
+        score = 100
+        
+        # 개정이력 존재 여부
+        if doc_type == 'statute':
+            if '| 차수 | 날짜 |' in markdown:
+                revision_count = markdown.count('차 개정')
+                
+                if revision_count >= 15:
+                    score += 0  # 만점 유지
+                elif revision_count >= 10:
+                    score -= 5
+                else:
+                    score -= 10
+            else:
+                score -= 20  # 개정이력 누락
+            
+            # "기본 정신" 존재 여부
+            if '기본 정신' in markdown or '기본정신' in markdown:
+                score += 0  # 만점 유지
+            else:
+                score -= 15  # 기본 정신 누락
+            
+            # 조문 커버리지
+            article_count = len(re.findall(r'제\s?\d+조', markdown))
+            
+            if article_count >= 3:
+                score += 0
+            elif article_count >= 1:
+                score -= 10
+            else:
+                score -= 30
+        
+        return max(0, min(100, score))
+    
+    def _evaluate_chunking(self, chunks: List[Dict[str, Any]], markdown: str) -> int:
+        """청킹 품질 평가"""
+        if not chunks:
+            return 0
+        
+        score = 100
+        
+        # 청크 개수
+        chunk_count = len(chunks)
+        
+        if chunk_count >= 3:
+            score += 0  # 이상적
+        elif chunk_count >= 2:
+            score -= 10
+        elif chunk_count == 1:
+            score -= 40  # 과소분할
+        
+        # 청크 크기 분포
+        chunk_sizes = [c['metadata']['char_count'] for c in chunks]
+        avg_size = sum(chunk_sizes) / len(chunk_sizes)
+        
+        if 600 <= avg_size <= 1200:
+            score += 0
+        else:
+            score -= 10
+        
+        # 조문 메타데이터
+        articles_with_meta = sum(
+            1 for c in chunks 
+            if c['metadata'].get('article_no', '')
+        )
+        
+        if articles_with_meta >= chunk_count * 0.8:
+            score += 0
+        else:
+            score -= 15
+        
+        return max(0, min(100, score))
+    
+    def _evaluate_rag(self, chunks: List[Dict[str, Any]], markdown: str) -> int:
+        """RAG 적합도 평가"""
+        score = 100
+        
+        # 노이즈 체크
+        noise_patterns = [
+            r'\d{3,4}-\d{1,2}',  # 페이지 번호
+            r'Page\s+\d+',
+            r'[-—–_*]{3,}',
+        ]
+        
+        for pattern in noise_patterns:
+            matches = re.findall(pattern, markdown)
+            if matches:
+                score -= len(matches) * 2
+        
+        # 중복 체크
+        if markdown.count('| 차수 | 날짜 |') > 1:
+            score -= 20  # 중복 표
+        
+        # 청크 독립성
+        if len(chunks) >= 3:
+            score += 0  # 검색 가능성 높음
+        elif len(chunks) == 1:
+            score -= 30  # 검색 가능성 낮음
+        
+        return max(0, min(100, score))
+    
+    def _evaluate_generality(self, page_results: List[Dict[str, Any]]) -> int:
+        """범용성 평가"""
+        score = 100
+        
+        # Fallback 비율
+        fallback_count = sum(1 for r in page_results if r['source'] == 'fallback')
+        fallback_rate = (fallback_count / len(page_results)) if page_results else 0
+        
+        if fallback_rate <= 0.1:
+            score += 0  # 우수
+        elif fallback_rate <= 0.3:
+            score -= 5
+        else:
+            score -= 15
+        
+        return max(0, min(100, score))
+    
+    def _evaluate_competitiveness(self, markdown: str, chunks: List[Dict[str, Any]]) -> int:
+        """경쟁력 평가"""
+        score = 100
+        
+        # 개정이력 표 형식
+        if '| 차수 | 날짜 |' in markdown:
+            score += 0  # 표 형식 우수
+        else:
+            score -= 20
+        
+        # 조문 헤더 정규화
+        irregular_headers = len(re.findall(r'제\s+\d+\s+조', markdown))
+        
+        if irregular_headers == 0:
+            score += 0
+        else:
+            score -= irregular_headers * 3
+        
+        # 청킹 품질
+        if len(chunks) >= 3:
+            score += 0
+        else:
+            score -= 10
+        
+        return max(0, min(100, score))
     
     def _generate_session_id(self) -> str:
         """세션 ID 생성"""
-        import hashlib
-        import time
-        
-        raw = f"{time.time()}"
-        return hashlib.md5(raw.encode()).hexdigest()[:8]
-
-
-# ✅ 하위 호환성: 기존 클래스명 지원
-class Pipeline(PipelineV576):
-    """v5.7.6 호환성 래퍼"""
-    pass
-
-
-class Phase53Pipeline:
-    """
-    v5.3 호환성 래퍼 (app.py용)
-    
-    기존 API:
-        pipeline = Phase53Pipeline(pdf_processor, vlm_service)
-        result = pipeline.process_pdf(pdf_path)
-    
-    새 API:
-        pipeline = PipelineV576(pdf_processor, classifier, vlm_service)
-        result = pipeline.process(pdf_path)
-    """
-    
-    def __init__(self, pdf_processor, vlm_service, max_pages: int = 20):
-        """
-        기존 API 호환성 초기화
-        
-        Args:
-            pdf_processor: PDFProcessor 인스턴스
-            vlm_service: VLMServiceV50 인스턴스
-            max_pages: 최대 페이지 수
-        """
-        # Classifier는 내부에서 자동 생성
-        from core.document_classifier import DocumentClassifierV50
-        classifier = DocumentClassifierV50()
-        
-        # 새 Pipeline 초기화
-        self._pipeline = PipelineV576(
-            pdf_processor=pdf_processor,
-            classifier=classifier,
-            vlm_service=vlm_service,
-            max_pages=max_pages
-        )
-    
-    def process_pdf(self, pdf_path: str) -> Dict[str, Any]:
-        """
-        기존 API 호환성 메서드
-        
-        Args:
-            pdf_path: PDF 파일 경로
-        
-        Returns:
-            처리 결과
-        """
-        return self._pipeline.process(pdf_path)
+        import random
+        import string
+        return ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))

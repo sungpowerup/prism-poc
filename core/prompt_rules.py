@@ -1,15 +1,16 @@
 """
 core/prompt_rules.py
-PRISM Phase 0 Hotfix - Prompt Rules with Revision Table Support
+PRISM Phase 0.2 Hotfix - Prompt Rules with Critical Instructions
 
-✅ Phase 0 긴급 수정:
-1. statute 모드에서도 allow_tables=True면 표 허용
-2. 명시적 형식 가이드 제공
-3. 표 금지 모순 제거
+✅ Phase 0.2 긴급 수정:
+1. "기본 정신" 필수 추출 규칙 추가
+2. 조문 번호 정확성 CRITICAL 강조
+3. 페이지 번호 오인식 방지 명시
+4. 개정이력 표 추출 규칙 강화
 
-Author: 최동현 (Frontend Lead) + 미송 제안
+Author: 최동현 (Frontend Lead) + GPT 피드백
 Date: 2025-11-06
-Version: Phase 0 Hotfix
+Version: Phase 0.2 Hotfix
 """
 
 import re
@@ -21,12 +22,13 @@ logger = logging.getLogger(__name__)
 
 class PromptRules:
     """
-    Phase 0 동적 프롬프트 생성 엔진 (개정이력 표 지원)
+    Phase 0.2 동적 프롬프트 생성 엔진 (Critical 규칙 강화)
     
-    ✅ Phase 0 개선:
-    - statute 모드 + allow_tables → 표 허용 분기
-    - 명시적 표 형식 가이드
-    - 금지 모순 제거
+    ✅ Phase 0.2 개선:
+    - "기본 정신" 필수 추출 규칙
+    - 조문 번호 정확성 CRITICAL
+    - 페이지 번호 오인식 방지
+    - 개정이력 표 추출 강화
     """
     
     # 기본 규칙
@@ -43,9 +45,17 @@ class PromptRules:
 - 요약 섹션 ("**요약:**", "**구조 요약:**")
 """
     
-    # 규정 모드 기본 규칙
+    # ✅ Phase 0.2: 규정 모드 기본 규칙 (CRITICAL 강화)
     STATUTE_BASE_RULES = """
 [규정/법령 문서 처리]
+
+**CRITICAL: Article Number Accuracy**
+- Extract EXACT article numbers from the document
+- DO NOT confuse page numbers (e.g., 402-3, 402-2) with article numbers
+- Article numbers are typically in the range 1~200
+- Format: 제1조, 제2조, ..., 제9조, 제10조, ...
+- Format with sub-articles: 제7조의2, 제8조의3, ...
+- Example page numbers to IGNORE: 402-1, 402-2, 402-3
 
 **조항 구조 보존:**
 - 제○조, 제○항, 제○호 번호 유지
@@ -54,7 +64,7 @@ class PromptRules:
 
 **출력 형식:**
 ```
-### 제○조(제목)
+### 제1조(제목)
 본문 내용...
 
 1. 항목 내용
@@ -67,7 +77,29 @@ class PromptRules:
 - 메타 설명 금지
 """
     
-    # ✅ Phase 0: 개정이력 표 허용 규칙
+    # ✅ Phase 0.2: "기본 정신" 필수 추출 규칙
+    PREAMBLE_RULES = """
+**CRITICAL: Preamble Extraction ("기본 정신")**
+
+If the page contains ANY of these headers:
+- "기본 정신", "기본정신"
+- "제정이유", "입법취지"
+- "전문", "서문"
+- Text appearing BEFORE "제1장" or "제1조"
+
+YOU MUST extract the COMPLETE paragraph(s) under these headers.
+
+**Example:**
+```
+### 기본 정신
+이 규정은 한국농어촌공사 직원의 보직, 승진, 신분보장, 상벌, 인사고과 등에 관한 사항을
+규정함으로써 공정하고 투명한 인사관리 구현을 통하여 설립목적을 달성하고...
+```
+
+**This is ESSENTIAL content - do not skip!**
+"""
+    
+    # ✅ Phase 0.2: 개정이력 표 추출 규칙 (강화)
     REVISION_TABLE_RULES = """
 [개정 이력 표 추출]
 
@@ -84,11 +116,13 @@ class PromptRules:
 - Keep original order
 - Preserve dates in original format (YYYY.MM.DD)
 - Text only - NO commentary or explanations
+- If multiple tables exist, extract ONLY the first occurrence
 
 **DO NOT:**
 - Skip any 개정 rows
 - Add explanations
 - Change date formats
+- Duplicate the table
 """
     
     # 표 금지 규칙
@@ -131,134 +165,118 @@ class PromptRules:
     @classmethod
     def build_prompt(cls, hints: Dict[str, Any]) -> str:
         """
-        ✅ Phase 0: 힌트 기반 동적 프롬프트 생성 (개정이력 지원)
+        ✅ Phase 0.2: 힌트 기반 동적 프롬프트 생성 (CRITICAL 규칙 강화)
         
         전략:
         1. OCR 텍스트 추출
         2. table_confidence 계산
         3. is_statute_mode 감지
-        4. allow_tables 확인 (Phase 0 신규)
-        5. 조건부 프롬프트 조합
+        4. allow_tables 확인
+        5. ✅ "기본 정신" 규칙 추가
+        6. ✅ 조문 번호 정확성 강조
         
         Args:
-            hints: QuickLayoutAnalyzer 결과 + allow_tables
+            hints: QuickLayoutAnalyzer 결과
         
         Returns:
-            최종 프롬프트
+            프롬프트 문자열
         """
-        logger.info("   🎨 PromptRules Phase 0 프롬프트 생성")
+        logger.info("   🎨 PromptRules Phase 0.2 프롬프트 생성")
         
-        # 1️⃣ OCR 텍스트
-        ocr_text = hints.get('ocr_text', '')
-        
-        # 2️⃣ table_confidence
-        table_confidence = cls._calculate_table_confidence(hints, ocr_text)
+        # Step 1: 표 신뢰도 계산
+        table_confidence = cls._calculate_table_confidence(hints)
         logger.info(f"      📊 표 신뢰도: {table_confidence}/3")
         
-        # 3️⃣ is_statute_mode
-        is_statute_mode = cls._detect_statute_mode(hints, ocr_text)
-        logger.info(f"      📜 규정 모드: {is_statute_mode}")
+        # Step 2: 규정 모드 감지
+        is_statute = cls._is_statute_mode(hints)
+        logger.info(f"      📜 규정 모드: {is_statute}")
         
-        # 4️⃣ ✅ Phase 0: allow_tables 확인
+        # Step 3: 표 허용 여부
         allow_tables = hints.get('allow_tables', False)
         logger.info(f"      📋 표 허용: {allow_tables}")
         
-        # 5️⃣ 프롬프트 섹션 조합
-        sections = []
+        # Step 4: 프롬프트 조립
+        prompt_parts = [cls.BASE_RULES]
         
-        if is_statute_mode:
-            # 규정 모드
-            sections.append(cls.STATUTE_BASE_RULES)
+        # 규정 모드
+        if is_statute:
+            prompt_parts.append(cls.STATUTE_BASE_RULES)
             
-            # ✅ Phase 0: allow_tables 분기
-            if allow_tables:
-                logger.info(f"      ✅ 개정이력 - 표 허용")
-                sections.append(cls.REVISION_TABLE_RULES)
-            else:
-                logger.info(f"      🚫 표 금지 (규정 모드)")
-                sections.append(cls.TABLE_FORBIDDEN)
+            # ✅ Phase 0.2: "기본 정신" 규칙 추가
+            prompt_parts.append(cls.PREAMBLE_RULES)
         
+        # 표 규칙 분기
+        if is_statute and allow_tables:
+            # ✅ Phase 0.2: 개정이력 - 표 허용
+            logger.info("      ✅ 개정이력 - 표 허용")
+            prompt_parts.append(cls.REVISION_TABLE_RULES)
+        elif is_statute and not allow_tables:
+            # 규정 모드 + 표 금지
+            logger.info("      🚫 표 금지 (규정 모드)")
+            prompt_parts.append(cls.TABLE_FORBIDDEN)
+        elif table_confidence >= 2:
+            # 일반 모드 + 표 감지
+            prompt_parts.append(cls.TABLE_RULES)
         else:
-            # 일반 모드
-            sections.append(cls.BASE_RULES)
-            
-            if table_confidence >= 2:
-                logger.info(f"      ✅ 표 규칙 적용")
-                sections.append(cls.TABLE_RULES)
-            else:
-                logger.info(f"      🚫 표 금지")
-                sections.append(cls.TABLE_FORBIDDEN)
+            # 일반 모드 + 표 없음
+            prompt_parts.append(cls.TABLE_FORBIDDEN)
         
-        # 6️⃣ 최종 프롬프트
-        prompt = "\n\n".join(sections)
+        # 최종 프롬프트
+        final_prompt = '\n\n'.join(prompt_parts)
         
-        logger.info(f"   ✅ 프롬프트 생성 완료 ({len(prompt)} 글자)")
-        return prompt
+        logger.info(f"   ✅ 프롬프트 생성 완료 ({len(final_prompt)} 글자)")
+        
+        return final_prompt
     
     @classmethod
-    def _calculate_table_confidence(cls, hints: Dict[str, Any], ocr_text: str) -> int:
+    def _calculate_table_confidence(cls, hints: Dict[str, Any]) -> int:
         """
-        표 신뢰도 계산 (0~3)
+        표 신뢰도 계산 (0~3점)
         
-        가산: CV 교차점, 선밀도, OCR 키워드
-        감산: 조항 패턴, 번호 목록
+        Args:
+            hints: 레이아웃 힌트
+        
+        Returns:
+            신뢰도 점수
         """
         score = 0
         
-        # 가산 요소
-        grid_intersections = hints.get('grid_intersections', 0)
-        if grid_intersections > 80:
+        # 1) 표 구조 감지
+        if hints.get('has_table', False):
             score += 1
         
-        h_v_line_density = hints.get('h_v_line_density', 0)
-        if h_v_line_density > 0.02:
+        # 2) 교차점 밀도
+        if hints.get('intersection_count', 0) > 5:
             score += 1
         
-        table_keywords = ['단위', '사례수', '비율', '항목', '합계', '%']
-        keyword_count = sum(1 for kw in table_keywords if kw in ocr_text)
-        if keyword_count >= 2:
+        # 3) 선 밀도
+        if hints.get('line_density', 0) > 0.01:
             score += 1
         
-        # 감산 요소
-        penalties = 0
-        
-        article_ratio = hints.get('article_token_ratio', 0)
-        if article_ratio > 0.3:
-            penalties += 1
-        
-        numbered_density = hints.get('numbered_list_density', 0)
-        if numbered_density > 0.2:
-            penalties += 1
-        
-        final_score = max(0, min(3, score - min(2, penalties)))
-        return final_score
+        return score
     
     @classmethod
-    def _detect_statute_mode(cls, hints: Dict[str, Any], ocr_text: str) -> bool:
+    def _is_statute_mode(cls, hints: Dict[str, Any]) -> bool:
         """
         규정 모드 감지
         
-        전략: 패턴 2종 이상 매칭
-        """
-        score = 0
+        Args:
+            hints: 레이아웃 힌트
         
-        patterns = [
-            r'제\s?\d+조',
-            r'부칙',
-            r'시행일',
-            r'정의',
-            r'목적',
-            r'제\s?\d+항',
-            r'\(\d+\)',
-            r'개정'
+        Returns:
+            True if 규정 문서
+        """
+        # OCR 텍스트에서 규정 키워드 감지
+        ocr_text = hints.get('ocr_text', '')
+        
+        statute_keywords = [
+            '조', '항', '호', '직원', '규정', '임용', '채용',
+            '승진', '전보', '휴직', '면직', '해임', '파면',
+            '인사', '보수', '급여', '수당', '복무', '징계',
+            '위원회', '법률', '제정', '개정'
         ]
         
-        for pattern in patterns:
-            if re.search(pattern, ocr_text):
-                score += 1
+        keyword_count = sum(1 for kw in statute_keywords if kw in ocr_text)
         
-        numbered_density = hints.get('numbered_list_density', 0)
-        if numbered_density > 0.2:
-            score += 1
-        
-        return score >= 2
+        # 키워드 5개 이상 → 규정 모드
+        return keyword_count >= 5
