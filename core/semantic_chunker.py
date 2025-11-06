@@ -46,10 +46,11 @@ class SemanticChunker:
         self.max_size = max_chunk_size
         self.target_size = target_chunk_size
         
-        logger.info("✅ SemanticChunker v5.7.8.4 초기화 (미송 띄어쓰기 + 청킹)")
+        logger.info("✅ SemanticChunker v5.7.9 초기화 (긴급 패치)")
         logger.info(f"   청크 크기: {min_chunk_size}-{max_chunk_size} (목표: {target_chunk_size})")
         logger.info("   하드 가드: 1200자 강제 flush")
-        logger.info("   번호목록 폭주 분할: 연속 10개 이상 (미송 제안)")
+        logger.info("   번호목록 폭주 분할: 연속 10개 이상")
+        logger.info("   조문 패턴: 헤더 유무 모두 지원 (Fallback)")
     
     def chunk(self, content: str) -> List[Dict[str, Any]]:
         """
@@ -118,29 +119,38 @@ class SemanticChunker:
     
     def _split_by_article(self, content: str) -> Dict[str, Any]:
         """
-        ✅ Phase 5.7.4: 조문 단위로 분할
+        ✅ Phase 5.7.9: 조문 단위로 분할 (Fallback 패턴 추가)
         
-        ## 제1조(목적)
-        ...
-        ## 제2조(적용범위)
-        ...
+        패턴 1 (우선순위): ## 제1조(목적)
+        패턴 2 (Fallback): 제1조(목적) (헤더 없음)
         
         각 조문을 독립된 섹션으로 분할
         """
         sections = []
         lines = content.split('\n')
         
-        # ✅ Phase 5.7.8: 헤더 패턴 완전 수정
-        article_pattern = re.compile(
+        # ✅ Phase 5.7.9: 2단계 패턴 (헤더 유무)
+        # 우선순위 1: 헤더 있는 조문
+        article_pattern_with_header = re.compile(
             r'^\s{0,3}#{1,3}\s*제\s*(\d+)\s*조\s*(?:\(([^)]*)\))?',
+            re.MULTILINE
+        )
+        
+        # 우선순위 2: 헤더 없는 조문 (Fallback 패턴)
+        article_pattern_no_header = re.compile(
+            r'^제\s*(\d+)\s*조\s*(?:\(([^)]*)\))?',
             re.MULTILINE
         )
         
         current_section = None
         
         for line in lines:
-            # 조문 시작 감지
-            match = article_pattern.match(line)
+            # 패턴 1 시도: 헤더 있는 조문
+            match = article_pattern_with_header.match(line)
+            
+            # 패턴 2 시도: 헤더 없는 조문
+            if not match:
+                match = article_pattern_no_header.match(line)
             
             if match:
                 # 이전 섹션 저장

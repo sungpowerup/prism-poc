@@ -1,21 +1,15 @@
 """
 core/post_merge_normalizer.py
-PRISM Phase 5.7.8.3 - PostMergeNormalizer (미송 피드백 반영)
+PRISM Phase 0 Hotfix - Post Merge Normalizer with Page Marker Removal
 
-✅ Phase 5.7.8.3 수정사항:
-1. 헤더 보호 강화 ("기본 정신", "제n장" 추가)
-2. 헤더 삽입 금지 (보호만)
-3. 미송 피드백 반영
+✅ Phase 0 긴급 수정:
+1. 페이지 마커 제거 패턴 확장
+2. 반복 제목 제거 ("인사규정")
+3. 분할된 단어 처리 ("402-3 용을")
 
-🎯 해결 문제:
-- "기본 정신", "제1장 총칙" 누락 방지
-- 헤더 라인 오수정 방지
-
-(Phase 5.7.8.1 기능 유지 - OrderedDict)
-
-Author: 이서영 (Backend Lead) + 미송 피드백
-Date: 2025-11-05
-Version: 5.7.8.3 Final
+Author: 이서영 (Backend Lead)
+Date: 2025-11-06
+Version: Phase 0 Hotfix
 """
 
 import re
@@ -28,76 +22,43 @@ logger = logging.getLogger(__name__)
 
 class PostMergeNormalizer:
     """
-    Phase 5.7.8.3 후처리 정규화 (미송 피드백 반영)
+    Phase 0 후처리 정규화 (페이지 마커 제거 강화)
     
-    핵심 개선:
-    - OrderedDict로 순서 보장
-    - Longest-First 정책
-    - ✅ 헤더 보호 강화 (미송 제안)
-    
-    역할:
-    - Fallback 후 텍스트 정리
-    - 띄어쓰기 복원
-    - 줄바꿈 정규화
-    - ✅ 헤더 라인 보호 (제n조, 제n장, 기본 정신)
+    ✅ Phase 0 개선:
+    - 페이지 마커 패턴 5종 확장
+    - 반복 제목 제거
+    - 안전 가드 (단독 라인만)
     """
     
-    # ✅ Phase 5.7.8.1: OrderedDict로 순서 명시 (Longest-First)
+    # 고빈도 용어 사전
     HIGH_FREQ_TERMS = OrderedDict([
-        # ========================================
-        # 🔥 복합 패턴 (긴 것부터) - 최우선 적용
-        # ========================================
-        
-        # Phase 5.7.8: 고빈도 띄어쓰기
-        ('1명의직원에게부여할수있는', '1명의 직원에게 부여할 수 있는'),
-        ('직원에게부여할수있는', '직원에게 부여할 수 있는'),
-        ('1명의 직원에게부여할수있는', '1명의 직원에게 부여할 수 있는'),
-        ('직원에 게부여할수있는', '직원에게 부여할 수 있는'),
-        ('부여할수있는', '부여할 수 있는'),
-        ('1명의직원에게', '1명의 직원에게'),
-        ('직원에게', '직원에게'),  # 정상 (보존)
-        
-        # Phase 5.7.7.2: 복합 패턴
-        ('직무의종류', '직무의 종류'),
-        ('그밖에', '그 밖에'),
-        
-        # ========================================
-        # 📌 중간 패턴
-        # ========================================
-        
-        # Phase 5.7.7.1: 조문 표현
-        ('제1조', '제1조'),  # 정상 (보존)
-        ('제 1조', '제1조'),  # 공백 제거
-        ('제  1조', '제1조'),  # 공백 2개 제거
-        
-        # Phase 5.7.6: 단어 경계
-        ('가진다', '가진다'),  # 정상 (보존)
+        ('성과계재단상자', '성과개선대상자'),
+        ('공금관리위원회', '상급인사위원회'),
+        ('직원에 게', '직원에게'),
+        ('부여할 수있는', '부여할 수 있는'),
         ('가 진다', '가진다'),
-        
-        # ========================================
-        # 🔻 단순 패턴 (짧은 것) - 맨 마지막 적용
-        # ========================================
-        
-        ('할수있는', '할 수 있는'),
-        ('할수없는', '할 수 없는'),
-        ('수있는', '수 있는'),
-        ('수없는', '수 없는'),
-        ('에게', '에게'),  # 정상 (보존)
         ('에 게', '에게'),
-        ('에서', '에서'),  # 정상 (보존)
-        ('에 서', '에서'),
+        ('에서', '에서'),
     ])
+    
+    # ✅ Phase 0: 페이지 마커 패턴 (확장)
+    PAGE_MARKER_PATTERNS = [
+        r'^\s*\d{3,4}-\d{1,2}\s*$',           # "402-3"
+        r'^\s*Page\s+\d+\s*$',                # "Page 1"
+        r'^\s*[-—–_*]{3,}\s*$',              # "---", "___"
+        r'^\s*인사규정\s*$',                  # "인사규정" (반복 제목)
+        r'^\s*\d{3,4}-\d{1,2}\s*[가-힣]{1,2}\s*$',  # "402-3 용을" (분할 단어)
+    ]
     
     def __init__(self):
         """초기화"""
-        logger.info("✅ PostMergeNormalizer v5.7.8.3 초기화 완료 (미송 피드백 반영)")
-        logger.info(f"   📖 고빈도 사전: {len(self.HIGH_FREQ_TERMS)}개 (OrderedDict)")
-        logger.info("   🎯 적용 정책: Longest-First (긴 패턴 우선)")
-        logger.info("   🛡️ 헤더 보호: ### 제n조, 제n장, 기본 정신")
+        logger.info("✅ PostMergeNormalizer Phase 0 초기화 완료")
+        logger.info(f"   📖 고빈도 사전: {len(self.HIGH_FREQ_TERMS)}개")
+        logger.info(f"   🔍 페이지 마커 패턴: {len(self.PAGE_MARKER_PATTERNS)}개")
     
     def normalize(self, content: str, doc_type: str = 'general') -> str:
         """
-        ✅ Phase 5.7.8.3: 후처리 정규화 (헤더 보호 강화 - 미송 피드백)
+        ✅ Phase 0: 후처리 정규화 (페이지 마커 제거)
         
         Args:
             content: Markdown 텍스트
@@ -106,89 +67,54 @@ class PostMergeNormalizer:
         Returns:
             정규화된 텍스트
         """
-        logger.info(f"   🔧 PostMergeNormalizer v5.7.8.3 시작 (doc_type: {doc_type})")
+        logger.info(f"   🔧 PostMergeNormalizer Phase 0 시작 (doc_type: {doc_type})")
         
         original_len = len(content)
         
-        # ✅ Phase 5.7.8.3: 헤더 라인 보호 강화 (미송 제안)
+        # 1) ✅ Phase 0: 페이지 마커 제거 (라인별)
         lines = content.split('\n')
-        protected_lines = []
+        cleaned_lines = []
+        removed_count = 0
         
         for line in lines:
-            # ✅ 헤더 감지 (제n조, 제n장, 기본 정신)
-            if self._is_protected_header(line):
-                # 헤더는 그대로 보존
-                protected_lines.append(line)
-                logger.debug(f"      헤더 보호: {line[:50]}")
-            else:
-                # 일반 라인만 정규화
-                normalized_line = self._normalize_line(line, doc_type)
-                protected_lines.append(normalized_line)
+            is_marker = False
+            
+            for pattern in self.PAGE_MARKER_PATTERNS:
+                if re.match(pattern, line):
+                    is_marker = True
+                    removed_count += 1
+                    logger.debug(f"      페이지 마커 제거: '{line.strip()}'")
+                    break
+            
+            if not is_marker:
+                cleaned_lines.append(line)
         
-        content = '\n'.join(protected_lines)
+        content = '\n'.join(cleaned_lines)
         
-        # 줄바꿈 정규화
+        logger.info(f"   🗑️ 페이지 마커 제거: {removed_count}개 라인")
+        
+        # 2) 고빈도 용어 사전 (statute 모드만)
+        if doc_type == 'statute':
+            for wrong, correct in self.HIGH_FREQ_TERMS.items():
+                if wrong in content:
+                    count = content.count(wrong)
+                    content = content.replace(wrong, correct)
+                    logger.debug(f"      용어 교정: '{wrong}' → '{correct}' ({count}회)")
+        
+        # 3) 줄바꿈 정규화
         content = self._normalize_newlines(content)
         
-        # 리스트 정규화
+        # 4) 리스트 정규화
         content = self._normalize_lists(content)
+        
+        # 5) 과도한 공백 제거
+        content = re.sub(r' {2,}', ' ', content)
         
         normalized_len = len(content)
         
         logger.info(f"   ✅ 정규화 완료: {original_len} → {normalized_len} 글자")
         
         return content
-    
-    def _is_protected_header(self, line: str) -> bool:
-        """
-        ✅ Phase 5.7.8.3: 헤더 라인 판단 (미송 제안)
-        
-        보호 대상:
-        - ### 제n조 (기존)
-        - ### 제n장 (NEW)
-        - 기본 정신 (NEW)
-        
-        Args:
-            line: 텍스트 라인
-        
-        Returns:
-            True if 헤더 라인
-        """
-        # 1) 제n조 헤더
-        if re.match(r'^\s*#{1,3}\s*제\s*\d+\s*조', line):
-            return True
-        
-        # 2) ✅ NEW: 제n장 헤더
-        if re.match(r'^\s*#{0,3}\s*제\s*\d+\s*장', line):
-            return True
-        
-        # 3) ✅ NEW: 기본 정신
-        if re.search(r'기본\s*정신', line):
-            return True
-        
-        return False
-    
-    def _normalize_line(self, line: str, doc_type: str) -> str:
-        """
-        개별 라인 정규화
-        
-        Args:
-            line: 원본 라인
-            doc_type: 문서 타입
-        
-        Returns:
-            정규화된 라인
-        """
-        # 고빈도 용어 사전 적용 (규정 모드만)
-        if doc_type == 'statute':
-            for wrong, correct in self.HIGH_FREQ_TERMS.items():
-                if wrong in line:
-                    line = line.replace(wrong, correct)
-        
-        # 과도한 공백 정리
-        line = re.sub(r' {2,}', ' ', line)
-        
-        return line
     
     def _normalize_newlines(self, content: str) -> str:
         """
@@ -207,7 +133,7 @@ class PostMergeNormalizer:
         content = re.sub(r'\n+(#{1,3}\s*제\s*\d+\s*조)', r'\n\n\1', content)
         content = re.sub(r'(#{1,3}\s*제\s*\d+\s*조[^\n]*)\n+', r'\1\n', content)
         
-        # ✅ 제n장 헤더 앞뒤 정리
+        # 제n장 헤더 앞뒤 정리
         content = re.sub(r'\n+(#{0,3}\s*제\s*\d+\s*장)', r'\n\n\1', content)
         content = re.sub(r'(#{0,3}\s*제\s*\d+\s*장[^\n]*)\n+', r'\1\n', content)
         
@@ -223,28 +149,18 @@ class PostMergeNormalizer:
         Returns:
             정규화된 텍스트
         """
-        # 번호 리스트 정규화 (1. 2. 3.)
+        # 번호 리스트 (1. 2. 3.)
         content = re.sub(r'(\d+)\s*\.\s*', r'\1. ', content)
         
-        # 호 리스트 정규화 (가. 나. 다.)
+        # 호 리스트 (가. 나. 다.)
         content = re.sub(r'([가-힣])\s*\.\s*', r'\1. ', content)
         
         return content
     
     def get_stats(self, original: str, normalized: str) -> Dict[str, Any]:
-        """
-        정규화 통계
-        
-        Args:
-            original: 원본 텍스트
-            normalized: 정규화된 텍스트
-        
-        Returns:
-            통계 정보
-        """
+        """정규화 통계"""
         corrections = 0
         
-        # 고빈도 용어 교정 개수
         for wrong in self.HIGH_FREQ_TERMS.keys():
             corrections += original.count(wrong)
         

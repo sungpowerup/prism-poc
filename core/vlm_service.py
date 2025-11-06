@@ -1,16 +1,22 @@
 """
 core/vlm_service.py
-PRISM Phase 5.3.0 - VLM Service (HybridExtractor 호환)
+PRISM Phase 0 Hotfix - VLM Service with Retry Logic
 
-✅ Phase 5.3.0 추가:
-- call() 메서드: HybridExtractor 전용 간단 인터페이스
-- analyze_page_v50(): 기존 Phase 5.0 메서드 유지
+✅ Phase 0 추가:
+- call_with_retry(): 빈 응답 재시도 로직
+- 페이지 역할별 재시도 예산 차등 적용
+- 429/5xx 에러 핸들링 (지터 백오프)
+
+Author: 박준호 (AI/ML Lead)
+Date: 2025-11-06
+Version: Phase 0 Hotfix
 """
 
 import os
 import logging
 import json
 import re
+import time
 from typing import Dict, Any
 from openai import AzureOpenAI
 from anthropic import Anthropic
@@ -19,7 +25,6 @@ from dotenv import load_dotenv
 try:
     from .document_classifier import DocumentClassifierV50
 except ImportError:
-    # DocumentClassifier 없으면 None으로 처리
     DocumentClassifierV50 = None
 
 load_dotenv()
@@ -27,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 class VLMServiceV50:
-    """범용 VLM 서비스 v5.3.0 - HybridExtractor 호환"""
+    """범용 VLM 서비스 Phase 0 - 재시도 로직 추가"""
     
     def __init__(self, provider: str = "azure_openai"):
         self.provider = provider
@@ -63,15 +68,15 @@ class VLMServiceV50:
             self.classifier = None
             logger.warning("⚠️ DocumentClassifier 없음 - call() 메서드만 사용")
         
-        logger.info(f"✅ VLM Service v5.3.0 초기화 완료: {provider}")
+        logger.info(f"✅ VLM Service Phase 0 초기화 완료: {provider}")
     
     def call(self, image_data: str, prompt: str) -> str:
         """
-        ✅ Phase 5.3.0 신규: HybridExtractor 전용 간단 인터페이스
+        VLM 호출 (단일 시도)
         
         Args:
             image_data: Base64 인코딩된 이미지
-            prompt: VLM 프롬프트 (PromptRules DSL 생성)
+            prompt: VLM 프롬프트
         
         Returns:
             VLM 응답 텍스트 (Markdown)
@@ -92,16 +97,17 @@ class VLMServiceV50:
                             ]
                         }
                     ],
-                    max_tokens=2000,
-                    temperature=0.2
+                    max_tokens=3000,  # ✅ Phase 0: 개정이력 표를 위해 증가
+                    temperature=0,     # ✅ Phase 0: 결정적 출력
+                    top_p=1
                 )
                 return response.choices[0].message.content.strip()
             
             else:  # claude
                 response = self.client.messages.create(
                     model=self.model,
-                    max_tokens=2000,
-                    temperature=0.2,
+                    max_tokens=3000,
+                    temperature=0,
                     messages=[
                         {
                             "role": "user",
@@ -125,6 +131,115 @@ class VLMServiceV50:
             logger.error(f"❌ VLM 호출 실패: {e}")
             raise
     
+    def call_with_retry(
+        self,
+        image_data: str,
+        prompt: str,
+        page_role: str = "general",
+        max_retries: int = 2
+    ) -> Dict[str, Any]:
+        """
+        ✅ Phase 0 신규: 빈 응답 재시도 로직
+        
+        전략:
+        - 페이지 역할별 재시도 예산 차등 적용
+        - 재시도 시 프롬프트 단순화
+        - 429/5xx 에러는 지터 백오프
+        
+        Args:
+            image_data: Base64 이미지
+            prompt: VLM 프롬프트
+            page_role: 페이지 역할 ("revision_table", "general")
+            max_retries: 최대 재시도 횟수 (무시됨, page_role로 결정)
+        
+        Returns:
+            {
+                'content': str,
+                'retry_count': int,
+                'fallback': bool,
+                'fallback_reason': str
+            }
+        """
+        # 페이지 역할별 재시도 예산
+        if page_role == "revision_table":
+            budget = 2  # 개정이력 표는 2회
+            logger.info("      🎯 개정이력 페이지 - 재시도 예산 2회")
+        else:
+            budget = 1  # 일반 페이지는 1회
+        
+        for attempt in range(budget + 1):
+            try:
+                # 첫 시도는 원본 프롬프트, 재시도는 단순화
+                if attempt == 0:
+                    current_prompt = prompt
+                else:
+                    logger.info(f"      🔄 재시도 {attempt}/{budget} - 프롬프트 단순화")
+                    current_prompt = self._simplify_prompt(page_role)
+                
+                # VLM 호출
+                response = self.call(image_data, current_prompt)
+                
+                # 빈 응답 체크
+                if response and len(response.strip()) >= 50:
+                    if attempt > 0:
+                        logger.info(f"      ✅ 재시도 {attempt}회 만에 성공!")
+                    return {
+                        'content': response,
+                        'retry_count': attempt,
+                        'fallback': False,
+                        'fallback_reason': ''
+                    }
+                else:
+                    logger.warning(f"      ⚠️ 시도 {attempt+1} 빈 응답 ({len(response)} 글자)")
+                    
+            except Exception as e:
+                error_str = str(e).lower()
+                
+                # 429 또는 5xx 에러는 지터 백오프
+                if '429' in error_str or '5' in error_str[:1]:
+                    wait_time = 0.6 + 0.2 * attempt  # jitter
+                    logger.warning(f"      ⚠️ Rate limit/Server error - {wait_time:.1f}초 대기")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"      ❌ VLM 오류: {e}")
+                    break
+        
+        # 모든 재시도 실패
+        logger.error(f"      ❌ {budget+1}회 시도 모두 실패 → Fallback")
+        return {
+            'content': '',
+            'retry_count': budget,
+            'fallback': True,
+            'fallback_reason': 'empty_response_after_retries'
+        }
+    
+    def _simplify_prompt(self, page_role: str) -> str:
+        """
+        재시도용 단순화 프롬프트
+        
+        Args:
+            page_role: 페이지 역할
+        
+        Returns:
+            단순화된 프롬프트
+        """
+        if page_role == "revision_table":
+            return """Extract the revision history table.
+
+Output as a Markdown table with columns: 차수 | 날짜
+
+Example:
+| 차수 | 날짜 |
+| --- | --- |
+| 제37차 개정 | 2019.05.27 |
+
+Extract ALL rows. Do NOT add any commentary."""
+        
+        else:
+            return """Extract all text from this page. Preserve formatting. Output as Markdown.
+
+Do NOT add any meta descriptions or commentary."""
+    
     def analyze_page_v50(self, image_data: str, page_num: int) -> Dict[str, Any]:
         """
         Phase 5.0-5.1 호환: 문서 타입별 분석
@@ -145,7 +260,6 @@ class VLMServiceV50:
             }
         """
         if not self.classifier:
-            # Classifier 없으면 Mixed로 처리
             logger.warning("⚠️ DocumentClassifier 없음 - mixed 타입으로 처리")
             doc_type = 'mixed'
             subtype = 'unknown'
