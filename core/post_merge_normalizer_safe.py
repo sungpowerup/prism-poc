@@ -1,45 +1,45 @@
 """
-core/post_merge_normalizer_safe.py
-PRISM Phase 0.3.2 - Safe Mode (중간 코드펜스 제거)
+post_merge_normalizer_v033.py
+PRISM Phase 0.3.3 - Post Merge Normalizer (간소화)
 
-✅ Phase 0.3.2 개선:
-1. 중간 코드펜스 제거 추가
-2. 페이지 마커 패턴 확장
-3. 의미 치환 완전 제거
+✅ Phase 0.3.3 개선:
+1. 페이지 마커 제거
+2. 개정이력 중복 제거
+3. 중간 코드펜스 제거
+4. 불필요한 의미 치환 완전 제거
 
-Author: 이서영 (Backend Lead) + 마창수산 팀
+설치: core/post_merge_normalizer_safe.py 대체
+
+Author: 마창수산 팀
 Date: 2025-11-07
-Version: Phase 0.3.2
+Version: Phase 0.3.3
 """
 
 import re
 import logging
-from typing import Dict, Any, List, Set
 
 logger = logging.getLogger(__name__)
 
 
 class PostMergeNormalizer:
     """
-    Phase 0.3.2 통합 후 정규화 (중간 코드펜스 제거)
+    Phase 0.3.3 통합 후 정규화 (간소화)
     
-    ✅ Phase 0.3.2 개선:
-    - 중간 코드펜스 제거
-    - 페이지 마커 패턴 확장
+    ✅ 핵심 개선:
+    - 페이지 마커 제거
+    - 개정이력 중복 제거
+    - 의미 치환 완전 제거
     """
     
-    # 버전 정보
-    VERSION = "Phase 0.3.2"
+    VERSION = "Phase 0.3.3"
     
-    # 페이지 마커 패턴 (확장)
+    # 페이지 마커 패턴
     PAGE_MARKER_PATTERNS = [
-        r'^\s*\d{3,4}-\d{1,2}\s*$',           # 402-1, 402-2
-        r'^\s*_\d{3,4}-\d{1,2}_\s*$',         # _402-1_
-        r'^\s*\*\d{3,4}-\d{1,2}\*\s*$',       # *402-1*
-        r'^\s*페이지\s+\d+\s*$',              # 페이지 1
-        r'^\s*Page\s+\d+\s*$',                # Page 1
-        r'^\s*-\s*\d+\s*-\s*$',              # - 1 -
-        r'^\s*\[\s*\d+\s*\]\s*$',            # [1]
+        r'^\s*\d{3,4}-\d{1,2}\s*$',      # 402-1
+        r'^\s*_\d{3,4}-\d{1,2}_\s*$',    # _402-1_
+        r'^\s*\*\d{3,4}-\d{1,2}\*\s*$',  # *402-1*
+        r'^\s*페이지\s+\d+\s*$',         # 페이지 1
+        r'^\s*Page\s+\d+\s*$',           # Page 1
     ]
     
     # 개정 이력 패턴
@@ -48,31 +48,15 @@ class PostMergeNormalizer:
         re.MULTILINE
     )
     
-    # ⚠️ Phase 0.3: 의미 치환 완전 제거
-    COMMON_TYPOS = {}
-    
-    # 🚫 Phase 0.3: 금지 치환 블록리스트
-    BLOCKED_REPLACEMENTS = {
-        '공금관리', '상급인사',
-        '종합인사위원회', '상급인사위원회',
-        '성과계약전담상자', '성과개선대상자',
-        '징계요건', '제9조의',
-        '사직', '삭제',
-    }
-    
     def __init__(self):
         """초기화"""
         self.compiled_patterns = [
             re.compile(p, re.MULTILINE) for p in self.PAGE_MARKER_PATTERNS
         ]
         
-        logger.info(f"✅ PostMergeNormalizer {self.VERSION} 초기화 완료")
-        logger.info(f"   📖 의미 사전: {len(self.COMMON_TYPOS)}개 (비활성화)")
-        logger.info(f"   🚫 금지 치환: {len(self.BLOCKED_REPLACEMENTS)}개")
-        logger.info(f"   🔍 페이지 마커 패턴: {len(self.PAGE_MARKER_PATTERNS)}개")
+        logger.info(f"✅ PostMergeNormalizer {self.VERSION} 초기화")
+        logger.info(f"   🗑️ 페이지 마커 패턴: {len(self.PAGE_MARKER_PATTERNS)}개")
         logger.info(f"   🗑️ 개정이력 dedup: 활성화")
-        logger.info(f"   🔄 2차 검증: 활성화")
-        logger.info(f"   ⚠️ 의미 치환 제거: 원본 충실도 우선")
     
     def normalize(self, text: str, doc_type: str = 'statute') -> str:
         """
@@ -85,97 +69,96 @@ class PostMergeNormalizer:
         Returns:
             정규화된 텍스트
         """
-        logger.info(f"   🔧 PostMergeNormalizer {self.VERSION} 시작 (doc_type: {doc_type})")
+        logger.info(f"   🧹 PostMergeNormalizer {self.VERSION} 시작")
         
         original_len = len(text)
         
-        # ✅ 1단계: 페이지 마커 제거
+        # 1. 페이지 마커 제거
         text, marker_count = self._remove_page_markers(text)
         
-        # ✅ 2단계: 개정이력 중복 제거
-        text = self._deduplicate_revisions(text)
+        # 2. 개정이력 중복 제거
+        text, revision_count = self._deduplicate_revisions(text)
         
-        # ✅ Phase 0.3.2: 3단계: 중간 코드펜스 제거
-        text = self._remove_inline_codefence(text)
+        # 3. 중간 코드펜스 제거
+        text, fence_count = self._remove_inline_fences(text)
+        
+        # 4. 빈 줄 정리
+        text = self._cleanup_empty_lines(text)
         
         final_len = len(text)
         
-        logger.info(f"   ✅ 정규화 완료: {original_len} → {final_len} 글자")
+        logger.info(f"   ✅ 정규화 완료:")
+        logger.info(f"      페이지 마커: {marker_count}개 제거")
+        logger.info(f"      개정이력: {revision_count}개 중복 제거")
+        logger.info(f"      코드펜스: {fence_count}개 제거")
+        logger.info(f"      길이: {original_len} → {final_len} ({final_len - original_len:+d})")
         
         return text
     
-    def _remove_page_markers(self, text: str) -> tuple:
-        """
-        페이지 마커 제거
-        
-        Args:
-            text: 원본 텍스트
-        
-        Returns:
-            (정규화된 텍스트, 제거 횟수)
-        """
+    def _remove_page_markers(self, text: str):
+        """페이지 마커 제거"""
+        count = 0
         lines = text.split('\n')
         cleaned_lines = []
-        removed_count = 0
         
         for line in lines:
             is_marker = False
             for pattern in self.compiled_patterns:
-                if pattern.match(line.strip()):
+                if pattern.match(line):
                     is_marker = True
-                    removed_count += 1
+                    count += 1
                     break
             
             if not is_marker:
                 cleaned_lines.append(line)
         
-        if removed_count > 0:
-            logger.info(f"   🗑️ 페이지 마커 제거: {removed_count}개 라인")
-        
-        return '\n'.join(cleaned_lines), removed_count
+        return '\n'.join(cleaned_lines), count
     
-    def _deduplicate_revisions(self, text: str) -> str:
-        """
-        개정이력 중복 제거
+    def _deduplicate_revisions(self, text: str):
+        """개정이력 중복 제거"""
+        revisions = {}
         
-        Args:
-            text: 원본 텍스트
+        def replacer(match):
+            key = (match.group(1), match.group(2), match.group(3), match.group(4))
+            if key not in revisions:
+                revisions[key] = match.group(0)
+                return match.group(0)
+            else:
+                return ''
         
-        Returns:
-            중복 제거된 텍스트
-        """
-        seen = set()
+        text = self.REVISION_PATTERN.sub(replacer, text)
+        
+        # 중복 제거된 개수
+        count = len([v for v in revisions.values() if v == ''])
+        
+        return text, count
+    
+    def _remove_inline_fences(self, text: str):
+        """중간 코드펜스 제거 (시작/끝 제외)"""
         lines = text.split('\n')
-        cleaned_lines = []
         
-        for line in lines:
-            match = self.REVISION_PATTERN.search(line)
-            if match:
-                key = (match.group(1), match.group(2), match.group(3), match.group(4))
-                if key in seen:
-                    continue
-                seen.add(key)
-            
-            cleaned_lines.append(line)
+        # 첫 번째와 마지막 코드펜스 위치 찾기
+        fence_positions = []
+        for i, line in enumerate(lines):
+            if line.strip().startswith('```'):
+                fence_positions.append(i)
         
-        return '\n'.join(cleaned_lines)
+        if len(fence_positions) <= 2:
+            # 2개 이하면 제거 안 함
+            return text, 0
+        
+        # 중간 펜스만 제거 (첫/마지막 제외)
+        count = 0
+        for i in fence_positions[1:-1]:
+            if lines[i].strip().startswith('```'):
+                lines[i] = ''
+                count += 1
+        
+        return '\n'.join(lines), count
     
-    def _remove_inline_codefence(self, text: str) -> str:
-        """
-        ✅ Phase 0.3.2: 중간 코드펜스 제거
-        
-        Args:
-            text: 원본 텍스트
-        
-        Returns:
-            코드펜스 제거된 텍스트
-        """
-        # 시작/끝 코드펜스 제거 (기존)
-        text = re.sub(r'^```markdown\n?', '', text, flags=re.MULTILINE)
-        text = re.sub(r'\n?```$', '', text, flags=re.MULTILINE)
-        
-        # ✅ Phase 0.3.2: 중간 코드펜스도 제거
-        text = re.sub(r'\n```markdown\n', '\n\n', text)
-        text = re.sub(r'\n```\n', '\n\n', text)
+    def _cleanup_empty_lines(self, text: str) -> str:
+        """과도한 빈 줄 정리 (3개 이상 → 2개)"""
+        # 3개 이상의 연속 빈 줄을 2개로
+        text = re.sub(r'\n{4,}', '\n\n\n', text)
         
         return text
