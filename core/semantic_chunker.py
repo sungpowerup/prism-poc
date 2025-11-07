@@ -1,421 +1,350 @@
 """
 core/semantic_chunker.py
-PRISM Phase 0.2 Hotfix - SemanticChunker with Fail-safe Chunking
+PRISM Phase 0.3.2 - Semantic Chunker (문장 경계 보존)
 
-✅ Phase 0.2 긴급 수정:
-1. 조문 헤더 패턴 확장 (### 지원)
-2. Fail-safe 길이 분할 가드 (조문 < 2개 시)
-3. "조의N" 패턴 지원
-4. 번호목록 과밀 분할 강화
+✅ Phase 0.3.2 개선:
+1. 문장 경계 보존 분할 추가
+2. 최소 청크 크기 가드 (300자)
+3. 한국어 문장 경계 패턴
 
 Author: 이서영 (Backend Lead) + GPT 피드백
-Date: 2025-11-06
-Version: Phase 0.2 Hotfix
+Date: 2025-11-07
+Version: Phase 0.3.2
 """
 
 import re
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 
 logger = logging.getLogger(__name__)
 
 
 class SemanticChunker:
     """
-    Phase 0.2 SemanticChunker (Fail-safe + 헤더 패턴 확장)
+    Phase 0.3.2 의미 기반 청킹 엔진 (문장 경계 보존)
     
-    ✅ Phase 0.2 개선:
-    - 조문 헤더 패턴: ### 포함 (Markdown)
-    - Fail-safe: 조문 < 2개 시 길이 기반 분할
-    - "조의N" 패턴 지원
-    - 청킹 하드 가드 (1200자 강제 flush)
+    ✅ Phase 0.3.2 개선:
+    - 문장 경계 보존 분할
+    - 최소 청크 크기 가드
+    - 한국어 문장 패턴
     """
     
-    # ✅ Phase 0.2: 조문 패턴 (Markdown 헤더 포함)
+    VERSION = "Phase 0.3.2"
+    
+    # 청크 크기 설정
+    MIN_SIZE = 300      # ✅ Phase 0.3.2: 최소 크기 가드
+    TARGET_SIZE = 900
+    MAX_SIZE = 1200
+    
+    # 조문 패턴
     ARTICLE_PATTERN = re.compile(
-        r'^\s*#{0,6}\s*(제\s?\d+조(?:의\s?\d+)?)',
+        r'#{1,6}\s*제\d+조(?:의\d+)?(?:\([^)]+\))?',
         re.MULTILINE
     )
     
-    # 번호목록 패턴 (1. 2. 3.)
-    NUMBER_LIST_PATTERN = re.compile(r'^\s*\d+\.\s', re.MULTILINE)
+    # ✅ Phase 0.3.2: 한국어 문장 경계 패턴 (GPT 제안)
+    SENTENCE_PATTERN = re.compile(
+        r'(?<=[다|요|임|함|음])\s+',  # 한국어 문장 끝
+        re.MULTILINE
+    )
     
-    def __init__(
-        self,
-        min_chunk_size: int = 600,
-        max_chunk_size: int = 1200,
-        target_chunk_size: int = 900
-    ):
+    # Fallback: 영어식 문장 경계
+    SENTENCE_PATTERN_EN = re.compile(
+        r'(?<=[.!?])\s+',
+        re.MULTILINE
+    )
+    
+    def __init__(self):
         """초기화"""
-        self.min_size = min_chunk_size
-        self.max_size = max_chunk_size
-        self.target_size = target_chunk_size
-        
-        logger.info("✅ SemanticChunker Phase 0.2 초기화 (Fail-safe)")
-        logger.info(f"   청크 크기: {min_chunk_size}-{max_chunk_size} (목표: {target_chunk_size})")
-        logger.info("   하드 가드: 1200자 강제 flush")
-        logger.info("   Fail-safe: 조문 < 2개 시 길이 분할")
-        logger.info("   조문 패턴: ### 헤더 지원")
+        logger.info(f"✅ SemanticChunker {self.VERSION} 초기화")
+        logger.info(f"   청크 크기: {self.MIN_SIZE}-{self.MAX_SIZE} (목표: {self.TARGET_SIZE})")
+        logger.info(f"   최소 가드: {self.MIN_SIZE}자")
+        logger.info(f"   하드 가드: {self.MAX_SIZE}자 강제 flush")
+        logger.info(f"   Fail-safe: 조문 < 2개 시 길이 분할")
+        logger.info(f"   조문 패턴: ### 헤더 지원")
+        logger.info(f"   ✅ 문장 경계 보존: 한국어 패턴")
     
-    def chunk(self, content: str) -> List[Dict[str, Any]]:
+    def chunk(
+        self,
+        text: str,
+        doc_type: str = 'statute',
+        metadata: Dict[str, Any] = None
+    ) -> List[Dict[str, Any]]:
         """
-        ✅ Phase 0.2: 조문 경계 기반 청킹 (Fail-safe)
+        텍스트를 의미 단위로 청킹
         
         Args:
-            content: Markdown 전체 내용
+            text: 원본 텍스트
+            doc_type: 문서 타입
+            metadata: 메타데이터
         
         Returns:
             청크 리스트
         """
-        logger.info(f"🔗 SemanticChunking Phase 0.2 시작: {len(content)} 글자")
+        logger.info(f"🔗 SemanticChunking {self.VERSION} 시작: {len(text)} 글자")
         
-        # Step 0: 코드펜스 제거
-        content = self._strip_code_fences(content)
+        # ✅ 1단계: 조문 경계 탐지
+        boundaries = self._find_article_boundaries(text)
         
-        # Step 1: 조문 단위로 분할
-        article_sections = self._split_by_article(content)
-        detected_articles = len(article_sections)
+        if len(boundaries) < 2:
+            logger.warning(f"  ⚠️ 조문 경계 부족 ({len(boundaries)}개) - Fail-safe 길이 분할")
+            return self._fallback_chunk(text, metadata)
         
-        logger.info(f"   조문 감지: {detected_articles}개")
+        logger.info(f"   조문 감지: {len(boundaries)}개")
         
-        # ✅ Phase 0.2: Fail-safe - 조문 < 2개 시 길이 기반 분할
-        if detected_articles < 2:
-            logger.warning(f"  ⚠️ 조문 부족 ({detected_articles}개) → Fail-safe 길이 분할")
-            chunks = self._fallback_split_by_length(content)
-            logger.info(f"   ✅ Fail-safe 청크 생성: {len(chunks)}개")
-            return chunks
+        # ✅ 2단계: 조문 기반 초기 분할
+        sections = self._split_by_articles(text, boundaries)
         
-        # Step 2: 길이 기반 조정 + 하드 가드
-        adjusted_sections = self._adjust_by_length(article_sections)
+        # ✅ Phase 0.3.2: 3단계: 문장 경계 보존 분할
+        adjusted_sections = []
+        for section in sections:
+            if len(section) > self.MAX_SIZE:
+                # 문장 경계 기반 분할
+                split_sections = self._split_with_sentence_boundary(section, self.MAX_SIZE)
+                adjusted_sections.extend(split_sections)
+            else:
+                adjusted_sections.append(section)
         
         logger.info(f"   길이 조정 후: {len(adjusted_sections)}개 섹션")
         
-        # Step 3: 청크 생성
-        chunks = []
-        for i, section in enumerate(adjusted_sections, 1):
-            chunk = {
-                'id': f'chunk_{i}',
-                'content': section['content'],
-                'metadata': {
-                    'article_no': section['article_no'],
-                    'article_title': section['article_title'],
-                    'char_count': len(section['content']),
-                    'chunk_index': i
-                }
-            }
-            chunks.append(chunk)
+        # ✅ Phase 0.3.2: 4단계: 최소 크기 가드
+        adjusted_sections = self._merge_short_chunks(adjusted_sections, self.MIN_SIZE)
+        
+        # ✅ 5단계: 청크 생성
+        chunks = self._create_chunks(adjusted_sections, metadata)
         
         logger.info(f"   ✅ {len(chunks)}개 청크 생성")
         
         return chunks
     
-    def _strip_code_fences(self, content: str) -> str:
-        """코드펜스 제거"""
-        # 앞쪽 코드펜스 제거
-        content = re.sub(r'^```[a-z]*\s*\n', '', content, flags=re.MULTILINE)
-        
-        # 뒤쪽 코드펜스 제거
-        content = re.sub(r'\n```\s*$', '', content, flags=re.MULTILINE)
-        
-        # 앞뒤 공백 정리
-        content = content.strip()
-        
-        return content
-    
-    def _split_by_article(self, content: str) -> List[Dict[str, Any]]:
+    def _find_article_boundaries(self, text: str) -> List[Tuple[int, str]]:
         """
-        ✅ Phase 0.2: 조문 단위로 분할 (### 헤더 지원)
-        
-        패턴:
-        - ### 제1조(목적)
-        - 제1조(목적) (헤더 없음)
-        - ### 제7조의2(외국인의 채용)
+        조문 경계 탐지
         
         Args:
-            content: Markdown 텍스트
+            text: 원본 텍스트
         
         Returns:
-            조문 섹션 리스트
+            [(위치, 조문 헤더), ...]
+        """
+        boundaries = []
+        
+        for match in self.ARTICLE_PATTERN.finditer(text):
+            boundaries.append((match.start(), match.group()))
+        
+        return boundaries
+    
+    def _split_by_articles(
+        self,
+        text: str,
+        boundaries: List[Tuple[int, str]]
+    ) -> List[str]:
+        """
+        조문 경계 기반 분할
+        
+        Args:
+            text: 원본 텍스트
+            boundaries: 조문 경계
+        
+        Returns:
+            분할된 섹션 리스트
         """
         sections = []
         
-        # 조문 헤더 찾기
-        matches = list(self.ARTICLE_PATTERN.finditer(content))
-        
-        if not matches:
-            # 조문이 없으면 전체를 하나의 섹션으로
-            return [{
-                'content': content,
-                'article_no': '',
-                'article_title': ''
-            }]
-        
-        # 각 조문별로 분할
-        for i, match in enumerate(matches):
-            article_full = match.group(1)  # "제1조", "제7조의2"
-            start_pos = match.start()
+        for i in range(len(boundaries)):
+            start = boundaries[i][0]
+            end = boundaries[i + 1][0] if i + 1 < len(boundaries) else len(text)
             
-            # 다음 조문까지 또는 끝까지
-            if i < len(matches) - 1:
-                end_pos = matches[i + 1].start()
-            else:
-                end_pos = len(content)
-            
-            article_content = content[start_pos:end_pos].strip()
-            
-            # 조문 번호와 제목 추출
-            article_no, article_title = self._parse_article_header(article_content)
-            
-            sections.append({
-                'content': article_content,
-                'article_no': article_no,
-                'article_title': article_title
-            })
+            section = text[start:end].strip()
+            if section:
+                sections.append(section)
         
         return sections
     
-    def _parse_article_header(self, content: str) -> tuple:
+    def _split_with_sentence_boundary(
+        self,
+        text: str,
+        max_size: int
+    ) -> List[str]:
         """
-        조문 헤더 파싱
-        
-        입력 예:
-        - "### 제1조(목적)"
-        - "제7조의2(외국인의 채용)"
-        
-        Returns:
-            (article_no, article_title)
-        """
-        # 첫 줄 추출
-        first_line = content.split('\n')[0].strip()
-        
-        # "### 제1조(목적)" → "제1조", "목적"
-        match = re.search(
-            r'(제\s?\d+조(?:의\s?\d+)?)\s*(?:\(([^)]*)\))?',
-            first_line
-        )
-        
-        if match:
-            article_no = match.group(1).replace(' ', '')  # "제1조"
-            article_title = match.group(2) if match.group(2) else ''
-            return article_no, article_title
-        
-        return '', ''
-    
-    def _adjust_by_length(self, sections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        ✅ Phase 0.2: 길이 기반 조정 + 하드 가드
-        
-        전략:
-        1. 각 섹션을 target_size에 맞춰 분할
-        2. 하드 가드: max_size 초과 시 강제 분할
-        3. 번호목록 과밀 시 분할
+        ✅ Phase 0.3.2: 문장 경계 보존 분할 (GPT 제안)
         
         Args:
-            sections: 조문 섹션 리스트
+            text: 원본 텍스트
+            max_size: 최대 크기
         
         Returns:
-            조정된 섹션 리스트
+            분할된 섹션 리스트
         """
-        adjusted = []
+        # 한국어 문장 분할 시도
+        sentences = self.SENTENCE_PATTERN.split(text)
         
-        for section in sections:
-            content = section['content']
-            char_count = len(content)
+        # 한국어 패턴 실패 시 영어 패턴 사용
+        if len(sentences) == 1:
+            sentences = self.SENTENCE_PATTERN_EN.split(text)
+        
+        chunks = []
+        current_chunk = []
+        current_size = 0
+        
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
             
-            # 1) 하드 가드: max_size 초과 시 강제 분할
-            if char_count > self.max_size:
-                logger.debug(f"      하드 가드 발동: {char_count}자 → 분할")
-                
-                # 번호목록 과밀 체크
-                if self._is_number_list_dense(content):
-                    logger.debug("      번호목록 과밀 감지 → 분할")
-                    sub_sections = self._split_by_number_list(content, section)
-                    adjusted.extend(sub_sections)
+            sentence_len = len(sentence)
+            
+            # 하드 가드 도달 시 문장 단위로 분할
+            if current_size + sentence_len > max_size:
+                if current_chunk:
+                    chunks.append(' '.join(current_chunk))
+                current_chunk = [sentence]
+                current_size = sentence_len
+            else:
+                current_chunk.append(sentence)
+                current_size += sentence_len
+        
+        # 마지막 청크
+        if current_chunk:
+            chunks.append(' '.join(current_chunk))
+        
+        return chunks
+    
+    def _merge_short_chunks(
+        self,
+        chunks: List[str],
+        min_size: int
+    ) -> List[str]:
+        """
+        ✅ Phase 0.3.2: 짧은 청크 병합 (GPT 제안)
+        
+        Args:
+            chunks: 청크 리스트
+            min_size: 최소 크기
+        
+        Returns:
+            병합된 청크 리스트
+        """
+        merged = []
+        i = 0
+        
+        while i < len(chunks):
+            chunk = chunks[i]
+            
+            # 마지막 청크거나 충분히 긴 경우
+            if i == len(chunks) - 1 or len(chunk) >= min_size:
+                merged.append(chunk)
+                i += 1
+            # 다음 청크와 병합
+            else:
+                if i + 1 < len(chunks):
+                    next_chunk = chunks[i + 1]
+                    merged.append(chunk + '\n\n' + next_chunk)
+                    i += 2
                 else:
-                    # 일반 길이 분할
-                    sub_sections = self._split_by_length(content, section)
-                    adjusted.extend(sub_sections)
-            
-            # 2) target_size보다 작으면 그대로 유지
-            else:
-                adjusted.append(section)
+                    merged.append(chunk)
+                    i += 1
         
-        return adjusted
+        return merged
     
-    def _is_number_list_dense(self, content: str) -> bool:
-        """
-        번호목록 과밀 체크
-        
-        기준: 연속 번호목록 10개 이상
-        
-        Args:
-            content: 텍스트
-        
-        Returns:
-            True if 과밀
-        """
-        matches = list(self.NUMBER_LIST_PATTERN.finditer(content))
-        return len(matches) >= 10
-    
-    def _split_by_number_list(
-        self, 
-        content: str, 
-        section: Dict[str, Any]
+    def _create_chunks(
+        self,
+        sections: List[str],
+        base_metadata: Dict[str, Any] = None
     ) -> List[Dict[str, Any]]:
         """
-        번호목록 기준 분할
-        
-        전략: 10개 항목마다 분할
+        청크 객체 생성
         
         Args:
-            content: 텍스트
-            section: 원본 섹션
-        
-        Returns:
-            분할된 섹션 리스트
-        """
-        lines = content.split('\n')
-        sub_sections = []
-        current_chunk = []
-        number_count = 0
-        
-        for line in lines:
-            current_chunk.append(line)
-            
-            # 번호목록 카운트
-            if self.NUMBER_LIST_PATTERN.match(line):
-                number_count += 1
-            
-            # 10개마다 분할
-            if number_count >= 10:
-                chunk_content = '\n'.join(current_chunk)
-                sub_sections.append({
-                    'content': chunk_content,
-                    'article_no': section['article_no'],
-                    'article_title': section['article_title']
-                })
-                current_chunk = []
-                number_count = 0
-        
-        # 남은 부분
-        if current_chunk:
-            chunk_content = '\n'.join(current_chunk)
-            sub_sections.append({
-                'content': chunk_content,
-                'article_no': section['article_no'],
-                'article_title': section['article_title']
-            })
-        
-        return sub_sections
-    
-    def _split_by_length(
-        self, 
-        content: str, 
-        section: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
-        """
-        일반 길이 기준 분할
-        
-        Args:
-            content: 텍스트
-            section: 원본 섹션
-        
-        Returns:
-            분할된 섹션 리스트
-        """
-        lines = content.split('\n')
-        sub_sections = []
-        current_chunk = []
-        current_length = 0
-        
-        for line in lines:
-            line_length = len(line) + 1  # +1 for newline
-            
-            # target_size 초과 시 분할
-            if current_length + line_length > self.target_size and current_chunk:
-                chunk_content = '\n'.join(current_chunk)
-                sub_sections.append({
-                    'content': chunk_content,
-                    'article_no': section['article_no'],
-                    'article_title': section['article_title']
-                })
-                current_chunk = [line]
-                current_length = line_length
-            else:
-                current_chunk.append(line)
-                current_length += line_length
-        
-        # 남은 부분
-        if current_chunk:
-            chunk_content = '\n'.join(current_chunk)
-            sub_sections.append({
-                'content': chunk_content,
-                'article_no': section['article_no'],
-                'article_title': section['article_title']
-            })
-        
-        return sub_sections
-    
-    def _fallback_split_by_length(self, content: str) -> List[Dict[str, Any]]:
-        """
-        ✅ Phase 0.2: Fail-safe 길이 기반 분할
-        
-        조문이 감지되지 않을 때 사용
-        
-        전략:
-        - target_size(900자) 기준으로 분할
-        - 문단 경계 우선
-        
-        Args:
-            content: Markdown 텍스트
+            sections: 섹션 리스트
+            base_metadata: 기본 메타데이터
         
         Returns:
             청크 리스트
         """
         chunks = []
-        paragraphs = content.split('\n\n')
         
-        current_chunk = []
-        current_length = 0
-        
-        for para in paragraphs:
-            para_length = len(para) + 2  # +2 for \n\n
+        for i, section in enumerate(sections, 1):
+            # 조문 번호 추출
+            article_match = self.ARTICLE_PATTERN.search(section)
+            article_no = article_match.group() if article_match else f"섹션{i}"
             
-            # target_size 초과 시 분할
-            if current_length + para_length > self.target_size and current_chunk:
-                chunk_content = '\n\n'.join(current_chunk)
-                chunks.append({
-                    'id': f'chunk_{len(chunks) + 1}',
-                    'content': chunk_content,
-                    'metadata': {
-                        'article_no': '',
-                        'article_title': '',
-                        'char_count': len(chunk_content),
-                        'chunk_index': len(chunks) + 1,
-                        'fallback': True
-                    }
-                })
-                current_chunk = [para]
-                current_length = para_length
-            else:
-                current_chunk.append(para)
-                current_length += para_length
-        
-        # 남은 부분
-        if current_chunk:
-            chunk_content = '\n\n'.join(current_chunk)
+            # 조문 제목 추출
+            article_title = ""
+            if article_match:
+                title_match = re.search(r'\(([^)]+)\)', article_match.group())
+                if title_match:
+                    article_title = title_match.group(1)
+            
+            metadata = {
+                'article_no': article_no.replace('#', '').strip(),
+                'article_title': article_title,
+                'char_count': len(section),
+                'chunk_index': i
+            }
+            
+            if base_metadata:
+                metadata.update(base_metadata)
+            
             chunks.append({
-                'id': f'chunk_{len(chunks) + 1}',
-                'content': chunk_content,
-                'metadata': {
-                    'article_no': '',
-                    'article_title': '',
-                    'char_count': len(chunk_content),
-                    'chunk_index': len(chunks) + 1,
-                    'fallback': True
-                }
+                'id': f'chunk_{i}',
+                'content': section,
+                'metadata': metadata
             })
         
-        logger.info(f"      Fail-safe 분할: {len(chunks)}개 청크 (평균 {sum(len(c['content']) for c in chunks) // len(chunks)}자)")
+        return chunks
+    
+    def _fallback_chunk(
+        self,
+        text: str,
+        metadata: Dict[str, Any] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Fail-safe 길이 기반 분할
+        
+        Args:
+            text: 원본 텍스트
+            metadata: 메타데이터
+        
+        Returns:
+            청크 리스트
+        """
+        chunks = []
+        start = 0
+        chunk_index = 1
+        
+        while start < len(text):
+            end = min(start + self.TARGET_SIZE, len(text))
+            
+            # 문장 경계 찾기
+            if end < len(text):
+                # 한국어 문장 끝 찾기
+                for pattern in [r'[다|요|임|함|음]\s', r'[.!?]\s']:
+                    match = re.search(pattern, text[end:end+100])
+                    if match:
+                        end += match.end()
+                        break
+            
+            section = text[start:end].strip()
+            
+            if section:
+                chunk = {
+                    'id': f'chunk_{chunk_index}',
+                    'content': section,
+                    'metadata': {
+                        'article_no': f'섹션{chunk_index}',
+                        'article_title': '',
+                        'char_count': len(section),
+                        'chunk_index': chunk_index
+                    }
+                }
+                
+                if metadata:
+                    chunk['metadata'].update(metadata)
+                
+                chunks.append(chunk)
+                chunk_index += 1
+            
+            start = end
         
         return chunks

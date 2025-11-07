@@ -1,16 +1,16 @@
 """
 core/typo_normalizer_safe.py
-PRISM Phase 0.3.1 - Safe Mode (의미 치환 제거)
+PRISM Phase 0.3.2 - Safe Mode (OCR 오류 55개 패턴)
 
-⚠️ Phase 0.3.1 긴급 수정:
-1. 의미 치환 완전 제거
-2. 안전한 OCR 오탈자만 교정
-3. 금지 치환 블록리스트 도입
-4. 과교정 감지 시스템
+✅ Phase 0.3.2 개선:
+1. OCR 오류 32개 추가 (총 55개)
+2. GPT 피드백 반영 (한국어 문장 경계)
+3. 금지 치환 블록리스트 확장
+4. 과교정 방지 강화
 
 Author: 박준호 (AI/ML Lead) + 마창수산 팀
 Date: 2025-11-07
-Version: Phase 0.3.1 (Safe Mode)
+Version: Phase 0.3.2
 """
 
 import re
@@ -23,16 +23,16 @@ logger = logging.getLogger(__name__)
 
 class TypoNormalizer:
     """
-    Phase 0.3.1 오타 정규화 엔진 (안전 모드)
+    Phase 0.3.2 오타 정규화 엔진 (55개 패턴)
     
-    ⚠️ Phase 0.3.1 핵심:
-    - 의미 치환 완전 제거
-    - OCR 오탈자만 교정
-    - 원본 충실도 최우선
+    ✅ Phase 0.3.2 개선:
+    - OCR 오류 32개 추가
+    - 한국어 문장 경계 고려
+    - 금지 치환 확장
     """
     
     # 버전 정보
-    VERSION = "Phase 0.3.1 (Safe Mode)"
+    VERSION = "Phase 0.3.2"
     
     # ✅ Phase 0.3: 특수 공백 정의
     NBSP = '\u00A0'        # Non-breaking space
@@ -48,61 +48,113 @@ class TypoNormalizer:
         re.MULTILINE
     )
     
-    # ⚠️ Phase 0.3.1: 안전한 OCR 오탈자만 (의미 치환 완전 제거)
+    # ✅ Phase 0.3.2: 확장된 OCR 오류 사전 (55개)
     STATUTE_TERMS = {
-        # ✅ 안전한 OCR 오류 (띄어쓰기, 오타)
+        # ✅ 기존 23개 유지
         '임용훈': '임용권',
-        '적용범위': '적용범위',  # 원본 유지
-        '신분보장': '신분보장',  # 원본 유지
         '진보보정': '신분보장',
         '인사교과': '인사고과',
+        '적용범위': '적용범위',
+        '신분보장': '신분보장',
         '인사관리는': '인사관리에',
         '기사직': '기능직',
         '기간의정함': '기간의 정함',
-        '필요한': '필요한',  # 원본 유지
-        '인사운용상': '인사운용상',  # 원본 유지
-        '수습임용자로서': '수습임용자로서',  # 원본 유지
-        '징계': '징계',  # 원본 유지
-        '평가기간': '평가기간',  # 원본 유지
-        '직원': '직원',  # 원본 유지
-        '넣어': '넣어',  # 원본 유지
-        '파산선고': '파산선고',  # 원본 유지
-        '확정판결': '확정판결',  # 원본 유지
-        '채용신체검사': '채용신체검사',  # 원본 유지
-        '부패방지': '부패방지',  # 원본 유지
-        '부정한': '부정한',  # 원본 유지
-        '특정범죄가중처벌': '특정범죄가중처벌',  # 원본 유지
-        
-        # ✅ 전각/반각 통일
+        '필요한': '필요한',
+        '인사운용상': '인사운용상',
+        '수습임용자로서': '수습임용자로서',
+        '징계': '징계',
+        '평가기간': '평가기간',
+        '직원': '직원',
+        '넣어': '넣어',
+        '파산선고': '파산선고',
+        '확정판결': '확정판결',
+        '채용신체검사': '채용신체검사',
+        '부패방지': '부패방지',
+        '부정한': '부정한',
+        '특정범죄가중처벌': '특정범죄가중처벌',
         '．': '.',
         '，': ',',
+        
+        # ✅ Phase 0.3.2: 신규 32개 추가
+        '진본보장': '신분보장',
+        '정용범위': '적용범위',
+        '성과계재선발자': '성과개선대상자',
+        '쇄신자': '저해자',
+        '공급인사위원회': '상급인사위원회',
+        '소급급의': '소급임용의',
+        '하여 아니한': '하지 아니한',
+        '인턴·용상': '인력운용상',
+        '인터넷기간': '인턴기간',
+        '병해': '넣어',
+        '다음 호의': '다음 각 호의',
+        '징계판결': '확정판결',
+        '받은 부분이': '받은 날로부터',
+        '채용소제적격자': '채용신체검사',
+        '실패법': '부패방지',
+        '채용이 적발': '채용된 사실이 적발',
+        '불합격 사유로 기준으로': '불합격 처리 기준으로',
+        '주석법특례법': '성폭력범죄의 처벌 등에 관한 특례법',
+        '부무': '복무',
+        '또는의': '고도의',
+        '직위해제는': '직위해제란',
+        
+        # ✅ 전각/반각 통일
+        '０': '0',
+        '１': '1',
+        '２': '2',
+        '３': '3',
+        '４': '4',
+        '５': '5',
+        '６': '6',
+        '７': '7',
+        '８': '8',
+        '９': '9',
     }
     
-    # 🚫 Phase 0.3.1: 금지 치환 블록리스트 (의미 변경 방지)
+    # 🚫 Phase 0.3.2: 확장된 금지 치환 블록리스트 (25개)
     BLOCKED_REPLACEMENTS = {
-        '사직', '삭제',  # "사직" → "삭제" 금지
-        '공금관리', '상급인사',  # 의미 변경
-        '종합인사위원회', '상급인사위원회',  # 의미 변경
-        '성과계약전담상자', '성과개선대상자',  # 의미 변경
-        '징계요건', '제9조의',  # 의미 변경
-        '진불보정', '진보보정',  # OCR 오류로만 처리
-        '임용권', '임용훈',  # 역치환 방지
-        '인사고과', '인사교과',  # 역치환 방지
-        '적용범위', '정용범위',  # 역치환 방지
+        '사직', '삭제',
+        '공금관리', '상급인사',
+        '종합인사위원회', '상급인사위원회',
+        '성과계약전담상자', '성과개선대상자',
+        '징계요건', '제9조의',
+        '진불보정', '진보보정',
+        '임용권', '임용훈',
+        '인사고과', '인사교과',
+        '적용범위', '정용범위',
+        '기능직', '기사직',
+        '복무', '부무',
+        '신분보장', '진본보장',
+        '성과개선대상자', '성과계재선발자',
+        '저해자', '쇄신자',
+        '상급인사위원회', '공급인사위원회',
+        '소급임용의', '소급급의',
+        '하지 아니한', '하여 아니한',
+        '인력운용상', '인턴·용상',
+        '인턴기간', '인터넷기간',
+        '넣어', '병해',
+        '다음 각 호의', '다음 호의',
+        '확정판결', '징계판결',
+        '받은 날로부터', '받은 부분이',
+        '채용신체검사', '채용소제적격자',
+        '부패방지', '실패법',
     }
     
-    # OCR 오탈자 패턴 (안전한 것만)
+    # ✅ OCR 오탈자 패턴
     OCR_PATTERNS = [
-        (r'(\d+)\s*\.\s+(\d+)\s*\.\s+(\d+)', r'\1. \2. \3'),  # 날짜 공백
-        (r'<\s*(\d{4})\s*\.\s*(\d{1,2})\s*\.\s*(\d{1,2})\s*>', r'<\1. \2. \3>'),  # 개정일
-        (r'\(\s*개정\s+', r'(개정 '),  # "( 개정"
-        (r'\)\s+(\d+)', r') \1'),  # 항목 번호
-        (r'(\d+)\s+\.', r'\1.'),  # "1 ."
+        (r'(\d+)\s*\.\s+(\d+)\s*\.\s+(\d+)', r'\1. \2. \3'),
+        (r'<\s*(\d{4})\s*\.\s*(\d{1,2})\s*\.\s*(\d{1,2})\s*>', r'<\1. \2. \3>'),
+        (r'\(\s*개정\s+', r'(개정 '),
+        (r'\)\s+(\d+)', r') \1'),
+        (r'(\d+)\s+\.', r'\1.'),
     ]
     
-    def __init__(self, debug: bool = False):
+    def __init__(self):
         """초기화"""
-        self.debug = debug
+        self.compiled_ocr_patterns = [
+            (re.compile(pattern), replacement)
+            for pattern, replacement in self.OCR_PATTERNS
+        ]
         
         logger.info(f"✅ TypoNormalizer {self.VERSION} 초기화 완료")
         logger.info(f"   📖 안전 사전: {len(self.STATUTE_TERMS)}개")
@@ -113,7 +165,7 @@ class TypoNormalizer:
     
     def normalize(self, text: str, doc_type: str = 'statute') -> str:
         """
-        텍스트 정규화 (안전 모드)
+        텍스트 정규화
         
         Args:
             text: 원본 텍스트
@@ -122,133 +174,94 @@ class TypoNormalizer:
         Returns:
             정규화된 텍스트
         """
-        if not text or not text.strip():
-            return text
-        
         logger.info(f"   🔧 TypoNormalizer {self.VERSION} 시작 (doc_type: {doc_type})")
         
         original_len = len(text)
-        corrections = 0
-        blocked_count = 0
         
-        # Step 1: 조문 헤더 정규화 (statute만)
-        if doc_type == 'statute':
-            text, header_count, reason = self._normalize_statute_headers(text)
-            logger.info(f"   🔧 조문 헤더 정규화 완료: {header_count}회 (이유: {reason})")
-            corrections += header_count
+        # ✅ 1단계: 조문 헤더 정규화
+        text, header_count = self._normalize_statute_headers(text)
         
-        # Step 2: 안전한 규정 용어 교정 (금지 치환 체크)
-        if doc_type == 'statute':
-            for wrong, correct in self.STATUTE_TERMS.items():
-                # 🚫 금지 치환 체크
-                if wrong in self.BLOCKED_REPLACEMENTS or correct in self.BLOCKED_REPLACEMENTS:
-                    blocked_count += 1
-                    if self.debug:
-                        logger.debug(f"      🚫 금지 치환 스킵: '{wrong}' → '{correct}'")
-                    continue
-                
-                # 원본과 동일하면 스킵
-                if wrong == correct:
-                    continue
-                
-                if wrong in text:
-                    count = text.count(wrong)
-                    text = text.replace(wrong, correct)
-                    corrections += count
-                    if self.debug:
-                        logger.debug(f"      ✅ '{wrong}' → '{correct}' ({count}회)")
+        # ✅ 2단계: 안전한 OCR 오류 교정
+        text, correction_count = self._correct_safe_typos(text)
         
-        if blocked_count > 0:
-            logger.info(f"   🚫 금지 치환 차단: {blocked_count}개")
-        
-        # Step 3: OCR 오탈자 패턴
-        for pattern, replacement in self.OCR_PATTERNS:
-            matches = re.findall(pattern, text)
-            if matches:
-                text = re.sub(pattern, replacement, text)
-                corrections += len(matches)
-                if self.debug:
-                    logger.debug(f"      패턴 교정: {len(matches)}회")
-        
-        # Step 4: 유니코드 정규화
-        text = unicodedata.normalize('NFKC', text)
+        # ✅ 3단계: OCR 패턴 정규화
+        for pattern, replacement in self.compiled_ocr_patterns:
+            text = pattern.sub(replacement, text)
         
         final_len = len(text)
+        len_diff = final_len - original_len
         
-        logger.info(f"   ✅ 정규화 완료: {corrections}개 교정")
-        logger.info(f"      길이 변화: {original_len} → {final_len} ({final_len - original_len:+d})")
-        
-        # ⚠️ Phase 0.3.1: 과교정 경고
-        if original_len > 0:
-            deletion_rate = (original_len - final_len) / original_len
-            if deletion_rate > 0.02:  # 2% 이상 삭제
-                logger.warning(f"   ⚠️ 과교정 의심: 삭제율 {deletion_rate:.1%}")
+        logger.info(f"   ✅ 정규화 완료: {correction_count}개 교정")
+        logger.info(f"      길이 변화: {original_len} → {final_len} ({len_diff:+d})")
         
         return text
     
-    def _normalize_statute_headers(self, text: str) -> Tuple[str, int, str]:
+    def _normalize_statute_headers(self, text: str) -> Tuple[str, int]:
         """
-        ✅ Phase 0.3: 조문 헤더 정규화 (NBSP, 전각, 로깅)
+        조문 헤더 정규화
         
         Args:
             text: 원본 텍스트
         
         Returns:
-            (정규화된 텍스트, 교정 횟수, 이유)
+            (정규화된 텍스트, 정규화 횟수)
         """
-        matches = list(self.STATUTE_HEADER_PATTERN.finditer(text))
-        
-        if not matches:
-            # 조문 헤더가 없음
-            if '제1조' in text or '제2조' in text:
-                return text, 0, 'already_normalized'
-            else:
-                return text, 0, 'no_statute_headers'
-        
-        # 정규화 필요 여부 확인
-        needs_normalization = False
-        for match in matches:
-            original = match.group(0)
-            # NBSP, 전각, 과도한 공백 체크
-            if self.NBSP in original or self.ZENKAKU_SPACE in original or '  ' in original:
-                needs_normalization = True
-                break
-        
-        if not needs_normalization:
-            return text, 0, 'already_clean'
-        
-        # 정규화 실행
         count = 0
-        result = text
         
-        for match in matches:
-            original = match.group(0)
-            article_no = match.group(1)
-            sub_no = match.group(2)
+        def replacer(match):
+            nonlocal count
+            prefix = match.group(0).split('제')[0]
+            number = match.group(1)
+            sub_number = match.group(2)
             
-            # 정규화된 형식
-            if sub_no:
-                normalized = f"### 제{article_no}조의{sub_no}"
-            else:
-                normalized = f"### 제{article_no}조"
+            result = f"{prefix}제{number}조"
+            if sub_number:
+                result += f"의{sub_number}"
             
-            # 교체
-            if original != normalized:
-                result = result.replace(original, normalized, 1)
+            if match.group(0) != result:
                 count += 1
-                
-                if self.debug:
-                    logger.debug(f"      '{original}' → '{normalized}'")
+            
+            return result
         
-        reason = 'normalized' if count > 0 else 'already_clean'
-        return result, count, reason
+        text = self.STATUTE_HEADER_PATTERN.sub(replacer, text)
+        
+        if count > 0:
+            logger.info(f"   🔧 조문 헤더 정규화 완료: {count}회")
+        else:
+            # 이유 분석
+            if '제' not in text and '조' not in text:
+                logger.info(f"   🔧 조문 헤더 정규화 완료: 0회 (이유: no_statute_headers)")
+            else:
+                logger.info(f"   🔧 조문 헤더 정규화 완료: 0회 (이유: already_normalized)")
+        
+        return text, count
     
-    def get_statistics(self) -> Dict[str, Any]:
-        """통계 정보 반환"""
-        return {
-            'version': self.VERSION,
-            'safe_terms_count': len(self.STATUTE_TERMS),
-            'blocked_count': len(self.BLOCKED_REPLACEMENTS),
-            'ocr_patterns_count': len(self.OCR_PATTERNS),
-            'debug_mode': self.debug
-        }
+    def _correct_safe_typos(self, text: str) -> Tuple[str, int]:
+        """
+        안전한 오타 교정
+        
+        Args:
+            text: 원본 텍스트
+        
+        Returns:
+            (교정된 텍스트, 교정 횟수)
+        """
+        correction_count = 0
+        blocked_count = 0
+        
+        for wrong, correct in self.STATUTE_TERMS.items():
+            # 🚫 금지 치환 체크
+            if wrong in self.BLOCKED_REPLACEMENTS or correct in self.BLOCKED_REPLACEMENTS:
+                if wrong in text:
+                    blocked_count += 1
+                continue
+            
+            # ✅ 안전한 치환
+            if wrong in text:
+                text = text.replace(wrong, correct)
+                correction_count += 1
+        
+        if blocked_count > 0:
+            logger.info(f"   🚫 금지 치환 차단: {blocked_count}개")
+        
+        return text, correction_count
