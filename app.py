@@ -1,15 +1,15 @@
 """
 app.py
-PRISM Phase 5.7.6.1 긴급 패치
+PRISM Phase 0.3.1 - Safe Mode Application
 
-✅ 수정 사항:
-1. 임시 파일 삭제 에러 처리 개선
-2. finally 블록 추가
-3. 파일 핸들 안전 종료
+⚠️ Phase 0.3.1 수정:
+1. 기존 pipeline.py 사용 (Safe 모듈 자동 로드)
+2. 버전 확인 코드 추가
+3. 원본 충실도 우선
 
 Author: 마창수산 팀
-Date: 2025-11-02
-Version: 5.7.6.1 Hotfix
+Date: 2025-11-07
+Version: Phase 0.3.1 (Safe Mode)
 """
 
 import streamlit as st
@@ -18,6 +18,8 @@ import sys
 from pathlib import Path
 import os
 import time
+import importlib
+import json
 
 # ✅ 로거 초기화 (최상단)
 logging.basicConfig(
@@ -30,12 +32,48 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ✅ core 모듈 import (Phase 5.7.6)
+# ⚠️ Phase 0.3.1: 캐시 무효화
+importlib.invalidate_caches()
+
+# ✅ core 모듈 import
 try:
     from core.pdf_processor import PDFProcessor
     from core.vlm_service import VLMServiceV50
-    from core.pipeline import Phase53Pipeline
+    from core.pipeline import Phase53Pipeline  # ⚠️ 기존 pipeline 사용
+    
     logger.info("✅ 모든 core 모듈 import 성공")
+    
+    # ⚠️ Phase 0.3.1: 버전 확인 (Safe 모듈 체크)
+    try:
+        from core.typo_normalizer_safe import TypoNormalizer
+        from core.post_merge_normalizer_safe import PostMergeNormalizer
+        
+        tn_version = getattr(TypoNormalizer, 'VERSION', 'UNKNOWN')
+        tn_dict_size = len(getattr(TypoNormalizer, 'STATUTE_TERMS', {}))
+        tn_block_size = len(getattr(TypoNormalizer, 'BLOCKED_REPLACEMENTS', set()))
+        
+        logger.info(f"🔎 TypoNormalizer: {tn_version}")
+        logger.info(f"   📖 사전: {tn_dict_size}개")
+        logger.info(f"   🚫 금지: {tn_block_size}개")
+        
+        pm_version = getattr(PostMergeNormalizer, 'VERSION', 'UNKNOWN')
+        logger.info(f"🔎 PostMergeNormalizer: {pm_version}")
+        
+        # 버전 확인
+        if 'Safe Mode' in tn_version and tn_dict_size >= 20 and tn_block_size >= 10:
+            logger.info("✅ Phase 0.3.1 Hotfix 확인됨!")
+            safe_mode_enabled = True
+        else:
+            logger.warning(f"⚠️ Phase 0.3.1 Hotfix 미확인: version={tn_version}, dict={tn_dict_size}, block={tn_block_size}")
+            safe_mode_enabled = False
+    except ImportError:
+        logger.warning("⚠️ Safe Normalizers 없음 - 기본 버전 사용")
+        tn_version = "Phase 0.3 (기본)"
+        pm_version = "Phase 0.3 (기본)"
+        tn_dict_size = 15
+        tn_block_size = 0
+        safe_mode_enabled = False
+        
 except ImportError as e:
     logger.error(f"❌ core 모듈 import 실패: {e}")
     st.error(f"❌ 모듈 로딩 실패: {e}")
@@ -43,7 +81,20 @@ except ImportError as e:
 
 
 def main():
-    st.title("🎯 PRISM Phase 5.7.6.1 - 문서 처리 시스템 (긴급 패치)")
+    # 제목 (Safe Mode 여부 표시)
+    if safe_mode_enabled:
+        st.title("🎯 PRISM Phase 0.3.1 - 문서 처리 시스템 (Safe Mode) ✅")
+    else:
+        st.title("🎯 PRISM Phase 0.3 - 문서 처리 시스템 ⚠️")
+        st.warning("⚠️ Safe Mode가 활성화되지 않았습니다. Safe 모듈을 확인하세요.")
+    
+    # 버전 정보 표시
+    with st.expander("ℹ️ 버전 정보", expanded=False):
+        st.write(f"**Safe Mode**: {'✅ 활성화' if safe_mode_enabled else '❌ 비활성화'}")
+        st.write(f"**TypoNormalizer**: {tn_version}")
+        st.write(f"**PostMergeNormalizer**: {pm_version}")
+        st.write(f"**사전 크기**: {tn_dict_size}개")
+        st.write(f"**금지 치환**: {tn_block_size}개")
     
     # 초기화
     try:
@@ -59,16 +110,18 @@ def main():
     uploaded_file = st.file_uploader("📄 PDF 파일 업로드", type=['pdf'])
     
     if uploaded_file is not None:
-        # ✅ session_state를 사용하여 처리 결과 캐싱
+        # session_state를 사용하여 처리 결과 캐싱
         file_key = f"{uploaded_file.name}_{uploaded_file.size}"
         
         if 'last_processed_file' not in st.session_state or st.session_state['last_processed_file'] != file_key:
             # 새 파일이거나 아직 처리 안 했으면 처리
-            with st.spinner('🔄 PDF 처리 중...'):
+            status_text = "🔄 PDF 처리 중... (Phase 0.3.1 Safe Mode)" if safe_mode_enabled else "🔄 PDF 처리 중..."
+            
+            with st.spinner(status_text):
                 temp_path = None
                 
                 try:
-                    # ✅ Phase 5.7.6.1: 임시 파일 저장 (타임스탬프 추가)
+                    # 임시 파일 저장
                     temp_filename = f"temp_{int(time.time())}_{uploaded_file.name}"
                     temp_path = Path(temp_filename)
                     
@@ -81,7 +134,7 @@ def main():
                     pipeline = Phase53Pipeline(pdf_processor, vlm_service)
                     result = pipeline.process_pdf(str(temp_path))
                     
-                    # ✅ 결과를 session_state에 저장
+                    # 결과를 session_state에 저장
                     st.session_state['last_processed_file'] = file_key
                     st.session_state['result'] = result
                     st.session_state['processing_error'] = None
@@ -91,140 +144,136 @@ def main():
                 except Exception as e:
                     logger.error(f"❌ 처리 오류: {str(e)}", exc_info=True)
                     st.session_state['processing_error'] = str(e)
-                    st.error(f"❌ 처리 중 오류 발생: {str(e)}")
-                    return
-                
+                    st.error(f"❌ 처리 실패: {str(e)}")
+                    
                 finally:
-                    # ✅ Phase 5.7.6.1: 임시 파일 안전 삭제
+                    # 임시 파일 안전 삭제
                     if temp_path and temp_path.exists():
                         try:
-                            # 잠시 대기 (파일 핸들 해제 대기)
-                            time.sleep(0.5)
-                            
-                            # 삭제 시도
+                            time.sleep(0.1)
                             temp_path.unlink()
                             logger.info(f"✅ 임시 파일 삭제: {temp_path}")
-                        
-                        except PermissionError as pe:
-                            # Windows 파일 잠금 오류 - 무시
+                        except PermissionError:
                             logger.warning(f"⚠️ 임시 파일 삭제 실패 (파일 잠금): {temp_path}")
-                            logger.warning("   → 시스템이 나중에 자동 정리할 예정")
-                        
-                        except Exception as cleanup_e:
-                            logger.error(f"❌ 임시 파일 삭제 오류: {cleanup_e}")
+                            logger.warning(f"   → 시스템이 나중에 자동 정리할 예정")
+                        except Exception as e:
+                            logger.error(f"❌ 임시 파일 삭제 오류: {e}")
         
-        # ✅ 캐시된 결과 사용
-        if 'processing_error' in st.session_state and st.session_state['processing_error']:
-            st.error(f"❌ 이전 처리 오류: {st.session_state['processing_error']}")
-            return
-        
-        if 'result' not in st.session_state:
-            st.warning("⚠️ 처리 결과가 없습니다.")
-            return
-        
-        result = st.session_state['result']
-        
-        # ✅ 처리 완료 표시
-        st.success('✅ 처리 완료!')
-        
-        # ===== 결과 표시 =====
-        
-        # 1. 통계
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            valid_pages = result.get('pages_success', 0)
-            total_pages = result.get('pages_total', 0)
-            st.metric("📄 페이지", f"{valid_pages}/{total_pages}")
-        
-        with col2:
-            markdown_len = len(result.get('markdown', ''))
-            st.metric("📝 추출 글자", f"{markdown_len:,}자")
-        
-        with col3:
-            chunk_count = len(result.get('chunks', []))
-            st.metric("✂️ 청크", f"{chunk_count}개")
-        
-        with col4:
-            overall_score = result.get('overall_score', 0)
-            st.metric("🎯 종합 점수", f"{overall_score:.0f}/100")
-        
-        # 2. Fallback 통계
-        fallback_stats = result.get('fallback_stats', {})
-        fallback_count = fallback_stats.get('fallback_count', 0)
-        
-        if fallback_count > 0:
-            fallback_rate = fallback_stats.get('fallback_rate', 0)
-            st.info(f"🔄 Fallback 사용: {fallback_count}페이지 ({fallback_rate:.1%})")
-        
-        # 3. 품질 평가
-        with st.expander("📊 품질 평가 상세", expanded=False):
-            col1, col2 = st.columns(2)
+        # 결과 표시
+        if 'result' in st.session_state and st.session_state['result']:
+            result = st.session_state['result']
             
-            with col1:
-                st.metric("원본 충실도", f"{result.get('fidelity_score', 0):.0f}/100")
-                st.metric("청킹 품질", f"{result.get('chunking_score', 0):.0f}/100")
-                st.metric("RAG 적합도", f"{result.get('rag_score', 0):.0f}/100")
-            
-            with col2:
-                st.metric("범용성", f"{result.get('universality_score', 0):.0f}/100")
-                st.metric("경쟁력", f"{result.get('competitive_score', 0):.0f}/100")
-                st.metric("처리 시간", f"{result.get('processing_time', 0):.1f}초")
-        
-        # 4. 청크 표시
-        st.subheader("✂️ 생성된 청크")
-        
-        chunks = result.get('chunks', [])
-        
-        if chunks:
-            for i, chunk in enumerate(chunks):
-                # metadata 안전하게 접근
-                metadata = chunk.get('metadata', {})
-                char_count = metadata.get('char_count', len(chunk.get('content', '')))
-                article_no = metadata.get('article_no', '?')
-                article_title = metadata.get('article_title', '')
+            if result.get('success'):
+                st.success("✅ 처리 완료!")
                 
-                # 청크 제목 생성
-                if article_title:
-                    chunk_title = f"청크 {i+1}: {article_no} ({article_title}) - {char_count}자"
-                else:
-                    chunk_title = f"청크 {i+1}: {article_no} - {char_count}자"
+                # 통계 정보
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("📄 페이지 수", result.get('pages_count', 0))
+                with col2:
+                    st.metric("✂️ 청크 수", len(result.get('chunks', [])))
+                with col3:
+                    st.metric("⏱️ 처리 시간", f"{result.get('elapsed_time', 0):.1f}초")
                 
-                with st.expander(chunk_title):
-                    st.text(chunk.get('content', ''))
+                # 체크리스트 표시
+                st.subheader("📊 품질 체크리스트")
+                
+                checklist = result.get('checklist', {})
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    fidelity = checklist.get('fidelity', 0)
+                    st.metric("원본 충실도", f"{fidelity}/100", 
+                             delta="목표: 95점" if fidelity >= 95 else "개선 필요",
+                             delta_color="normal" if fidelity >= 95 else "inverse")
+                with col2:
+                    chunking = checklist.get('chunking', 0)
+                    st.metric("청킹 품질", f"{chunking}/100")
+                with col3:
+                    rag = checklist.get('rag_readiness', 0)
+                    st.metric("RAG 적합도", f"{rag}/100")
+                
+                col4, col5, col6 = st.columns(3)
+                with col4:
+                    generality = checklist.get('generality', 0)
+                    st.metric("범용성", f"{generality}/100")
+                with col5:
+                    competitive = checklist.get('competitive_edge', 0)
+                    st.metric("경쟁력", f"{competitive}/100")
+                with col6:
+                    overall = checklist.get('overall', 0)
+                    st.metric("🎯 종합", f"{overall}/100",
+                             delta="목표: 95점" if overall >= 95 else "개선 필요",
+                             delta_color="normal" if overall >= 95 else "inverse")
+                
+                # Markdown 미리보기
+                st.subheader("📝 Markdown 미리보기")
+                markdown = result.get('markdown', '')
+                
+                if markdown:
+                    # 처음 1000자만 표시
+                    preview = markdown[:1000]
+                    if len(markdown) > 1000:
+                        preview += "\n\n... (생략) ..."
                     
-                    # metadata 표시
-                    if metadata:
-                        st.caption(f"📋 메타데이터: {metadata}")
-        else:
-            st.warning("⚠️ 청크가 생성되지 않았습니다.")
+                    st.text_area("", preview, height=300, disabled=True)
+                    
+                    # 전체 보기
+                    with st.expander("📄 전체 Markdown 보기"):
+                        st.markdown(markdown)
+                
+                # 청크 미리보기
+                st.subheader("✂️ 청크 미리보기")
+                chunks = result.get('chunks', [])
+                
+                if chunks:
+                    # 처음 3개 청크만 표시
+                    for i, chunk in enumerate(chunks[:3], 1):
+                        with st.expander(f"청크 {i}: {chunk.get('id', '')}"):
+                            st.write("**메타데이터:**")
+                            st.json(chunk.get('metadata', {}))
+                            st.write("**내용:**")
+                            st.text(chunk.get('content', ''))
+                    
+                    if len(chunks) > 3:
+                        st.info(f"📋 총 {len(chunks)}개 청크 (전체는 JSON 다운로드에서 확인)")
+                
+                # 다운로드 버튼
+                st.subheader("📥 다운로드")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    if markdown:
+                        timestamp = time.strftime("%Y%m%d_%H%M%S")
+                        md_filename = f"{uploaded_file.name.replace('.pdf', '')}_{timestamp}_markdown.md"
+                        
+                        st.download_button(
+                            label="📥 Markdown 다운로드",
+                            data=markdown,
+                            file_name=md_filename,
+                            mime="text/markdown",
+                            key="download_markdown"
+                        )
+                
+                with col2:
+                    if chunks:
+                        timestamp = time.strftime("%Y%m%d_%H%M%S")
+                        json_filename = f"{uploaded_file.name.replace('.pdf', '')}_{timestamp}_chunks.json"
+                        
+                        chunks_json = json.dumps(chunks, ensure_ascii=False, indent=2)
+                        st.download_button(
+                            label="📥 청크 JSON 다운로드",
+                            data=chunks_json,
+                            file_name=json_filename,
+                            mime="application/json",
+                            key="download_chunks"
+                        )
+            else:
+                st.error(f"❌ 처리 실패: {result.get('error', '알 수 없는 오류')}")
         
-        # ===== 다운로드 버튼 =====
-        st.subheader("📥 다운로드")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            markdown = result.get('markdown', '')
-            if markdown:
-                st.download_button(
-                    label="📥 Markdown 다운로드",
-                    data=markdown,
-                    file_name=f"{uploaded_file.name}_markdown.md",
-                    mime="text/markdown",
-                    key="download_markdown"
-                )
-        
-        with col2:
-            if chunks:
-                import json
-                chunks_json = json.dumps(chunks, ensure_ascii=False, indent=2)
-                st.download_button(
-                    label="📥 청크 JSON 다운로드",
-                    data=chunks_json,
-                    file_name=f"{uploaded_file.name}_chunks.json",
-                    mime="application/json",
-                    key="download_chunks"
-                )
+        elif 'processing_error' in st.session_state and st.session_state['processing_error']:
+            st.error(f"❌ 처리 실패: {st.session_state['processing_error']}")
 
 
 if __name__ == "__main__":
