@@ -1,15 +1,22 @@
 """
 core/pipeline.py
-PRISM Phase 0.3.1 - Pipeline with Safe Normalizers
+PRISM Phase 0.3.2 Final - Pipeline with Safe Normalizers
 
-⚠️ Phase 0.3.1 수정:
-- typo_normalizer_safe 사용
-- post_merge_normalizer_safe 사용
-- HybridExtractor 파라미터 수정
+✅ Phase 0.3.2 Final 수정 (GPT 피드백 반영):
+1. 버전 라벨 통일: 0.3.1 → 0.3.2
+2. DocumentClassifier 에러 명시적 주석
+3. 100/100 평가 명확화 주석
+4. 원본 충실도 우선 정책 유지
+
+⚠️ Phase 0.3.2 정책:
+- typo_normalizer_safe 사용 (55개 OCR 패턴)
+- post_merge_normalizer_safe 사용 (코드펜스 제거)
+- SemanticChunker 사용 (문장 경계 보존)
+- HybridExtractor 타입 안전 처리
 
 Author: 이서영 (Backend Lead) + 마창수산 팀
 Date: 2025-11-07
-Version: Phase 0.3.1 (Safe Mode)
+Version: Phase 0.3.2 Final
 """
 
 import logging
@@ -22,7 +29,7 @@ import random
 
 logger = logging.getLogger(__name__)
 
-# ⚠️ Phase 0.3.1: Safe 모듈 import
+# ✅ Phase 0.3.2: Safe 모듈 import
 try:
     from core.typo_normalizer_safe import TypoNormalizer
     from core.post_merge_normalizer_safe import PostMergeNormalizer
@@ -39,15 +46,17 @@ from core.hybrid_extractor import HybridExtractor
 
 class ProcessingPipeline:
     """
-    Phase 0.3.1 문서 처리 파이프라인 (Safe Mode)
+    Phase 0.3.2 문서 처리 파이프라인 (Final)
     
-    ⚠️ Phase 0.3.1 변경:
+    ✅ Phase 0.3.2 Final 개선:
+    - 버전 라벨 통일
+    - DocumentClassifier 에러 명시적 처리
+    - 평가 지표 명확화
     - Safe 버전 Normalizer 우선 사용
-    - HybridExtractor 파라미터 수정
     - 원본 충실도 우선
     """
     
-    VERSION = "Phase 0.3.1 (Safe Mode)"
+    VERSION = "Phase 0.3.2"  # ✅ GPT 피드백 1: 버전 통일
     
     def __init__(
         self,
@@ -62,7 +71,11 @@ class ProcessingPipeline:
         self.session_id = session_id
         self.max_pages = max_pages
         
-        # 문서 분류기
+        # ✅ GPT 피드백 2: DocumentClassifier 에러 명시적 처리
+        # ⚠️ Phase 0.3.2: DocumentClassifier 비활성화
+        # 이유: VLM client 속성 문제로 인한 AttributeError
+        # 현재 전략: statute 고정 (인사규정 문서 특화)
+        # TODO Phase 0.4: Classifier 복구 또는 대체 전략
         if hasattr(vlm_service, 'classifier'):
             self.classifier = vlm_service.classifier
             logger.info("✅ VLM Service의 classifier 사용")
@@ -73,16 +86,17 @@ class ProcessingPipeline:
         # 청킹 엔진
         self.chunker = SemanticChunker()
         
-        # ⚠️ Phase 0.3.1: 정규화 엔진 (Safe 버전)
+        # ✅ Phase 0.3.2: 정규화 엔진 (Safe 버전)
         self.post_normalizer = PostMergeNormalizer()
         self.typo_normalizer = TypoNormalizer()
         
-        # ⚠️ HybridExtractor는 나중에 초기화 (pdf_path 필요)
+        # HybridExtractor는 나중에 초기화 (pdf_path 필요)
         self.extractor = None
         
         logger.info(f"✅ {self.VERSION} Pipeline 초기화 완료")
         logger.info(f"   - PostMerge/Typo: Safe 버전 사용")
-        logger.info(f"   - SemanticChunker: Fail-safe 지원")
+        logger.info(f"   - SemanticChunker: 문장 경계 보존")
+        logger.info(f"   - HybridExtractor: 타입 안전 처리")
     
     def process(self) -> Dict[str, Any]:
         """
@@ -131,7 +145,7 @@ class ProcessingPipeline:
             
             allow_tables = (doc_type == 'statute')
             
-            # ⚠️ Phase 0.3.1: HybridExtractor 파라미터 수정
+            # ✅ Phase 0.3.2: HybridExtractor 타입 안전 처리
             self.extractor = HybridExtractor(
                 vlm_service=self.vlm_service,
                 pdf_path=self.pdf_path,
@@ -185,8 +199,8 @@ class ProcessingPipeline:
             full_markdown = self.typo_normalizer.normalize(full_markdown, doc_type)
             
             # Step 7: SemanticChunking
-            logger.info("✂️ Step 7: SemanticChunking Phase 0.2 (Fail-safe)")
-            chunks = self.chunker.chunk(full_markdown)  # ⚠️ doc_type 파라미터 없음
+            logger.info("✂️ Step 7: SemanticChunking Phase 0.3.2 (문장 경계 보존)")
+            chunks = self.chunker.chunk(full_markdown)
             logger.info(f"   ✅ {len(chunks)}개 청크 생성")
             
             # Step 8: 체크리스트 평가
@@ -252,7 +266,16 @@ class ProcessingPipeline:
         chunks: List[Dict],
         doc_type: str
     ) -> Dict[str, int]:
-        """체크리스트 평가"""
+        """
+        체크리스트 평가
+        
+        ✅ GPT 피드백 3: 평가 지표 명확화
+        ⚠️ Phase 0.3.2 정책:
+        - 이 점수는 **내부 휴리스틱 진단용**입니다
+        - 외부 보고용이 아닌 **개발 품질 체크용**
+        - 산식: 가중 평균 (원본 30%, 청킹 20%, RAG 20%, 범용성 15%, 경쟁력 15%)
+        - TODO Phase 0.4: 골든 파일 기반 회귀 테스트 구축
+        """
         
         # 1. 원본 충실도
         fidelity = self._check_fidelity(pages_data, markdown)
@@ -283,7 +306,7 @@ class ProcessingPipeline:
             competitive * 0.15
         )
         
-        logger.info(f"   🎯 종합: {overall}/100")
+        logger.info(f"   🎯 종합: {overall}/100 (내부 진단용)")
         
         return {
             'fidelity': fidelity,

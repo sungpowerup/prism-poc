@@ -87,7 +87,7 @@ class SemanticChunker:
         boundaries = self._find_article_boundaries(text)
         
         if len(boundaries) < 2:
-            logger.warning(f"  ⚠️ 조문 경계 부족 ({len(boundaries)}개) - Fail-safe 길이 분할")
+            logger.warning(f" ⚠️ 조문 경계 부족 ({len(boundaries)}개) - Fail-safe 길이 분할")
             return self._fallback_chunk(text, metadata)
         
         logger.info(f"   조문 감지: {len(boundaries)}개")

@@ -1,15 +1,15 @@
 """
 app.py
-PRISM Phase 0.3.1 - Safe Mode Application
+PRISM Phase 0.3.2 - Enhanced Application
 
-⚠️ Phase 0.3.1 수정:
-1. 기존 pipeline.py 사용 (Safe 모듈 자동 로드)
-2. 버전 확인 코드 추가
-3. 원본 충실도 우선
+✅ Phase 0.3.2 업데이트:
+1. 버전 체크 로직 업데이트 (55개 패턴, 25개 금지)
+2. Phase 0.3.2 Safe 모듈 자동 로드
+3. 개선사항 표시
 
 Author: 마창수산 팀
 Date: 2025-11-07
-Version: Phase 0.3.1 (Safe Mode)
+Version: Phase 0.3.2
 """
 
 import streamlit as st
@@ -32,46 +32,58 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ⚠️ Phase 0.3.1: 캐시 무효화
+# ⚠️ Phase 0.3.2: 캐시 무효화
 importlib.invalidate_caches()
 
 # ✅ core 모듈 import
 try:
     from core.pdf_processor import PDFProcessor
     from core.vlm_service import VLMServiceV50
-    from core.pipeline import Phase53Pipeline  # ⚠️ 기존 pipeline 사용
+    from core.pipeline import Phase53Pipeline
     
     logger.info("✅ 모든 core 모듈 import 성공")
     
-    # ⚠️ Phase 0.3.1: 버전 확인 (Safe 모듈 체크)
+    # ✅ Phase 0.3.2: 버전 확인 (Safe 모듈 체크)
     try:
         from core.typo_normalizer_safe import TypoNormalizer
         from core.post_merge_normalizer_safe import PostMergeNormalizer
+        from core.semantic_chunker import SemanticChunker
         
         tn_version = getattr(TypoNormalizer, 'VERSION', 'UNKNOWN')
         tn_dict_size = len(getattr(TypoNormalizer, 'STATUTE_TERMS', {}))
         tn_block_size = len(getattr(TypoNormalizer, 'BLOCKED_REPLACEMENTS', set()))
         
+        pm_version = getattr(PostMergeNormalizer, 'VERSION', 'UNKNOWN')
+        sc_version = getattr(SemanticChunker, 'VERSION', 'UNKNOWN')
+        
         logger.info(f"🔎 TypoNormalizer: {tn_version}")
         logger.info(f"   📖 사전: {tn_dict_size}개")
         logger.info(f"   🚫 금지: {tn_block_size}개")
-        
-        pm_version = getattr(PostMergeNormalizer, 'VERSION', 'UNKNOWN')
         logger.info(f"🔎 PostMergeNormalizer: {pm_version}")
+        logger.info(f"🔎 SemanticChunker: {sc_version}")
         
-        # 버전 확인
-        if 'Safe Mode' in tn_version and tn_dict_size >= 20 and tn_block_size >= 10:
-            logger.info("✅ Phase 0.3.1 Hotfix 확인됨!")
+        # ✅ Phase 0.3.2: 버전 확인 (55개 패턴, 25개 금지)
+        if tn_version == "Phase 0.3.2" and tn_dict_size >= 50 and tn_block_size >= 20:
+            logger.info("✅ Phase 0.3.2 확인됨!")
+            phase_version = "Phase 0.3.2"
+            safe_mode_enabled = True
+        elif "Phase 0.3.1" in tn_version and tn_dict_size >= 20 and tn_block_size >= 10:
+            logger.info("✅ Phase 0.3.1 Hotfix 확인됨")
+            phase_version = "Phase 0.3.1"
             safe_mode_enabled = True
         else:
-            logger.warning(f"⚠️ Phase 0.3.1 Hotfix 미확인: version={tn_version}, dict={tn_dict_size}, block={tn_block_size}")
+            logger.warning(f"⚠️ Phase 미확인: version={tn_version}, dict={tn_dict_size}, block={tn_block_size}")
+            phase_version = "Unknown"
             safe_mode_enabled = False
-    except ImportError:
-        logger.warning("⚠️ Safe Normalizers 없음 - 기본 버전 사용")
+            
+    except ImportError as ie:
+        logger.warning(f"⚠️ Safe Normalizers 없음: {ie}")
         tn_version = "Phase 0.3 (기본)"
         pm_version = "Phase 0.3 (기본)"
+        sc_version = "Phase 0.3 (기본)"
         tn_dict_size = 15
         tn_block_size = 0
+        phase_version = "Legacy"
         safe_mode_enabled = False
         
 except ImportError as e:
@@ -81,18 +93,41 @@ except ImportError as e:
 
 
 def main():
-    # 제목 (Safe Mode 여부 표시)
-    if safe_mode_enabled:
+    # ✅ Phase 0.3.2: 제목 (버전별 표시)
+    if phase_version == "Phase 0.3.2":
+        st.title("🎯 PRISM Phase 0.3.2 - 문서 처리 시스템 ✨")
+        st.success("✅ Phase 0.3.2 활성화 (55개 OCR 패턴, 문장 경계 보존 청킹)")
+    elif phase_version == "Phase 0.3.1":
         st.title("🎯 PRISM Phase 0.3.1 - 문서 처리 시스템 (Safe Mode) ✅")
+        st.info("ℹ️ Phase 0.3.1 Safe Mode (기본 보호)")
     else:
         st.title("🎯 PRISM Phase 0.3 - 문서 처리 시스템 ⚠️")
         st.warning("⚠️ Safe Mode가 활성화되지 않았습니다. Safe 모듈을 확인하세요.")
     
+    # ✅ Phase 0.3.2: 개선사항 표시
+    if phase_version == "Phase 0.3.2":
+        with st.expander("✨ Phase 0.3.2 개선사항", expanded=False):
+            st.markdown("""
+            **🎯 Phase 0.3.2 주요 개선:**
+            1. ✅ **OCR 오류 교정 확장**: 23개 → 55개 패턴 (+32개)
+            2. ✅ **문장 경계 보존 청킹**: 한국어 문장 끝 패턴 지원
+            3. ✅ **최소 청크 크기 가드**: 300자 이상 보장
+            4. ✅ **중간 코드펜스 제거**: RAG 적합도 향상
+            5. ✅ **금지 치환 확장**: 15개 → 25개 (+10개)
+            
+            **🔧 기술 스펙:**
+            - TypoNormalizer: 55개 안전 패턴, 25개 금지 치환
+            - SemanticChunker: 문장 경계 보존 분할 (한국어 지원)
+            - PostMergeNormalizer: 중간 코드펜스 제거
+            """)
+    
     # 버전 정보 표시
     with st.expander("ℹ️ 버전 정보", expanded=False):
+        st.write(f"**현재 버전**: {phase_version}")
         st.write(f"**Safe Mode**: {'✅ 활성화' if safe_mode_enabled else '❌ 비활성화'}")
         st.write(f"**TypoNormalizer**: {tn_version}")
         st.write(f"**PostMergeNormalizer**: {pm_version}")
+        st.write(f"**SemanticChunker**: {sc_version}")
         st.write(f"**사전 크기**: {tn_dict_size}개")
         st.write(f"**금지 치환**: {tn_block_size}개")
     
@@ -115,7 +150,7 @@ def main():
         
         if 'last_processed_file' not in st.session_state or st.session_state['last_processed_file'] != file_key:
             # 새 파일이거나 아직 처리 안 했으면 처리
-            status_text = "🔄 PDF 처리 중... (Phase 0.3.1 Safe Mode)" if safe_mode_enabled else "🔄 PDF 처리 중..."
+            status_text = f"🔄 PDF 처리 중... ({phase_version})"
             
             with st.spinner(status_text):
                 temp_path = None
@@ -155,7 +190,6 @@ def main():
                             logger.info(f"✅ 임시 파일 삭제: {temp_path}")
                         except PermissionError:
                             logger.warning(f"⚠️ 임시 파일 삭제 실패 (파일 잠금): {temp_path}")
-                            logger.warning(f"   → 시스템이 나중에 자동 정리할 예정")
                         except Exception as e:
                             logger.error(f"❌ 임시 파일 삭제 오류: {e}")
         
