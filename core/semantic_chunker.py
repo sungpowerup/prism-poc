@@ -1,18 +1,18 @@
 """
-semantic_chunker_v033.py
-PRISM Phase 0.3.3 - Semantic Chunker with Boundary Validation
+core/semantic_chunker.py
+PRISM Phase 0.3.4 P2 - Semantic Chunker (조문 패턴 강화)
 
-✅ Phase 0.3.3 개선:
-1. 한국어 문장 경계 패턴 강화
-2. 청크 유효성 자동 검사
-3. 불완전 청크 자동 병합
-4. 조문 순서 자동 정렬
+✅ Phase 0.3.4 P2 긴급 수정:
+1. 조문 패턴 강화 (제1~200조 모두 매칭)
+2. 다양한 헤딩 레벨 지원 (# ## ### ####)
+3. 조문 누락 방지 로직
+4. 청크=0 하드 실패 유지
+⚠️ GPT 피드백 핵심:
+"제1~6조, 제8조 통째로 청크 누락 → 조문 패턴 미스매치"
 
-설치: 기존 semantic_chunker.py 대체
-
-Author: 마창수산 팀
-Date: 2025-11-07
-Version: Phase 0.3.3
+Author: 박준호 (AI/ML Lead) + 마창수산 팀
+Date: 2025-11-08
+Version: Phase 0.3.4 P2
 """
 
 import re
@@ -24,17 +24,27 @@ logger = logging.getLogger(__name__)
 
 class SemanticChunker:
     """
-    Phase 0.3.3 의미 기반 청킹 엔진
+    Phase 0.3.4 P2 의미 기반 청킹 엔진
     
-    ✅ 핵심 개선:
-    - 한국어 문장 경계 강화
-    - 불완전 청크 자동 병합
-    - 조문 순서 자동 정렬
+    ✅ Phase 0.3.4 P2 개선:
+    - 조문 패턴 강화 (누락 방지)
+    - 청크=0 하드 실패 유지
+    - Fallback 길이 기반 청킹 의무화
     """
     
-    VERSION = "Phase 0.3.3"
+    VERSION = "Phase 0.3.4 P2"
     
-    # ✅ 한국어 문장 종결 패턴
+    # ✅ P2: 강화된 조문 패턴
+    ARTICLE_PATTERNS = [
+        # 패턴 1: ### 제1조(목적)
+        r'(#{1,4}\s*제\d+조[^#]*?)(?=#{1,4}\s*제\d+조|$)',
+        # 패턴 2: **제1조(목적)**
+        r'(\*\*제\d+조[^*]*?\*\*[^*]*?)(?=\*\*제\d+조|$)',
+        # 패턴 3: 제1조(목적) (헤딩 없음)
+        r'(^제\d+조[^\n]*?\n[\s\S]*?)(?=^제\d+조|\Z)',
+    ]
+    
+    # 한국어 문장 종결 패턴
     KOREAN_SENTENCE_ENDINGS = [
         r'다\.',  # ~하다.
         r'다\)',  # ~한다)
@@ -48,11 +58,10 @@ class SemanticChunker:
         r'한다\.',  # ~한다.
     ]
     
-    #⚠️ 불완전 종결 패턴
+    # 불완전 종결 패턴
     INCOMPLETE_ENDINGS = [
         r'의\s*$', r'를\s*$', r'을\s*$', r'가\s*$',
         r'에\s*$', r'와\s*$', r'로\s*$', r'채\s*$',
-        r'형\s+또는\s+치료감\s*$',  # 문장 중간 절단
     ]
     
     def __init__(self, target_size: int = 800, min_size: int = 300):
@@ -63,12 +72,20 @@ class SemanticChunker:
         self.sentence_patterns = [re.compile(p) for p in self.KOREAN_SENTENCE_ENDINGS]
         self.incomplete_patterns = [re.compile(p) for p in self.INCOMPLETE_ENDINGS]
         
+        # ✅ P2: 조문 패턴 컴파일
+        self.article_patterns = [
+            re.compile(p, re.MULTILINE | re.DOTALL) 
+            for p in self.ARTICLE_PATTERNS
+        ]
+        
         logger.info(f"✅ SemanticChunker {self.VERSION} 초기화")
         logger.info(f"   🎯 목표: {target_size}자, 최소: {min_size}자")
+        logger.info(f"   📋 조문 패턴: {len(self.article_patterns)}개")
+        logger.info(f"   🚫 청크=0 → 예외 발생 (하드 실패)")
     
     def chunk(self, text: str, doc_type: str = 'statute') -> List[Dict[str, Any]]:
         """
-        텍스트를 의미 단위로 청킹
+        ✅ P2: 텍스트를 의미 단위로 청킹
         
         Args:
             text: 입력 텍스트
@@ -76,48 +93,107 @@ class SemanticChunker:
         
         Returns:
             청크 리스트
+        
+        Raises:
+            RuntimeError: 청크=0인 경우
         """
         logger.info(f"   ✂️ SemanticChunker {self.VERSION} 시작")
+        
+        # 입력 검증
+        if not text or len(text.strip()) < 10:
+            error_msg = f"❌ 청킹 실패: 입력 텍스트가 너무 짧음 ({len(text)}자)"
+            logger.error(f"      {error_msg}")
+            raise RuntimeError(error_msg)
         
         # 1. 기본 청킹
         chunks = self._basic_chunk(text, doc_type)
         logger.info(f"      기본 청킹: {len(chunks)}개")
         
+        # ✅ P2: 청크=0 Fallback
+        if not chunks:
+            logger.warning(f"      ⚠️ 기본 청킹 실패 → Fallback 길이 기반 청킹")
+            chunks = self._fallback_length_based_chunk(text)
+            logger.info(f"      Fallback 청킹: {len(chunks)}개")
+        
         # 2. 경계 검증 + 병합
         validated = self._validate_boundaries(chunks)
         logger.info(f"      경계 검증: {len(validated)}개")
         
-        # 3. 조문 정렬
-        sorted_chunks = self._sort_by_article(validated)
+        # 3. 조문 정렬 (statute만)
+        if doc_type == 'statute' and validated:
+            sorted_chunks = self._sort_by_article(validated)
+        else:
+            sorted_chunks = validated
+        
+        # ✅ P2: 최종 청크=0 하드 실패
+        if not sorted_chunks:
+            error_msg = "❌ 청킹 하드 실패: 0개 청크 생성 (Fallback도 실패)"
+            logger.error(f"      {error_msg}")
+            logger.error(f"      입력 길이: {len(text)}자")
+            logger.error(f"      문서 타입: {doc_type}")
+            raise RuntimeError(error_msg)
+        
         logger.info(f"   ✅ 청킹 완료: {len(sorted_chunks)}개")
         
         return sorted_chunks
     
     def _basic_chunk(self, text: str, doc_type: str) -> List[Dict[str, Any]]:
-        """기본 청킹"""
+        """
+        ✅ P2: 기본 청킹 (강화된 조문 패턴)
+        """
         chunks = []
         
         if doc_type == 'statute':
-            # 조문 기준 분할
-            article_pattern = re.compile(r'(#{1,4}\s*제\d+조[^#]*?)(?=#{1,4}\s*제\d+조|$)', re.DOTALL)
-            matches = article_pattern.findall(text)
+            # ✅ P2: 여러 패턴 시도
+            matches = []
+            
+            for pattern in self.article_patterns:
+                found = pattern.findall(text)
+                if found:
+                    matches.extend(found)
+                    logger.info(f"      📋 패턴 매칭: {len(found)}개")
+            
+            # 중복 제거 (같은 조문을 여러 패턴이 잡을 수 있음)
+            seen_articles = set()
+            unique_matches = []
             
             for match in matches:
+                # 조문 번호 추출
+                article_match = re.search(r'제(\d+)조', match)
+                if article_match:
+                    article_num = article_match.group(1)
+                    
+                    if article_num not in seen_articles:
+                        seen_articles.add(article_num)
+                        unique_matches.append(match)
+            
+            logger.info(f"      📋 고유 조문: {len(unique_matches)}개")
+            
+            # 청크 생성
+            for match in unique_matches:
                 article_match = re.search(r'제(\d+)조(?:의(\d+))?', match)
                 article_no = article_match.group(0) if article_match else ''
                 
                 title_match = re.search(r'제\d+조(?:의\d+)?\s*\(([^)]+)\)', match)
                 article_title = title_match.group(1) if title_match else ''
                 
+                # 정리
+                content = match.strip()
+                
+                # 헤딩 마커 제거 (중복 방지)
+                content = re.sub(r'^#{1,4}\s*', '', content, flags=re.MULTILINE)
+                content = re.sub(r'\*\*', '', content)
+                
                 chunks.append({
-                    'content': match.strip(),
+                    'content': content,
                     'metadata': {
                         'article_no': article_no,
                         'article_title': article_title,
-                        'char_count': len(match.strip()),
+                        'char_count': len(content),
                         'chunk_index': len(chunks) + 1
                     }
                 })
+        
         else:
             # 일반 문서: 문장 단위
             sentences = re.split(r'(?<=[.!?])\s+', text)
@@ -153,6 +229,52 @@ class SemanticChunker:
                         'chunk_index': len(chunks) + 1
                     }
                 })
+        
+        return chunks
+    
+    def _fallback_length_based_chunk(self, text: str) -> List[Dict[str, Any]]:
+        """
+        ✅ P2: Fallback 길이 기반 청킹 (의무)
+        """
+        logger.warning("      🔧 Fallback 길이 기반 청킹 시작")
+        
+        chunks = []
+        text_length = len(text)
+        
+        start = 0
+        chunk_index = 1
+        
+        while start < text_length:
+            end = min(start + self.target_size, text_length)
+            
+            # 문장 중간이면 다음 마침표까지 확장
+            if end < text_length:
+                search_end = min(end + 200, text_length)
+                text_segment = text[end:search_end]
+                
+                period_match = re.search(r'[.!?]\s', text_segment)
+                if period_match:
+                    end += period_match.end()
+            
+            chunk_text = text[start:end].strip()
+            
+            # 최소 크기 체크
+            if len(chunk_text) >= self.min_size or start == 0:
+                chunks.append({
+                    'content': chunk_text,
+                    'metadata': {
+                        'article_no': '',
+                        'article_title': '',
+                        'char_count': len(chunk_text),
+                        'chunk_index': chunk_index,
+                        'fallback': True
+                    }
+                })
+                chunk_index += 1
+            
+            start = end
+        
+        logger.info(f"      ✅ Fallback 청킹: {len(chunks)}개 생성")
         
         return chunks
     

@@ -1,16 +1,18 @@
 """
 core/prompt_rules.py
-PRISM Phase 0.2 Hotfix - Prompt Rules with Critical Instructions
+PRISM Phase 0.3.4 P1 - Prompt Rules (GPT 피드백 반영)
 
-✅ Phase 0.2 긴급 수정:
-1. "기본 정신" 필수 추출 규칙 추가
-2. 조문 번호 정확성 CRITICAL 강조
-3. 페이지 번호 오인식 방지 명시
-4. 개정이력 표 추출 규칙 강화
+✅ Phase 0.3.4 P1 긴급 수정:
+1. **CRITICAL: 원문만 추출, 해설/요약 절대 금지**
+2. 조문 번호 정확성 강화
+3. 페이지 번호 오인식 방지
 
-Author: 최동현 (Frontend Lead) + GPT 피드백
-Date: 2025-11-06
-Version: Phase 0.2 Hotfix
+⚠️ GPT 피드백 핵심:
+"VLM이 '해설' 생성하는 문제 → 신뢰도 훼손"
+
+Author: 최동현 (Frontend Lead) + 마창수산 팀
+Date: 2025-11-08
+Version: Phase 0.3.4 P1
 """
 
 import re
@@ -22,32 +24,55 @@ logger = logging.getLogger(__name__)
 
 class PromptRules:
     """
-    Phase 0.2 동적 프롬프트 생성 엔진 (Critical 규칙 강화)
+    Phase 0.3.4 P1 동적 프롬프트 생성 엔진
     
-    ✅ Phase 0.2 개선:
-    - "기본 정신" 필수 추출 규칙
+    ✅ Phase 0.3.4 P1 개선:
+    - **원문 추출 전용** 프롬프트
+    - 해설/요약/설명 절대 금지
     - 조문 번호 정확성 CRITICAL
-    - 페이지 번호 오인식 방지
-    - 개정이력 표 추출 강화
     """
     
-    # 기본 규칙
-    BASE_RULES = """이 페이지의 내용을 Markdown으로 정확히 추출하세요.
+    # ✅ P1: 기본 규칙 (원문 추출 강조)
+    BASE_RULES = """Extract ONLY the original text from this image.
 
-**규칙:**
-1. 원본 텍스트를 정확히 추출
-2. 레이아웃과 구조 보존
-3. 제목/소제목을 # ## ### 사용
+**CRITICAL RULES:**
+1. **NO explanations** - Do NOT add any explanations like "This document defines..."
+2. **NO summaries** - Do NOT add any summaries
+3. **NO interpretations** - Do NOT add any interpretations
+4. **NO meta-commentary** - Do NOT add phrases like "The structure is...", "This section contains..."
+5. **ONLY reproduce the exact text you see**
 
-**절대 금지:**
-- 메타 설명 ("이 이미지는", "다음과 같습니다")
-- 안내 문구 ("필요하신", "말씀해 주세요")
-- 요약 섹션 ("**요약:**", "**구조 요약:**")
+**Output Format:**
+- Use Markdown headers (# ## ###) for titles
+- Preserve original text exactly as shown
+- Keep layout and structure
+
+**FORBIDDEN Phrases:**
+- "This document..."
+- "The regulation defines..."
+- "This section contains..."
+- "The structure clearly shows..."
+- "세부사항의 정의를 명확히 규정하고 있다"
+- Any sentence that is NOT in the original image
+
+**Examples:**
+
+❌ BAD (Adding explanations):
+"이 규정은 인사관리의 기준을 정의하고 있으며, 세부사항을 명확히 규정하고 있다."
+
+✅ GOOD (Original text only):
+"이 규정은 한국농어촌공사 직원에게 적용할 인사관리의 기준을 정하여 합리적이고 적정한 인사관리를 기하게 하는 것을 목적으로 한다."
 """
     
-    # ✅ Phase 0.2: 규정 모드 기본 규칙 (CRITICAL 강화)
+    # ✅ P1: 규정 모드 (원문 정확성 극대화)
     STATUTE_BASE_RULES = """
-[규정/법령 문서 처리]
+[Legal/Regulatory Document Processing]
+
+**CRITICAL: Extract ONLY Original Text**
+- Reproduce the EXACT text from the document
+- DO NOT add any explanations or interpretations
+- DO NOT summarize or paraphrase
+- If you see text, copy it exactly
 
 **CRITICAL: Article Number Accuracy**
 - Extract EXACT article numbers from the document
@@ -57,27 +82,28 @@ class PromptRules:
 - Format with sub-articles: 제7조의2, 제8조의3, ...
 - Example page numbers to IGNORE: 402-1, 402-2, 402-3
 
-**조항 구조 보존:**
-- 제○조, 제○항, 제○호 번호 유지
-- 계층 구조 유지 (# ## ### 사용)
-- 삭제 조항: "삭제 <날짜>" 형태 유지
+**Article Structure Preservation:**
+- Keep article numbers: 제○조, 제○항, 제○호
+- Maintain hierarchy with Markdown headers (# ## ###)
+- Keep deleted articles: "삭제 <date>"
 
-**출력 형식:**
-```
+**Output Format:**
+```markdown
 ### 제1조(제목)
 본문 내용...
 
-1. 항목 내용
-2. 항목 내용
+① 항목 내용
+1. 세부 항목
 ```
 
-**절대 금지:**
-- 조문 재배열 금지
-- 요약/설명 추가 금지
-- 메타 설명 금지
+**ABSOLUTELY FORBIDDEN:**
+- Rearranging articles
+- Adding summaries or explanations
+- Adding meta-descriptions
+- Generating text not in the original
 """
     
-    # ✅ Phase 0.2: "기본 정신" 필수 추출 규칙
+    # ✅ P1: "기본 정신" 추출 (원문 그대로)
     PREAMBLE_RULES = """
 **CRITICAL: Preamble Extraction ("기본 정신")**
 
@@ -87,25 +113,32 @@ If the page contains ANY of these headers:
 - "전문", "서문"
 - Text appearing BEFORE "제1장" or "제1조"
 
-YOU MUST extract the COMPLETE paragraph(s) under these headers.
+YOU MUST extract the COMPLETE paragraph(s) under these headers **EXACTLY AS SHOWN**.
+
+**DO NOT:**
+- Summarize the preamble
+- Explain the preamble
+- Add your interpretation
+
+**DO:**
+- Copy the exact text from the image
+- Preserve all formatting
 
 **Example:**
-```
-### 기본 정신
+```markdown
+## 기본정신
 이 규정은 한국농어촌공사 직원의 보직, 승진, 신분보장, 상벌, 인사고과 등에 관한 사항을
 규정함으로써 공정하고 투명한 인사관리 구현을 통하여 설립목적을 달성하고...
 ```
-
-**This is ESSENTIAL content - do not skip!**
 """
     
-    # ✅ Phase 0.2: 개정이력 표 추출 규칙 (강화)
+    # ✅ P1: 개정이력 표 추출 (원문 그대로)
     REVISION_TABLE_RULES = """
-[개정 이력 표 추출]
+[Revision History Table Extraction]
 
-**CRITICAL**: Extract the revision history table.
+**CRITICAL**: Extract the revision history table EXACTLY AS SHOWN.
 
-**Output as a Markdown table with these columns:**
+**Output as a Markdown table:**
 | 차수 | 날짜 |
 | --- | --- |
 | 제37차 개정 | 2019.05.27 |
@@ -115,65 +148,60 @@ YOU MUST extract the COMPLETE paragraph(s) under these headers.
 - Extract ALL rows (all 개정 entries)
 - Keep original order
 - Preserve dates in original format (YYYY.MM.DD)
-- Text only - NO commentary or explanations
+- **NO commentary or explanations**
 - If multiple tables exist, extract ONLY the first occurrence
 
-**DO NOT:**
-- Skip any 개정 rows
-- Add explanations
-- Change date formats
-- Duplicate the table
+**FORBIDDEN:**
+- Skipping any rows
+- Adding explanations like "This table shows..."
+- Changing date formats
+- Duplicating the table
 """
     
     # 표 금지 규칙
     TABLE_FORBIDDEN = """
-[중요: 표 생성 금지]
+[Important: No Tables]
 
-- 이 페이지에는 표가 없습니다
-- Markdown 표 (|, ---) 사용 금지
-- 대신 문단과 불릿 목록으로만 작성
+- This page has NO tables
+- Do NOT use Markdown table syntax (|, ---)
+- Use paragraphs and bullet lists instead
 
-**올바른 예시:**
-```
+**Correct Example:**
+```markdown
 **항목:**
 - 첫 번째: 값1
 - 두 번째: 값2
 ```
 """
     
-    # 표 허용 규칙 (일반)
+    # 표 허용 규칙
     TABLE_RULES = """
-[표 처리]
+[Table Processing]
 
-**표 변환:**
-- 표는 Markdown 표 형식으로 변환
-- 열 구분: | (파이프)
-- 헤더 구분선: | --- | --- |
+**Table Conversion:**
+- Convert tables to Markdown format
+- Column separator: | (pipe)
+- Header separator: | --- | --- |
 
-**예시:**
-```
+**Example:**
+```markdown
 | 항목 | 값 |
 | --- | --- |
 | 이름 | 홍길동 |
 ```
 
-**주의:**
-- 표가 명확히 보이는 경우에만 사용
-- 불확실하면 문단으로 작성
+**Important:**
+- Only use tables if clearly visible
+- When uncertain, use paragraphs instead
 """
     
     @classmethod
     def build_prompt(cls, hints: Dict[str, Any]) -> str:
         """
-        ✅ Phase 0.2: 힌트 기반 동적 프롬프트 생성 (CRITICAL 규칙 강화)
+        ✅ P1: 원문 추출 전용 프롬프트 생성
         
-        전략:
-        1. OCR 텍스트 추출
-        2. table_confidence 계산
-        3. is_statute_mode 감지
-        4. allow_tables 확인
-        5. ✅ "기본 정신" 규칙 추가
-        6. ✅ 조문 번호 정확성 강조
+        GPT 피드백 핵심:
+        - "요약/해설 금지, 원문만 재현하라" 강제
         
         Args:
             hints: QuickLayoutAnalyzer 결과
@@ -181,7 +209,7 @@ YOU MUST extract the COMPLETE paragraph(s) under these headers.
         Returns:
             프롬프트 문자열
         """
-        logger.info("   🎨 PromptRules Phase 0.2 프롬프트 생성")
+        logger.info("   🎨 PromptRules Phase 0.3.4 P1 프롬프트 생성")
         
         # Step 1: 표 신뢰도 계산
         table_confidence = cls._calculate_table_confidence(hints)
@@ -201,55 +229,39 @@ YOU MUST extract the COMPLETE paragraph(s) under these headers.
         # 규정 모드
         if is_statute:
             prompt_parts.append(cls.STATUTE_BASE_RULES)
-            
-            # ✅ Phase 0.2: "기본 정신" 규칙 추가
             prompt_parts.append(cls.PREAMBLE_RULES)
         
         # 표 규칙 분기
         if is_statute and allow_tables:
-            # ✅ Phase 0.2: 개정이력 - 표 허용
             logger.info("      ✅ 개정이력 - 표 허용")
             prompt_parts.append(cls.REVISION_TABLE_RULES)
         elif is_statute and not allow_tables:
-            # 규정 모드 + 표 금지
             logger.info("      🚫 표 금지 (규정 모드)")
             prompt_parts.append(cls.TABLE_FORBIDDEN)
         elif table_confidence >= 2:
-            # 일반 모드 + 표 감지
             prompt_parts.append(cls.TABLE_RULES)
         else:
-            # 일반 모드 + 표 없음
             prompt_parts.append(cls.TABLE_FORBIDDEN)
         
         # 최종 프롬프트
         final_prompt = '\n\n'.join(prompt_parts)
         
         logger.info(f"   ✅ 프롬프트 생성 완료 ({len(final_prompt)} 글자)")
+        logger.info("      ⚠️ 원문 추출 전용 모드 (해설 금지)")
         
         return final_prompt
     
     @classmethod
     def _calculate_table_confidence(cls, hints: Dict[str, Any]) -> int:
-        """
-        표 신뢰도 계산 (0~3점)
-        
-        Args:
-            hints: 레이아웃 힌트
-        
-        Returns:
-            신뢰도 점수
-        """
+        """표 신뢰도 계산 (0~3점)"""
         score = 0
         
-        # 1) 표 구조 감지
         if hints.get('has_table', False):
             score += 1
         
-        # 2) 교차점 밀도
         if hints.get('intersection_count', 0) > 5:
             score += 1
         
-        # 3) 선 밀도
         if hints.get('line_density', 0) > 0.01:
             score += 1
         
@@ -257,16 +269,7 @@ YOU MUST extract the COMPLETE paragraph(s) under these headers.
     
     @classmethod
     def _is_statute_mode(cls, hints: Dict[str, Any]) -> bool:
-        """
-        규정 모드 감지
-        
-        Args:
-            hints: 레이아웃 힌트
-        
-        Returns:
-            True if 규정 문서
-        """
-        # OCR 텍스트에서 규정 키워드 감지
+        """규정 모드 감지"""
         ocr_text = hints.get('ocr_text', '')
         
         statute_keywords = [
@@ -278,5 +281,4 @@ YOU MUST extract the COMPLETE paragraph(s) under these headers.
         
         keyword_count = sum(1 for kw in statute_keywords if kw in ocr_text)
         
-        # 키워드 5개 이상 → 규정 모드
         return keyword_count >= 5

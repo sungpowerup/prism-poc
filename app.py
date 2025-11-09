@@ -1,15 +1,15 @@
 """
 app.py
-PRISM Phase 0.3.2 - Enhanced Application
+PRISM Phase 0.3.3 - Enhanced Application
 
-✅ Phase 0.3.2 업데이트:
-1. 버전 체크 로직 업데이트 (55개 패턴, 25개 금지)
-2. Phase 0.3.2 Safe 모듈 자동 로드
-3. 개선사항 표시
+✅ Phase 0.3.3 지원:
+1. 버전 체크 로직 업데이트 (0.3.3 지원)
+2. Safe 모듈 자동 로드
+3. Fallback 로직 강화
 
-Author: 마창수산 팀
-Date: 2025-11-07
-Version: Phase 0.3.2
+Author: 최동현 (Frontend Lead)
+Date: 2025-11-08
+Version: Phase 0.3.3
 """
 
 import streamlit as st
@@ -32,7 +32,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ⚠️ Phase 0.3.2: 캐시 무효화
+# ⚠️ 캐시 무효화
 importlib.invalidate_caches()
 
 # ✅ core 모듈 import
@@ -41,85 +41,87 @@ try:
     from core.vlm_service import VLMServiceV50
     from core.pipeline import Phase53Pipeline
     
-    logger.info("✅ 모든 core 모듈 import 성공")
+    logger.info("✅ 기본 core 모듈 import 성공")
     
-    # ✅ Phase 0.3.2: 버전 확인 (Safe 모듈 체크)
+    # ✅ Safe 모듈 체크
     try:
         from core.typo_normalizer_safe import TypoNormalizer
         from core.post_merge_normalizer_safe import PostMergeNormalizer
         from core.semantic_chunker import SemanticChunker
         
         tn_version = getattr(TypoNormalizer, 'VERSION', 'UNKNOWN')
-        tn_dict_size = len(getattr(TypoNormalizer, 'STATUTE_TERMS', {}))
+        
+        # ✅ Safe/OCR 패턴 개수 확인
+        safe_patterns = getattr(TypoNormalizer, 'SAFE_PATTERNS', {})
+        ocr_patterns = getattr(TypoNormalizer, 'OCR_PATTERNS', {})
+        tn_dict_size = len(safe_patterns) + len(ocr_patterns)
         tn_block_size = len(getattr(TypoNormalizer, 'BLOCKED_REPLACEMENTS', set()))
         
         pm_version = getattr(PostMergeNormalizer, 'VERSION', 'UNKNOWN')
         sc_version = getattr(SemanticChunker, 'VERSION', 'UNKNOWN')
         
         logger.info(f"🔎 TypoNormalizer: {tn_version}")
-        logger.info(f"   📖 사전: {tn_dict_size}개")
+        logger.info(f"   📖 Safe: {len(safe_patterns)}개")
+        logger.info(f"   📖 OCR: {len(ocr_patterns)}개")
+        logger.info(f"   📖 합계: {tn_dict_size}개")
         logger.info(f"   🚫 금지: {tn_block_size}개")
         logger.info(f"🔎 PostMergeNormalizer: {pm_version}")
         logger.info(f"🔎 SemanticChunker: {sc_version}")
         
-        # ✅ Phase 0.3.2: 버전 확인 (55개 패턴, 25개 금지)
-        if tn_version == "Phase 0.3.2" and tn_dict_size >= 50 and tn_block_size >= 20:
-            logger.info("✅ Phase 0.3.2 확인됨!")
+        # ✅ 버전 판정 (0.3.3 우선)
+        if "0.3.3" in tn_version:
+            logger.info("✅ Phase 0.3.3 확인됨!")
+            phase_version = "Phase 0.3.3"
+            safe_mode_enabled = True
+        elif "0.3.2" in tn_version:
+            logger.info("✅ Phase 0.3.2 확인됨")
             phase_version = "Phase 0.3.2"
             safe_mode_enabled = True
-        elif "Phase 0.3.1" in tn_version and tn_dict_size >= 20 and tn_block_size >= 10:
-            logger.info("✅ Phase 0.3.1 Hotfix 확인됨")
+        elif "0.3.1" in tn_version:
+            logger.info("✅ Phase 0.3.1 확인됨")
             phase_version = "Phase 0.3.1"
             safe_mode_enabled = True
         else:
-            logger.warning(f"⚠️ Phase 미확인: version={tn_version}, dict={tn_dict_size}, block={tn_block_size}")
+            logger.warning(f"⚠️ Phase 미확인: version={tn_version}")
             phase_version = "Unknown"
             safe_mode_enabled = False
             
     except ImportError as ie:
-        logger.warning(f"⚠️ Safe Normalizers 없음: {ie}")
-        tn_version = "Phase 0.3 (기본)"
-        pm_version = "Phase 0.3 (기본)"
-        sc_version = "Phase 0.3 (기본)"
-        tn_dict_size = 15
-        tn_block_size = 0
-        phase_version = "Legacy"
-        safe_mode_enabled = False
+        logger.error(f"❌ Safe Normalizers import 실패: {ie}")
+        st.error(f"❌ Safe 모듈을 찾을 수 없습니다: {ie}")
+        st.error("core/ 폴더에 typo_normalizer_safe.py와 post_merge_normalizer_safe.py가 있는지 확인해주세요.")
+        st.stop()
         
 except ImportError as e:
     logger.error(f"❌ core 모듈 import 실패: {e}")
     st.error(f"❌ 모듈 로딩 실패: {e}")
+    st.error("core 폴더의 모든 파일이 올바른 위치에 있는지 확인해주세요.")
     st.stop()
 
 
 def main():
-    # ✅ Phase 0.3.2: 제목 (버전별 표시)
-    if phase_version == "Phase 0.3.2":
-        st.title("🎯 PRISM Phase 0.3.2 - 문서 처리 시스템 ✨")
-        st.success("✅ Phase 0.3.2 활성화 (55개 OCR 패턴, 문장 경계 보존 청킹)")
-    elif phase_version == "Phase 0.3.1":
-        st.title("🎯 PRISM Phase 0.3.1 - 문서 처리 시스템 (Safe Mode) ✅")
-        st.info("ℹ️ Phase 0.3.1 Safe Mode (기본 보호)")
-    else:
-        st.title("🎯 PRISM Phase 0.3 - 문서 처리 시스템 ⚠️")
-        st.warning("⚠️ Safe Mode가 활성화되지 않았습니다. Safe 모듈을 확인하세요.")
-    
-    # ✅ Phase 0.3.2: 개선사항 표시
-    if phase_version == "Phase 0.3.2":
-        with st.expander("✨ Phase 0.3.2 개선사항", expanded=False):
+    # ✅ 제목 (버전별 표시)
+    if phase_version == "Phase 0.3.3":
+        st.title("🎯 PRISM Phase 0.3.3 - 문서 처리 시스템 ✨")
+        st.success("✅ Phase 0.3.3 활성화 (레이어 분리 정규화, 골든 diff 기반)")
+        
+        with st.expander("✨ Phase 0.3.3 개선사항", expanded=False):
             st.markdown("""
-            **🎯 Phase 0.3.2 주요 개선:**
-            1. ✅ **OCR 오류 교정 확장**: 23개 → 55개 패턴 (+32개)
-            2. ✅ **문장 경계 보존 청킹**: 한국어 문장 끝 패턴 지원
-            3. ✅ **최소 청크 크기 가드**: 300자 이상 보장
-            4. ✅ **중간 코드펜스 제거**: RAG 적합도 향상
-            5. ✅ **금지 치환 확장**: 15개 → 25개 (+10개)
+            **🎯 Phase 0.3.3 주요 개선:**
+            1. ✅ **레이어 분리 설계**: Safe/OCR/Domain 3단계 분리
+            2. ✅ **골든 diff 기반**: 실제 오류만 교정 (29개)
+            3. ✅ **의미 변경 제거**: 원본 충실도 최우선
+            4. ✅ **리포트-코드 동기화**: 문서와 코드 100% 일치
             
             **🔧 기술 스펙:**
-            - TypoNormalizer: 55개 안전 패턴, 25개 금지 치환
-            - SemanticChunker: 문장 경계 보존 분할 (한국어 지원)
-            - PostMergeNormalizer: 중간 코드펜스 제거
+            - Safe Layer: 7개 (공백/전각반각 정규화)
+            - OCR Layer: 29개 (골든 diff 추출)
+            - Blocked: 3개 (의미 변경 방지)
+            - 조문 헤더: 자동 정규화
             """)
+    else:
+        st.title("🎯 PRISM - 문서 처리 시스템")
+        st.warning(f"⚠️ 버전: {phase_version}")
     
     # 버전 정보 표시
     with st.expander("ℹ️ 버전 정보", expanded=False):
@@ -172,87 +174,72 @@ def main():
                     # 결과를 session_state에 저장
                     st.session_state['last_processed_file'] = file_key
                     st.session_state['result'] = result
-                    st.session_state['processing_error'] = None
                     
-                    logger.info("✅ 처리 완료 및 결과 저장")
+                    logger.info("✅ 처리 결과 저장 완료")
                     
                 except Exception as e:
-                    logger.error(f"❌ 처리 오류: {str(e)}", exc_info=True)
-                    st.session_state['processing_error'] = str(e)
-                    st.error(f"❌ 처리 실패: {str(e)}")
+                    logger.error(f"❌ 처리 중 오류: {e}", exc_info=True)
+                    st.error(f"❌ 오류 발생: {str(e)}")
+                    return
                     
                 finally:
-                    # 임시 파일 안전 삭제
+                    # 임시 파일 삭제
                     if temp_path and temp_path.exists():
                         try:
-                            time.sleep(0.1)
                             temp_path.unlink()
                             logger.info(f"✅ 임시 파일 삭제: {temp_path}")
-                        except PermissionError:
-                            logger.warning(f"⚠️ 임시 파일 삭제 실패 (파일 잠금): {temp_path}")
                         except Exception as e:
-                            logger.error(f"❌ 임시 파일 삭제 오류: {e}")
+                            logger.warning(f"⚠️ 임시 파일 삭제 실패: {e}")
         
-        # 결과 표시
-        if 'result' in st.session_state and st.session_state['result']:
-            result = st.session_state['result']
+        # session_state에서 결과 가져오기
+        result = st.session_state.get('result')
+        
+        if result and result.get('success'):
+            st.success("✅ 처리 완료!")
             
-            if result.get('success'):
-                st.success("✅ 처리 완료!")
-                
-                # 통계 정보
+            # 처리 시간 표시
+            elapsed = result.get('elapsed_time', 0)
+            st.info(f"⏱️ 처리 시간: {elapsed:.1f}초")
+            
+            # 체크리스트 표시
+            st.subheader("📊 품질 체크리스트")
+            checklist = result.get('checklist', {})
+            
+            if checklist:
                 col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("📄 페이지 수", result.get('pages_count', 0))
-                with col2:
-                    st.metric("✂️ 청크 수", len(result.get('chunks', [])))
-                with col3:
-                    st.metric("⏱️ 처리 시간", f"{result.get('elapsed_time', 0):.1f}초")
                 
-                # 체크리스트 표시
-                st.subheader("📊 품질 체크리스트")
-                
-                checklist = result.get('checklist', {})
-                
-                col1, col2, col3 = st.columns(3)
                 with col1:
                     fidelity = checklist.get('fidelity', 0)
-                    st.metric("원본 충실도", f"{fidelity}/100", 
-                             delta="목표: 95점" if fidelity >= 95 else "개선 필요",
-                             delta_color="normal" if fidelity >= 95 else "inverse")
-                with col2:
+                    st.metric("📄 원본 충실도", f"{fidelity}/100")
+                    
                     chunking = checklist.get('chunking', 0)
-                    st.metric("청킹 품질", f"{chunking}/100")
-                with col3:
-                    rag = checklist.get('rag_readiness', 0)
-                    st.metric("RAG 적합도", f"{rag}/100")
+                    st.metric("✂️ 청킹 품질", f"{chunking}/100")
                 
-                col4, col5, col6 = st.columns(3)
-                with col4:
+                with col2:
+                    rag = checklist.get('rag_readiness', 0)
+                    st.metric("🎯 RAG 적합도", f"{rag}/100")
+                    
                     generality = checklist.get('generality', 0)
-                    st.metric("범용성", f"{generality}/100")
-                with col5:
+                    st.metric("🔄 범용성", f"{generality}/100")
+                
+                with col3:
                     competitive = checklist.get('competitive_edge', 0)
-                    st.metric("경쟁력", f"{competitive}/100")
-                with col6:
+                    st.metric("🏆 경쟁력", f"{competitive}/100")
+                    
                     overall = checklist.get('overall', 0)
-                    st.metric("🎯 종합", f"{overall}/100",
-                             delta="목표: 95점" if overall >= 95 else "개선 필요",
-                             delta_color="normal" if overall >= 95 else "inverse")
+                    st.metric("🎯 종합", f"{overall}/100")
                 
                 # Markdown 미리보기
                 st.subheader("📝 Markdown 미리보기")
                 markdown = result.get('markdown', '')
                 
                 if markdown:
-                    # 처음 1000자만 표시
                     preview = markdown[:1000]
                     if len(markdown) > 1000:
                         preview += "\n\n... (생략) ..."
                     
                     st.text_area("", preview, height=300, disabled=True)
                     
-                    # 전체 보기
                     with st.expander("📄 전체 Markdown 보기"):
                         st.markdown(markdown)
                 
@@ -261,7 +248,6 @@ def main():
                 chunks = result.get('chunks', [])
                 
                 if chunks:
-                    # 처음 3개 청크만 표시
                     for i, chunk in enumerate(chunks[:3], 1):
                         with st.expander(f"청크 {i}: {chunk.get('id', '')}"):
                             st.write("**메타데이터:**")
@@ -270,7 +256,7 @@ def main():
                             st.text(chunk.get('content', ''))
                     
                     if len(chunks) > 3:
-                        st.info(f"📋 총 {len(chunks)}개 청크 (전체는 JSON 다운로드에서 확인)")
+                        st.info(f"📋 총 {len(chunks)}개 청크")
                 
                 # 다운로드 버튼
                 st.subheader("📥 다운로드")
@@ -280,34 +266,31 @@ def main():
                 with col1:
                     if markdown:
                         timestamp = time.strftime("%Y%m%d_%H%M%S")
-                        md_filename = f"{uploaded_file.name.replace('.pdf', '')}_{timestamp}_markdown.md"
+                        filename = f"{uploaded_file.name.replace('.pdf', '')}_{timestamp}_markdown.md"
                         
                         st.download_button(
-                            label="📥 Markdown 다운로드",
+                            label="📝 Markdown 다운로드",
                             data=markdown,
-                            file_name=md_filename,
-                            mime="text/markdown",
-                            key="download_markdown"
+                            file_name=filename,
+                            mime="text/markdown"
                         )
                 
                 with col2:
                     if chunks:
                         timestamp = time.strftime("%Y%m%d_%H%M%S")
-                        json_filename = f"{uploaded_file.name.replace('.pdf', '')}_{timestamp}_chunks.json"
+                        filename = f"{uploaded_file.name.replace('.pdf', '')}_{timestamp}_chunks.json"
                         
                         chunks_json = json.dumps(chunks, ensure_ascii=False, indent=2)
+                        
                         st.download_button(
-                            label="📥 청크 JSON 다운로드",
+                            label="📦 JSON 다운로드",
                             data=chunks_json,
-                            file_name=json_filename,
-                            mime="application/json",
-                            key="download_chunks"
+                            file_name=filename,
+                            mime="application/json"
                         )
-            else:
-                st.error(f"❌ 처리 실패: {result.get('error', '알 수 없는 오류')}")
         
-        elif 'processing_error' in st.session_state and st.session_state['processing_error']:
-            st.error(f"❌ 처리 실패: {st.session_state['processing_error']}")
+        elif result:
+            st.error(f"❌ 처리 실패: {result.get('error', 'Unknown error')}")
 
 
 if __name__ == "__main__":

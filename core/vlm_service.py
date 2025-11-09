@@ -1,15 +1,20 @@
 """
 core/vlm_service.py
-PRISM Phase 0.3.2 - VLM Service (조문 번호 검증)
+PRISM Phase 0.3.4 P0 - VLM Service (호환성 래퍼 추가)
 
-✅ Phase 0.3.2 개선:
-1. 조문 번호 정확성 검증 추가
-2. 페이지 번호 오인식 방지
-3. OCR 기반 교정 로직
+✅ Phase 0.3.4 P0 긴급 수정:
+1. call_with_image() 호환 래퍼 추가 (HybridExtractor 호환)
+2. 조문 번호 검증 유지
+3. 재시도 로직 유지
 
-Author: 박준호 (AI/ML Lead) + 마창수산 팀
-Date: 2025-11-07
-Version: Phase 0.3.2
+⚠️ P0 수정 이유:
+- HybridExtractor가 call_with_image()를 호출하는데 메서드가 없어서
+- VLM 실패 100% → Fallback만 사용하는 치명적 문제
+- GPT 분석: "P0-1 최우선 수정 사항"
+
+Author: 박준호 (AI/ML Lead) + 마창수산 팀  
+Date: 2025-11-08
+Version: Phase 0.3.4 P0
 """
 
 import os
@@ -28,11 +33,12 @@ logger = logging.getLogger(__name__)
 
 class VLMServiceV50:
     """
-    Phase 0.3.2 VLM 서비스 (조문 번호 검증)
+    Phase 0.3.4 P0 VLM 서비스
     
-    ✅ Phase 0.3.2 개선:
-    - 조문 번호 정확성 검증
-    - 페이지 번호 오인식 방지
+    ✅ Phase 0.3.4 P0 개선:
+    - call_with_image() 호환 래퍼 추가
+    - 조문 번호 정확성 검증 유지
+    - 페이지 번호 오인식 방지 유지
     """
     
     # ✅ Phase 0.2: 조문 번호 패턴
@@ -85,7 +91,46 @@ class VLMServiceV50:
         else:
             raise ValueError(f"Unknown provider: {provider}")
         
-        logger.info(f"✅ VLM Service Phase 0.3.2 초기화 완료: {provider}")
+        logger.info(f"✅ VLM Service Phase 0.3.4 P0 초기화 완료: {provider}")
+    
+    # ✅ P0-1: call_with_image 호환 래퍼 추가
+    def call_with_image(
+        self,
+        image_data: str,
+        prompt: str,
+        page_num: int = 1,
+        **kwargs
+    ) -> str:
+        """
+        ✅ P0-1: HybridExtractor 호환 래퍼
+        
+        이 메서드는 기존 HybridExtractor가 호출하는 시그니처를 맞추기 위한
+        호환성 래퍼입니다. 내부적으로 call_with_retry()를 호출합니다.
+        
+        Args:
+            image_data: Base64 인코딩된 이미지
+            prompt: 프롬프트
+            page_num: 페이지 번호 (로깅용)
+            **kwargs: 추가 인자 (ocr_text, page_role 등)
+        
+        Returns:
+            추출된 텍스트
+        """
+        logger.info(f"   📞 call_with_image() 호출 (페이지 {page_num})")
+        
+        # kwargs에서 추가 파라미터 추출
+        ocr_text = kwargs.get('ocr_text', '')
+        page_role = kwargs.get('page_role', 'general')
+        max_retries = kwargs.get('max_retries', 3)
+        
+        # call_with_retry()로 위임
+        return self.call_with_retry(
+            image_data=image_data,
+            prompt=prompt,
+            ocr_text=ocr_text,
+            page_role=page_role,
+            max_retries=max_retries
+        )
     
     def call(self, image_data: str, prompt: str, ocr_text: str = "") -> str:
         """
@@ -211,7 +256,7 @@ class VLMServiceV50:
         # 개정이력 페이지는 재시도 예산 2회
         if page_role == "revision_table":
             max_retries = min(max_retries, 2)
-            logger.info(f"      🎯 개정이역 페이지 - 재시도 예산 {max_retries}회")
+            logger.info(f"      🎯 개정이력 페이지 - 재시도 예산 {max_retries}회")
         
         for attempt in range(1, max_retries + 1):
             try:

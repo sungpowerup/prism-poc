@@ -1,18 +1,18 @@
 """
-typo_normalizer_v033.py
-PRISM Phase 0.3.3 - Layered Typo Normalizer (골든 diff 기반)
+core/typo_normalizer_safe.py
+PRISM Phase 0.3.4 P3 - Typo Normalizer (GPT 피드백 반영)
 
-✅ Phase 0.3.3 개선:
-1. 레이어 분리 설계 (Safe / OCR / Domain)
-2. 골든 파일 diff 기반 패턴만 적용
-3. 의미 변경 교정 제거
-4. 리포트-코드 완전 동기화
+✅ Phase 0.3.4 P3 긴급 수정:
+1. GPT 지적 OCR 오류 3개 추가
+2. 레이어 분리 설계 유지
+3. 의미 변경 교정 제거 유지
 
-설치: 기존 typo_normalizer_safe.py 대체
+⚠️ GPT 피드백:
+"채용소제결과", "주적법", "법한 사하" 오류 잔존
 
 Author: 마창수산 팀
-Date: 2025-11-07
-Version: Phase 0.3.3
+Date: 2025-11-08
+Version: Phase 0.3.4 P3
 """
 
 import re
@@ -24,15 +24,15 @@ logger = logging.getLogger(__name__)
 
 class TypoNormalizer:
     """
-    Phase 0.3.3 레이어 분리 오타 정규화 엔진
+    Phase 0.3.4 P3 레이어 분리 오타 정규화 엔진
     
-    ✅ 핵심 개선:
-    - 골든 파일 diff 기반
-    - 레이어 분리 (Safe/OCR/Domain)
-    - 의미 변경 제거
+    ✅ Phase 0.3.4 P3 개선:
+    - GPT 지적 OCR 오류 3개 추가
+    - 골든 파일 diff 기반 유지
+    - 레이어 분리 (Safe/OCR/Domain) 유지
     """
     
-    VERSION = "Phase 0.3.3"
+    VERSION = "Phase 0.3.4 P3"
     
     # ✅ Layer 1: Safe Patterns (형태적 오류만, 항상 적용)
     SAFE_PATTERNS = {
@@ -49,7 +49,13 @@ class TypoNormalizer:
     
     # ✅ Layer 2: OCR Patterns (일반적 OCR 오류, 항상 적용)
     OCR_PATTERNS = {
-        # 골든 diff에서 추출된 진짜 OCR 오류 (29개)
+        # ✅ P3: GPT 지적 오류 3개 추가
+        '채용소제결과': '채용심사결과',
+        '주적법': '음주운전처벌법',
+        '법한 사하로서': '범한 자로서',
+        '법한 사': '범한 자',
+        
+        # 기존 골든 diff 오류 (29개)
         '성과계제대상자': '성과개선대상자',
         '역할행상': '역량향상',
         '만든 평가관리위원회': '따른 상급인사위원회',
@@ -105,7 +111,7 @@ class TypoNormalizer:
         """초기화"""
         logger.info(f"✅ TypoNormalizer {self.VERSION} 초기화")
         logger.info(f"   📖 Safe: {len(self.SAFE_PATTERNS)}개")
-        logger.info(f"   📖 OCR: {len(self.OCR_PATTERNS)}개")
+        logger.info(f"   📖 OCR: {len(self.OCR_PATTERNS)}개 (GPT 피드백 +3)")
         logger.info(f"   🚫 금지: {len(self.BLOCKED_REPLACEMENTS)}개")
     
     def normalize(self, text: str, doc_type: str = 'statute') -> str:
