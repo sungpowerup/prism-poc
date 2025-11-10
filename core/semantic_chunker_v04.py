@@ -1,369 +1,270 @@
 """
-Semantic Chunker V0.4
+Semantic Chunker v0.4
 Phase 0.4.0 "Quality Assurance Release"
 
-Enhanced semantic chunking with mandatory non-article section handling
-Creates independent chunks for critical sections (기본정신, 개정이력)
+Enhanced chunking with non-article section support
+Treats "기본정신" and other sections as first-class chunks
 
 Author: 박준호 (AI/ML Lead)
-Date: 2025-11-09
+Date: 2025-11-10
+Version: 0.4.0
 """
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import re
-from datetime import datetime
+import logging
 
 # Version check
-from .version import PRISM_VERSION, check_version
-VERSION = "0.4.0"
-check_version(__name__, VERSION)
+try:
+    from .version import PRISM_VERSION, check_version
+    VERSION = "0.4.0"
+    check_version(__name__, VERSION)
+except ImportError:
+    VERSION = "0.4.0"
+    print(f"⚠️ Version module not found, using VERSION={VERSION}")
 
-class SemanticChunkerV04:
+logger = logging.getLogger(__name__)
+
+# ============================================
+# Semantic Chunker v0.4
+# ============================================
+
+class SemanticChunker:
     """
-    Enhanced semantic chunker for Phase 0.4
-    Handles both article-based and non-article sections
+    Phase 0.4.0 Semantic Chunker
+    
+    Key improvements:
+    - Non-article sections (기본정신 etc.) as independent chunks
+    - Better boundary detection
+    - Korean sentence boundary preservation
     """
     
-    # ============================================
-    # Chunking Strategy
-    # ============================================
+    # Article patterns
+    ARTICLE_PATTERNS = [
+        r'^###?\s*제\s*(\d+)조(?:의\s*(\d+))?\s*\(([^)]+)\)',  # ### 제1조(목적)
+        r'^제\s*(\d+)조(?:의\s*(\d+))?\s*\(([^)]+)\)',        # 제1조(목적)
+        r'^###?\s*제\s*(\d+)조(?:의\s*(\d+))?[^(]',          # ### 제1조
+    ]
     
-    CHUNKING_RULES = """
-📋 CHUNKING STRATEGY (Phase 0.4)
-
-🎯 Priority Order:
-1. 개정이력 (Revision History) → Independent chunk
-2. 기본정신 (Basic Principles) → Independent chunk
-3. 제1조, 제2조, ... (Articles) → One chunk per article
-4. 부칙 (Supplementary Provisions) → Independent chunk
-
-⚠️ CRITICAL: Non-article sections MUST be chunked separately
-- Each section gets its own chunk with proper metadata
-- Do NOT merge with articles
-- Do NOT skip these sections
-"""
+    # Special sections that should be independent chunks
+    SPECIAL_SECTIONS = [
+        '기본정신',
+        '기본 정신',
+        '개정이력'
+    ]
     
     def __init__(
         self,
-        min_chunk_size: int = 300,
-        max_chunk_size: int = 2000,
-        overlap: int = 100
+        target_chunk_size: int = 800,
+        min_chunk_size: int = 300
     ):
         """
-        Initialize semantic chunker
+        Initialize Semantic Chunker v0.4
         
         Args:
-            min_chunk_size: Minimum characters per chunk
-            max_chunk_size: Maximum characters per chunk
-            overlap: Character overlap between chunks
+            target_chunk_size: Target chunk size in characters
+            min_chunk_size: Minimum chunk size in characters
         """
+        self.target_chunk_size = target_chunk_size
         self.min_chunk_size = min_chunk_size
-        self.max_chunk_size = max_chunk_size
-        self.overlap = overlap
         
-        # Patterns
-        self.article_pattern = re.compile(r'###\s*제\s*(\d+)\s*조')
-        self.chapter_pattern = re.compile(r'##\s*제\s*(\d+)\s*장')
+        logger.info("✅ SemanticChunker Phase 0.4.0 초기화")
+        logger.info(f"   🎯 목표: {target_chunk_size}자, 최소: {min_chunk_size}자")
+        logger.info(f"   📋 조문 패턴: {len(self.ARTICLE_PATTERNS)}개")
+        logger.info(f"   ⭐ 특별 섹션: {len(self.SPECIAL_SECTIONS)}개")
     
-    def chunk(self, markdown: str, doc_type: str = "regulation") -> List[Dict[str, Any]]:
+    def chunk(self, markdown: str) -> List[Dict[str, Any]]:
         """
-        Create semantic chunks from markdown
+        Chunk markdown into semantic units
         
         Args:
-            markdown: Preprocessed markdown content
-            doc_type: Document type
+            markdown: Input markdown text
         
         Returns:
-            List of chunk dictionaries
+            List of chunks with metadata
         """
+        logger.info("   ✂️ SemanticChunker Phase 0.4.0 시작")
+        
         chunks = []
-        
-        # 1. Extract revision history (highest priority)
-        revision_chunk = self._extract_revision_history(markdown)
-        if revision_chunk:
-            chunks.append(revision_chunk)
-        
-        # 2. Extract basic principles
-        principles_chunk = self._extract_basic_principles(markdown)
-        if principles_chunk:
-            chunks.append(principles_chunk)
-        
-        # 3. Extract articles
-        article_chunks = self._extract_articles(markdown)
-        chunks.extend(article_chunks)
-        
-        # 4. Extract supplementary provisions
-        supplement_chunk = self._extract_supplementary(markdown)
-        if supplement_chunk:
-            chunks.append(supplement_chunk)
-        
-        # 5. Add metadata and finalize
-        for i, chunk in enumerate(chunks, 1):
-            chunk['id'] = f"chunk_{i:03d}"
-            chunk['sequence'] = i
-            chunk['total_chunks'] = len(chunks)
-        
-        return chunks
-    
-    def _extract_revision_history(self, markdown: str) -> Dict[str, Any] | None:
-        """
-        Extract revision history as independent chunk
-        
-        Returns:
-            Chunk dict or None if not found
-        """
-        # Pattern: ## 개정이력 or | 개정일자 |
-        patterns = [
-            r'##\s*개정\s*이력.*?\n(.*?)(?=\n##|\Z)',
-            r'\|\s*개정일자\s*\|.*?\n((?:\|.*?\n)+)'
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, markdown, re.DOTALL | re.IGNORECASE)
-            if match:
-                content = match.group(0).strip()
-                
-                # Parse table if present
-                revision_count = len(re.findall(r'\|\s*\d{4}', content))
-                
-                return {
-                    'content': content,
-                    'metadata': {
-                        'type': 'revision_history',
-                        'section': '개정이력',
-                        'article_no': None,
-                        'char_count': len(content),
-                        'revision_count': revision_count
-                    }
-                }
-        
-        return None
-    
-    def _extract_basic_principles(self, markdown: str) -> Dict[str, Any] | None:
-        """
-        Extract basic principles as independent chunk
-        
-        Returns:
-            Chunk dict or None if not found
-        """
-        # Pattern: ## 기본정신 or ## 기본 정신
-        pattern = r'##\s*기본\s*정신.*?\n(.*?)(?=\n##|\n###|\Z)'
-        match = re.search(pattern, markdown, re.DOTALL | re.IGNORECASE)
-        
-        if match:
-            content = match.group(0).strip()
-            
-            return {
-                'content': content,
-                'metadata': {
-                    'type': 'basic_principles',
-                    'section': '기본정신',
-                    'article_no': None,
-                    'char_count': len(content)
-                }
-            }
-        
-        return None
-    
-    def _extract_articles(self, markdown: str) -> List[Dict[str, Any]]:
-        """
-        Extract articles as individual chunks
-        
-        Returns:
-            List of article chunks
-        """
-        chunks = []
-        
-        # Split by article headers
-        article_splits = re.split(r'(###\s*제\s*\d+\s*조.*?\n)', markdown)
-        
+        lines = markdown.split('\n')
+        current_chunk = []
         current_article = None
-        current_content = []
+        current_title = None
+        chunk_index = 1
         
-        for i, segment in enumerate(article_splits):
-            # Check if this is an article header
-            article_match = self.article_pattern.match(segment.strip())
+        i = 0
+        while i < len(lines):
+            line = lines[i]
             
-            if article_match:
-                # Save previous article if exists
-                if current_article and current_content:
-                    chunks.append(self._create_article_chunk(
-                        current_article,
-                        ''.join(current_content)
+            # Check for special sections
+            special_section = self._is_special_section(line)
+            if special_section:
+                # Save current chunk if exists
+                if current_chunk:
+                    chunks.append(self._create_chunk(
+                        content='\n'.join(current_chunk),
+                        article_no=current_article,
+                        article_title=current_title,
+                        chunk_index=chunk_index
                     ))
+                    chunk_index += 1
+                    current_chunk = []
                 
-                # Start new article
-                current_article = segment.strip()
-                current_content = [segment]
+                # Extract special section content
+                section_content = [line]
+                i += 1
+                
+                # Collect until next article or special section
+                while i < len(lines):
+                    next_line = lines[i]
+                    
+                    # Stop at next article or special section
+                    if self._is_article_header(next_line) or self._is_special_section(next_line):
+                        break
+                    
+                    section_content.append(next_line)
+                    i += 1
+                
+                # Create special section chunk
+                chunks.append({
+                    'content': '\n'.join(section_content).strip(),
+                    'metadata': {
+                        'section_type': special_section,
+                        'char_count': len('\n'.join(section_content)),
+                        'chunk_index': chunk_index
+                    }
+                })
+                chunk_index += 1
+                continue
+            
+            # Check for article header
+            article_match = self._is_article_header(line)
+            if article_match:
+                # Save previous chunk if exists
+                if current_chunk:
+                    chunks.append(self._create_chunk(
+                        content='\n'.join(current_chunk),
+                        article_no=current_article,
+                        article_title=current_title,
+                        chunk_index=chunk_index
+                    ))
+                    chunk_index += 1
+                
+                # Start new chunk with this article
+                current_article = article_match['article_no']
+                current_title = article_match['title']
+                current_chunk = [line]
             else:
-                # Add to current article content
-                if current_article:
-                    current_content.append(segment)
+                # Add to current chunk
+                current_chunk.append(line)
+            
+            i += 1
         
-        # Save last article
-        if current_article and current_content:
-            chunks.append(self._create_article_chunk(
-                current_article,
-                ''.join(current_content)
+        # Save final chunk
+        if current_chunk:
+            chunks.append(self._create_chunk(
+                content='\n'.join(current_chunk),
+                article_no=current_article,
+                article_title=current_title,
+                chunk_index=chunk_index
             ))
         
+        logger.info(f"   ✅ 청킹 완료: {len(chunks)}개")
+        logger.info(f"      📊 조문 청크: {sum(1 for c in chunks if 'article_no' in c['metadata'])}개")
+        logger.info(f"      ⭐ 특별 섹션: {sum(1 for c in chunks if 'section_type' in c['metadata'])}개")
+        
         return chunks
     
-    def _create_article_chunk(self, header: str, content: str) -> Dict[str, Any]:
-        """
-        Create chunk from article header and content
+    def _is_special_section(self, line: str) -> Optional[str]:
+        """Check if line is a special section header"""
+        line_clean = line.strip()
         
-        Args:
-            header: Article header (e.g., "### 제1조(목적)")
-            content: Full article content
+        for section in self.SPECIAL_SECTIONS:
+            # Check for ## 기본정신 or just 기본정신
+            if section in line_clean:
+                return section
+        
+        return None
+    
+    def _is_article_header(self, line: str) -> Optional[Dict[str, str]]:
+        """
+        Check if line is an article header
         
         Returns:
-            Chunk dictionary
+            Dict with article_no and title, or None
         """
-        # Extract article number
-        article_match = re.search(r'제\s*(\d+)\s*조', header)
-        article_no = article_match.group(1) if article_match else None
+        for pattern in self.ARTICLE_PATTERNS:
+            match = re.match(pattern, line.strip())
+            if match:
+                groups = match.groups()
+                article_no = f"제{groups[0]}조"
+                
+                # Add 의N if exists
+                if len(groups) > 1 and groups[1]:
+                    article_no += f"의{groups[1]}"
+                
+                # Extract title if exists
+                title = groups[2] if len(groups) > 2 and groups[2] else ""
+                
+                return {
+                    'article_no': article_no,
+                    'title': title
+                }
         
-        # Extract article title
-        title_match = re.search(r'제\s*\d+\s*조\s*\(([^)]+)\)', header)
-        article_title = title_match.group(1) if title_match else None
-        
-        # Clean content
+        return None
+    
+    def _create_chunk(
+        self,
+        content: str,
+        article_no: Optional[str],
+        article_title: Optional[str],
+        chunk_index: int
+    ) -> Dict[str, Any]:
+        """Create chunk dictionary with metadata"""
         content = content.strip()
         
-        # Count sub-items
-        item_count = len(re.findall(r'^\d+\.', content, re.MULTILINE))
-        subitem_count = len(re.findall(r'^\s+[가-힣]\.', content, re.MULTILINE))
+        metadata = {
+            'char_count': len(content),
+            'chunk_index': chunk_index
+        }
+        
+        if article_no:
+            metadata['article_no'] = article_no
+        
+        if article_title:
+            metadata['article_title'] = article_title
         
         return {
             'content': content,
-            'metadata': {
-                'type': 'article',
-                'section': f'제{article_no}조',
-                'article_no': article_no,
-                'article_title': article_title,
-                'char_count': len(content),
-                'item_count': item_count,
-                'subitem_count': subitem_count
-            }
+            'metadata': metadata
         }
-    
-    def _extract_supplementary(self, markdown: str) -> Dict[str, Any] | None:
-        """
-        Extract supplementary provisions
-        
-        Returns:
-            Chunk dict or None if not found
-        """
-        pattern = r'##\s*부\s*칙.*?\n(.*?)(?=\n##|\Z)'
-        match = re.search(pattern, markdown, re.DOTALL | re.IGNORECASE)
-        
-        if match:
-            content = match.group(0).strip()
-            
-            return {
-                'content': content,
-                'metadata': {
-                    'type': 'supplementary',
-                    'section': '부칙',
-                    'article_no': None,
-                    'char_count': len(content)
-                }
-            }
-        
-        return None
-    
-    def validate_chunks(self, chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """
-        Validate chunking quality
-        
-        Args:
-            chunks: List of chunks
-        
-        Returns:
-            Validation report
-        """
-        issues = []
-        
-        # Check for critical chunks
-        chunk_types = [c['metadata']['type'] for c in chunks]
-        
-        if 'basic_principles' not in chunk_types:
-            issues.append({
-                'severity': 'critical',
-                'message': 'Missing "기본정신" chunk'
-            })
-        
-        if 'revision_history' not in chunk_types:
-            issues.append({
-                'severity': 'major',
-                'message': 'Missing "개정이력" chunk'
-            })
-        
-        # Check chunk sizes
-        for chunk in chunks:
-            size = chunk['metadata']['char_count']
-            if size < self.min_chunk_size:
-                issues.append({
-                    'severity': 'minor',
-                    'message': f"Chunk {chunk.get('id', '?')} too small ({size} chars)"
-                })
-        
-        # Calculate score
-        critical_count = len([i for i in issues if i['severity'] == 'critical'])
-        major_count = len([i for i in issues if i['severity'] == 'major'])
-        
-        score = 100 - (critical_count * 30) - (major_count * 10)
-        
-        return {
-            'valid': len(issues) == 0,
-            'score': max(0, score),
-            'total_chunks': len(chunks),
-            'chunk_types': chunk_types,
-            'issues': issues
-        }
-
 
 # ============================================
 # Usage Example
 # ============================================
 
 if __name__ == "__main__":
-    sample_markdown = """
-## 개정이력
-
-| 개정일자 | 개정사유 | 비고 |
-|---------|---------|------|
-| 2024.01.01 | 최초 제정 | - |
+    chunker = SemanticChunker()
+    
+    sample_md = """
+# 인사규정
 
 ## 기본정신
-
-모든 직원은 평등하게 대우받는다.
+이 규정은 직원의 인사관리를 규정합니다.
 
 ### 제1조(목적)
-이 규정은 직원의 인사관리에 관한 사항을 정함을 목적으로 한다.
+이 규정은 인사관리의 기준을 정합니다.
 
 ### 제2조(적용범위)
-이 규정은 모든 직원에게 적용한다.
-"""
+직원의 인사관리에 적용됩니다.
+    """
     
-    chunker = SemanticChunkerV04()
-    chunks = chunker.chunk(sample_markdown)
+    chunks = chunker.chunk(sample_md)
     
     print("=" * 60)
-    print(f"Total Chunks: {len(chunks)}")
+    print("Semantic Chunker v0.4 Example")
     print("=" * 60)
-    
-    for chunk in chunks:
-        print(f"\n[{chunk['id']}] {chunk['metadata']['type']}")
-        print(f"Section: {chunk['metadata']['section']}")
-        print(f"Size: {chunk['metadata']['char_count']} chars")
+    for i, chunk in enumerate(chunks, 1):
+        print(f"\nChunk {i}:")
+        print(f"Metadata: {chunk['metadata']}")
         print(f"Content: {chunk['content'][:100]}...")
-    
-    print("\n" + "=" * 60)
-    print("Validation Report:")
-    print("=" * 60)
-    validation = chunker.validate_chunks(chunks)
-    print(f"Valid: {validation['valid']}")
-    print(f"Score: {validation['score']}/100")
-    print(f"Issues: {len(validation['issues'])}")

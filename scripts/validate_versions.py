@@ -6,7 +6,7 @@ CI/CD build-level version validation
 Ensures all modules use consistent PRISM version
 
 Author: 황태민 (DevOps Lead)
-Date: 2025-11-09
+Date: 2025-11-10
 
 Usage:
     python scripts/validate_versions.py
@@ -78,27 +78,19 @@ def validate_versions():
             elif module_version != PRISM_VERSION:
                 results.append({
                     'module': module_name,
-                    'status': 'mismatch',
-                    'expected': PRISM_VERSION,
-                    'actual': module_version
+                    'status': 'fail',
+                    'version': module_version,
+                    'expected': PRISM_VERSION
                 })
                 all_valid = False
             else:
                 results.append({
                     'module': module_name,
-                    'status': 'ok',
+                    'status': 'pass',
                     'version': module_version
                 })
         
         except ImportError as e:
-            results.append({
-                'module': module_name,
-                'status': 'import_error',
-                'message': str(e)
-            })
-            all_valid = False
-        
-        except Exception as e:
             results.append({
                 'module': module_name,
                 'status': 'error',
@@ -107,48 +99,33 @@ def validate_versions():
             all_valid = False
     
     # Print results
-    print("📋 Validation Results:")
+    print("Validation Results:")
     print("-" * 60)
     
     for result in results:
         module = result['module']
         status = result['status']
         
-        if status == 'ok':
+        if status == 'pass':
             print(f"✅ {module}: {result['version']}")
-        elif status == 'mismatch':
-            print(f"❌ {module}: Version mismatch!")
-            print(f"   Expected: {result['expected']}")
-            print(f"   Got: {result['actual']}")
-        elif status == 'import_error':
-            print(f"❌ {module}: Import failed")
-            print(f"   Error: {result['message']}")
+        elif status == 'fail':
+            print(f"❌ {module}: {result['version']} (expected {result['expected']})")
         elif status == 'error':
-            print(f"❌ {module}: {result['message']}")
+            print(f"⚠️ {module}: {result['message']}")
     
-    print("-" * 60)
     print()
+    print("=" * 60)
     
-    # Final verdict
     if all_valid:
-        print("✅ Version Validation: PASS")
-        print(f"   All modules using version {PRISM_VERSION}")
-        print()
+        print("✅ All modules validated successfully!")
+        print("=" * 60)
         return True
     else:
-        print("❌ Version Validation: FAIL")
-        print("   Fix version mismatches before deployment!")
-        print()
+        print("❌ Version validation failed!")
+        print("Please update module versions to match PRISM_VERSION")
+        print("=" * 60)
         return False
 
-
-def main():
-    """Main entry point"""
-    success = validate_versions()
-    
-    # Exit with proper code for CI/CD
-    sys.exit(0 if success else 1)
-
-
 if __name__ == "__main__":
-    main()
+    success = validate_versions()
+    sys.exit(0 if success else 1)

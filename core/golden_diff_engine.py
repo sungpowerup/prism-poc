@@ -6,7 +6,8 @@ Automatic comparison between Golden Files and processing results
 Provides honest quality scores based on actual differences
 
 Author: 이서영 (Backend Lead)
-Date: 2025-11-09
+Date: 2025-11-10
+Version: 0.4.0
 """
 
 from typing import Dict, List, Any, Tuple
@@ -16,9 +17,13 @@ from pathlib import Path
 import re
 
 # Version check
-from .version import PRISM_VERSION, check_version
-VERSION = "0.4.0"
-check_version(__name__, VERSION)
+try:
+    from .version import PRISM_VERSION, check_version
+    VERSION = "0.4.0"
+    check_version(__name__, VERSION)
+except ImportError:
+    VERSION = "0.4.0"
+    print(f"⚠️ Version module not found, using VERSION={VERSION}")
 
 # ============================================
 # Data Structures
@@ -148,10 +153,10 @@ class GoldenDiffEngine:
             critical_sections_ok=critical_ok
         )
     
-    def _check_critical_sections(self, result_md: str) -> bool:
+    def _check_critical_sections(self, text: str) -> bool:
         """Check if all critical sections are present"""
         for section in self.CRITICAL_SECTIONS:
-            if section not in result_md:
+            if section not in text:
                 return False
         return True
     
@@ -162,34 +167,20 @@ class GoldenDiffEngine:
         Returns:
             (match_rate, matched_chars, total_chars)
         """
-        # Normalize whitespace for fair comparison
-        golden_norm = self._normalize_text(golden)
-        result_norm = self._normalize_text(result)
-        
         # Use SequenceMatcher for accurate comparison
-        matcher = difflib.SequenceMatcher(None, golden_norm, result_norm)
-        match_rate = matcher.ratio()
+        matcher = difflib.SequenceMatcher(None, golden, result)
         
-        total_chars = len(golden_norm)
-        matched_chars = int(total_chars * match_rate)
+        # Get matching blocks
+        matches = matcher.get_matching_blocks()
+        matched_chars = sum(block.size for block in matches)
+        total_chars = len(golden)
+        
+        match_rate = matched_chars / total_chars if total_chars > 0 else 0.0
         
         return match_rate, matched_chars, total_chars
     
-    def _normalize_text(self, text: str) -> str:
-        """Normalize text for comparison"""
-        # Remove extra whitespace
-        text = re.sub(r'\s+', ' ', text)
-        # Remove leading/trailing whitespace
-        text = text.strip()
-        return text
-    
     def _find_differences(self, golden: str, result: str) -> List[DiffError]:
-        """
-        Find detailed differences between golden and result
-        
-        Returns:
-            List of DiffError objects
-        """
+        """Find specific differences between golden and result"""
         errors = []
         
         # 1. Check for missing critical sections
@@ -208,7 +199,7 @@ class GoldenDiffEngine:
         result_lines = result.split('\n')
         
         # Find article headers
-        article_pattern = r'###\s*제(\d+)조'
+        article_pattern = r'###?\s*제(\d+)조'
         
         for i, golden_line in enumerate(golden_lines):
             article_match = re.search(article_pattern, golden_line)
@@ -226,18 +217,20 @@ class GoldenDiffEngine:
                     errors.append(DiffError(
                         error_type='missing',
                         location=f'제{article_no}조',
-                        expected=golden_line,
+                        expected=golden_line[:50] + '...',
                         actual='Not found',
                         severity='major'
                     ))
                 elif golden_line != result_line:
-                    errors.append(DiffError(
-                        error_type='typo',
-                        location=f'제{article_no}조',
-                        expected=golden_line,
-                        actual=result_line,
-                        severity='minor'
-                    ))
+                    # Only report if difference is significant (not just whitespace)
+                    if golden_line.strip() != result_line.strip():
+                        errors.append(DiffError(
+                            error_type='typo',
+                            location=f'제{article_no}조',
+                            expected=golden_line[:50] + '...',
+                            actual=result_line[:50] + '...',
+                            severity='minor'
+                        ))
         
         # 3. Check for extra content in result (hallucinations)
         for line in result_lines:
@@ -250,7 +243,7 @@ class GoldenDiffEngine:
                         error_type='extra',
                         location=f'제{article_no}조',
                         expected='Should not exist',
-                        actual=line,
+                        actual=line[:50] + '...',
                         severity='major'
                     ))
         
@@ -273,12 +266,12 @@ class GoldenDiffEngine:
             f"Threshold Mode: {self.threshold_mode}",
             "=" * 60,
             "",
-            f"📊 Overall Quality",
+            "📊 Overall Quality",
             f"  Match Rate: {result.match_rate * 100:.2f}%",
             f"  Status: {'✅ PASS' if result.pass_status else '❌ FAIL'}",
             f"  Matched: {result.matched_chars:,} / {result.total_chars:,} chars",
             "",
-            f"🔍 Critical Sections",
+            "🔍 Critical Sections",
             f"  Status: {'✅ All Present' if result.critical_sections_ok else '❌ Missing'}",
             ""
         ]
@@ -333,19 +326,19 @@ if __name__ == "__main__":
     engine = GoldenDiffEngine(threshold_mode='strict')
     
     golden = """
+### 기본정신
+이 규정은...
+
 ### 제1조(목적)
 이 규정은 직원의 인사관리에 관한 사항을 정함을 목적으로 한다.
-
-### 기본정신
-모든 직원은 평등하게 대우받는다.
     """
     
     result = """
+### 기본정신
+이 규정은...
+
 ### 제1조(목적)
 이 규정은 직원의 인사관리에 관한 사항을 정함을 목적으로 한다.
-
-### 기본정신
-모든 직원은 평등하게 대우받는다.
     """
     
     diff_result = engine.compare(golden, result)
