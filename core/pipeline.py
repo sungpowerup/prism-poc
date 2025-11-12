@@ -29,15 +29,10 @@ import random
 
 logger = logging.getLogger(__name__)
 
-# ✅ Phase 0.3.2: Safe 모듈 import
-try:
-    from core.typo_normalizer_safe import TypoNormalizer
-    from core.post_merge_normalizer_safe import PostMergeNormalizer
-    logger.info("✅ Safe Normalizers import 성공")
-except ImportError:
-    logger.warning("⚠️ Safe Normalizers 없음 - 기본 버전 사용")
-    from core.typo_normalizer import TypoNormalizer
-    from core.post_merge_normalizer import PostMergeNormalizer
+# ✅ Phase 0.3.2: Safe 모듈 import (fallback 제거 - Safe 버전이 표준)
+from core.typo_normalizer_safe import TypoNormalizer
+from core.post_merge_normalizer_safe import PostMergeNormalizer
+logger.info("✅ Safe Normalizers import 성공")
 
 from core.semantic_chunker import SemanticChunker
 from core.document_classifier import DocumentClassifierV50
