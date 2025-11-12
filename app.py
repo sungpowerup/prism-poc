@@ -1,27 +1,18 @@
 """
-app.py
-PRISM Phase 0.3.3 - Enhanced Application
-
-✅ Phase 0.3.3 지원:
-1. 버전 체크 로직 업데이트 (0.3.3 지원)
-2. Safe 모듈 자동 로드
-3. Fallback 로직 강화
-
-Author: 최동현 (Frontend Lead)
-Date: 2025-11-08
-Version: Phase 0.3.3
+app.py - PRISM Final Version (GPT Feedback Applied)
+GPT 6가지 핫픽스 반영
 """
 
 import streamlit as st
 import logging
 import sys
 from pathlib import Path
-import os
 import time
-import importlib
 import json
+import gc
+import base64
+from PIL import Image
 
-# ✅ 로거 초기화 (최상단)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -32,265 +23,216 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ⚠️ 캐시 무효화
-importlib.invalidate_caches()
-
-# ✅ core 모듈 import
 try:
     from core.pdf_processor import PDFProcessor
     from core.vlm_service import VLMServiceV50
-    from core.pipeline import Phase53Pipeline
+    from core.hybrid_extractor import HybridExtractor
+    from core.typo_normalizer_safe import TypoNormalizer
+    from core.post_merge_normalizer_safe import PostMergeNormalizer
+    from core.semantic_chunker import SemanticChunker
     
-    logger.info("✅ 기본 core 모듈 import 성공")
+    logger.info("✅ 모듈 import 성공")
     
-    # ✅ Safe 모듈 체크
-    try:
-        from core.typo_normalizer_safe import TypoNormalizer
-        from core.post_merge_normalizer_safe import PostMergeNormalizer
-        from core.semantic_chunker import SemanticChunker
-        
-        tn_version = getattr(TypoNormalizer, 'VERSION', 'UNKNOWN')
-        
-        # ✅ Safe/OCR 패턴 개수 확인
-        safe_patterns = getattr(TypoNormalizer, 'SAFE_PATTERNS', {})
-        ocr_patterns = getattr(TypoNormalizer, 'OCR_PATTERNS', {})
-        tn_dict_size = len(safe_patterns) + len(ocr_patterns)
-        tn_block_size = len(getattr(TypoNormalizer, 'BLOCKED_REPLACEMENTS', set()))
-        
-        pm_version = getattr(PostMergeNormalizer, 'VERSION', 'UNKNOWN')
-        sc_version = getattr(SemanticChunker, 'VERSION', 'UNKNOWN')
-        
-        logger.info(f"🔎 TypoNormalizer: {tn_version}")
-        logger.info(f"   📖 Safe: {len(safe_patterns)}개")
-        logger.info(f"   📖 OCR: {len(ocr_patterns)}개")
-        logger.info(f"   📖 합계: {tn_dict_size}개")
-        logger.info(f"   🚫 금지: {tn_block_size}개")
-        logger.info(f"🔎 PostMergeNormalizer: {pm_version}")
-        logger.info(f"🔎 SemanticChunker: {sc_version}")
-        
-        # ✅ 버전 판정 (0.3.3 우선)
-        if "0.3.3" in tn_version:
-            logger.info("✅ Phase 0.3.3 확인됨!")
-            phase_version = "Phase 0.3.3"
-            safe_mode_enabled = True
-        elif "0.3.2" in tn_version:
-            logger.info("✅ Phase 0.3.2 확인됨")
-            phase_version = "Phase 0.3.2"
-            safe_mode_enabled = True
-        elif "0.3.1" in tn_version:
-            logger.info("✅ Phase 0.3.1 확인됨")
-            phase_version = "Phase 0.3.1"
-            safe_mode_enabled = True
-        else:
-            logger.warning(f"⚠️ Phase 미확인: version={tn_version}")
-            phase_version = "Unknown"
-            safe_mode_enabled = False
-            
-    except ImportError as ie:
-        logger.error(f"❌ Safe Normalizers import 실패: {ie}")
-        st.error(f"❌ Safe 모듈을 찾을 수 없습니다: {ie}")
-        st.error("core/ 폴더에 typo_normalizer_safe.py와 post_merge_normalizer_safe.py가 있는지 확인해주세요.")
-        st.stop()
-        
-except ImportError as e:
-    logger.error(f"❌ core 모듈 import 실패: {e}")
+except Exception as e:
+    logger.error(f"❌ Import 실패: {e}")
     st.error(f"❌ 모듈 로딩 실패: {e}")
-    st.error("core 폴더의 모든 파일이 올바른 위치에 있는지 확인해주세요.")
     st.stop()
 
 
-def main():
-    # ✅ 제목 (버전별 표시)
-    if phase_version == "Phase 0.3.3":
-        st.title("🎯 PRISM Phase 0.3.3 - 문서 처리 시스템 ✨")
-        st.success("✅ Phase 0.3.3 활성화 (레이어 분리 정규화, 골든 diff 기반)")
+def image_to_base64(image_data):
+    """이미지 데이터를 base64로 변환"""
+    if isinstance(image_data, tuple):
+        image_data = image_data[0]
+    
+    if isinstance(image_data, Image.Image):
+        from io import BytesIO
+        buffered = BytesIO()
+        image_data.save(buffered, format="PNG")
+        return base64.b64encode(buffered.getvalue()).decode()
+    
+    if isinstance(image_data, str):
+        return image_data
+    
+    if isinstance(image_data, bytes):
+        return base64.b64encode(image_data).decode()
+    
+    raise TypeError(f"지원하지 않는 이미지 타입: {type(image_data)}")
+
+
+def process_pdf_direct(pdf_path, pdf_processor, vlm_service):
+    """직접 PDF 처리"""
+    
+    # 1. PDF → 이미지 변환
+    images = pdf_processor.pdf_to_images(pdf_path)
+    logger.info(f"✅ {len(images)}개 페이지 추출")
+    
+    # 2. HybridExtractor 초기화
+    extractor = HybridExtractor(vlm_service, pdf_path)
+    logger.info(f"✅ HybridExtractor 초기화")
+    
+    # 3. 페이지별 처리
+    all_markdown = []
+    
+    for page_num, image_data in enumerate(images, 1):
+        logger.info(f"🔄 페이지 {page_num}/{len(images)} 처리 중...")
         
-        with st.expander("✨ Phase 0.3.3 개선사항", expanded=False):
-            st.markdown("""
-            **🎯 Phase 0.3.3 주요 개선:**
-            1. ✅ **레이어 분리 설계**: Safe/OCR/Domain 3단계 분리
-            2. ✅ **골든 diff 기반**: 실제 오류만 교정 (29개)
-            3. ✅ **의미 변경 제거**: 원본 충실도 최우선
-            4. ✅ **리포트-코드 동기화**: 문서와 코드 100% 일치
+        try:
+            image_b64 = image_to_base64(image_data)
+            result = extractor.extract(image_b64, page_num)
             
-            **🔧 기술 스펙:**
-            - Safe Layer: 7개 (공백/전각반각 정규화)
-            - OCR Layer: 29개 (골든 diff 추출)
-            - Blocked: 3개 (의미 변경 방지)
-            - 조문 헤더: 자동 정규화
-            """)
-    else:
-        st.title("🎯 PRISM - 문서 처리 시스템")
-        st.warning(f"⚠️ 버전: {phase_version}")
+            # GPT 피드백: 키는 'content'
+            page_md = result.get('content', '').strip()
+            
+            if page_md:
+                all_markdown.append(page_md)
+                logger.info(f"   ✅ 페이지 {page_num}: {len(page_md)}자 추가")
+            
+        except Exception as e:
+            logger.error(f"페이지 {page_num} 처리 실패: {e}", exc_info=True)
     
-    # 버전 정보 표시
-    with st.expander("ℹ️ 버전 정보", expanded=False):
-        st.write(f"**현재 버전**: {phase_version}")
-        st.write(f"**Safe Mode**: {'✅ 활성화' if safe_mode_enabled else '❌ 비활성화'}")
-        st.write(f"**TypoNormalizer**: {tn_version}")
-        st.write(f"**PostMergeNormalizer**: {pm_version}")
-        st.write(f"**SemanticChunker**: {sc_version}")
-        st.write(f"**사전 크기**: {tn_dict_size}개")
-        st.write(f"**금지 치환**: {tn_block_size}개")
+    # 페이지 병합
+    markdown = "\n\n".join(all_markdown)
+    logger.info(f"✅ 병합 완료: {len(markdown)}자 (페이지 {len(all_markdown)}개)")
     
-    # 초기화
+    if len(markdown) < 100:
+        raise ValueError(f"추출된 텍스트가 너무 짧습니다 ({len(markdown)}자)")
+    
+    # 4. 정규화
+    normalizer = TypoNormalizer()
+    markdown = normalizer.normalize(markdown)
+    
+    post_normalizer = PostMergeNormalizer()
+    markdown = post_normalizer.normalize(markdown)
+    logger.info(f"✅ 정규화 완료: {len(markdown)}자")
+    
+    # 5. 청킹
+    chunker = SemanticChunker()
+    chunks = chunker.chunk(markdown)
+    logger.info(f"✅ {len(chunks)}개 청크 생성")
+    
+    # 6. GPT 피드백: 품질 점수 제거 (Golden File 미검증)
+    checklist = None  # 품질 점수 없음
+    
+    return {
+        'success': True,
+        'markdown': markdown,
+        'chunks': chunks,
+        'checklist': checklist,
+        'elapsed_time': 0
+    }
+
+
+def main():
+    st.title("🔷 PRISM - 문서 처리 시스템")
+    
+    st.warning("""
+    ⚠️ **Phase 0.3.4 P0 (실험용 PoC)**
+    - Golden File 미검증 상태입니다
+    - 품질 점수는 표시되지 않습니다
+    """)
+    
     try:
         pdf_processor = PDFProcessor()
         vlm_service = VLMServiceV50(provider="azure_openai")
-        logger.info("✅ 서비스 초기화 완료")
+        logger.info("✅ 초기화 완료")
     except Exception as e:
-        logger.error(f"❌ 서비스 초기화 실패: {e}", exc_info=True)
-        st.error(f"❌ 초기화 실패: {str(e)}")
+        st.error(f"❌ 초기화 실패: {e}")
         return
     
-    # 파일 업로드
     uploaded_file = st.file_uploader("📄 PDF 파일 업로드", type=['pdf'])
     
-    if uploaded_file is not None:
-        # session_state를 사용하여 처리 결과 캐싱
+    if uploaded_file:
         file_key = f"{uploaded_file.name}_{uploaded_file.size}"
         
-        if 'last_processed_file' not in st.session_state or st.session_state['last_processed_file'] != file_key:
-            # 새 파일이거나 아직 처리 안 했으면 처리
-            status_text = f"🔄 PDF 처리 중... ({phase_version})"
-            
-            with st.spinner(status_text):
+        if 'last_file' not in st.session_state or st.session_state['last_file'] != file_key:
+            with st.spinner("🔄 처리 중... (VLM 호출)"):
                 temp_path = None
-                
                 try:
-                    # 임시 파일 저장
-                    temp_filename = f"temp_{int(time.time())}_{uploaded_file.name}"
-                    temp_path = Path(temp_filename)
+                    temp_path = Path(f"temp_{int(time.time())}_{uploaded_file.name}")
+                    temp_path.write_bytes(uploaded_file.getvalue())
                     
-                    with open(temp_path, 'wb') as f:
-                        f.write(uploaded_file.getvalue())
+                    result = process_pdf_direct(str(temp_path), pdf_processor, vlm_service)
                     
-                    logger.info(f"✅ 임시 파일 저장: {temp_path}")
-                    
-                    # Pipeline 초기화 및 처리
-                    pipeline = Phase53Pipeline(pdf_processor, vlm_service)
-                    result = pipeline.process_pdf(str(temp_path))
-                    
-                    # 결과를 session_state에 저장
-                    st.session_state['last_processed_file'] = file_key
+                    st.session_state['last_file'] = file_key
                     st.session_state['result'] = result
                     
-                    logger.info("✅ 처리 결과 저장 완료")
-                    
                 except Exception as e:
-                    logger.error(f"❌ 처리 중 오류: {e}", exc_info=True)
-                    st.error(f"❌ 오류 발생: {str(e)}")
-                    return
+                    logger.error(f"❌ 처리 오류: {e}", exc_info=True)
+                    st.error(f"❌ 오류: {e}")
+                    st.session_state['result'] = None
                     
                 finally:
-                    # 임시 파일 삭제
+                    gc.collect()
+                    
+                    # GPT 피드백: Windows 파일 락 재시도
                     if temp_path and temp_path.exists():
-                        try:
-                            temp_path.unlink()
-                            logger.info(f"✅ 임시 파일 삭제: {temp_path}")
-                        except Exception as e:
-                            logger.warning(f"⚠️ 임시 파일 삭제 실패: {e}")
+                        for attempt in range(3):
+                            try:
+                                time.sleep(0.2)
+                                temp_path.unlink()
+                                logger.info("✅ 임시 파일 삭제")
+                                break
+                            except PermissionError as e:
+                                if attempt == 2:
+                                    logger.warning(f"⚠️ 임시 파일 삭제 실패 (무시): {e}")
         
-        # session_state에서 결과 가져오기
         result = st.session_state.get('result')
         
         if result and result.get('success'):
             st.success("✅ 처리 완료!")
             
-            # 처리 시간 표시
-            elapsed = result.get('elapsed_time', 0)
-            st.info(f"⏱️ 처리 시간: {elapsed:.1f}초")
+            # GPT 피드백: 품질 점수 제거
+            st.info("💡 품질 점수는 Golden File 연동 후 표시됩니다")
             
-            # 체크리스트 표시
-            st.subheader("📊 품질 체크리스트")
-            checklist = result.get('checklist', {})
+            # 결과
+            markdown = result.get('markdown', '')
+            chunks = result.get('chunks', [])
             
-            if checklist:
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    fidelity = checklist.get('fidelity', 0)
-                    st.metric("📄 원본 충실도", f"{fidelity}/100")
-                    
-                    chunking = checklist.get('chunking', 0)
-                    st.metric("✂️ 청킹 품질", f"{chunking}/100")
-                
-                with col2:
-                    rag = checklist.get('rag_readiness', 0)
-                    st.metric("🎯 RAG 적합도", f"{rag}/100")
-                    
-                    generality = checklist.get('generality', 0)
-                    st.metric("🔄 범용성", f"{generality}/100")
-                
-                with col3:
-                    competitive = checklist.get('competitive_edge', 0)
-                    st.metric("🏆 경쟁력", f"{competitive}/100")
-                    
-                    overall = checklist.get('overall', 0)
-                    st.metric("🎯 종합", f"{overall}/100")
-                
-                # Markdown 미리보기
-                st.subheader("📝 Markdown 미리보기")
-                markdown = result.get('markdown', '')
-                
+            if markdown:
+                st.subheader("📝 Markdown 결과")
+                preview = markdown[:1000]
+                if len(markdown) > 1000:
+                    preview += "\n\n... (생략)"
+                # GPT 피드백: label 비어있음 경고 제거
+                st.text_area(
+                    "결과 미리보기",
+                    preview,
+                    height=300,
+                    label_visibility="collapsed"
+                )
+            
+            if chunks:
+                st.subheader(f"✂️ 청크 결과 (총 {len(chunks)}개)")
+                for i, chunk in enumerate(chunks[:3], 1):
+                    with st.expander(f"청크 {i}"):
+                        st.json(chunk.get('metadata', {}))
+                        st.text(chunk.get('content', ''))
+            
+            # 다운로드
+            st.subheader("📥 다운로드")
+            col1, col2 = st.columns(2)
+            
+            with col1:
                 if markdown:
-                    preview = markdown[:1000]
-                    if len(markdown) > 1000:
-                        preview += "\n\n... (생략) ..."
-                    
-                    st.text_area("", preview, height=300, disabled=True)
-                    
-                    with st.expander("📄 전체 Markdown 보기"):
-                        st.markdown(markdown)
-                
-                # 청크 미리보기
-                st.subheader("✂️ 청크 미리보기")
-                chunks = result.get('chunks', [])
-                
+                    st.download_button(
+                        "📝 Markdown",
+                        markdown,
+                        f"{uploaded_file.name.replace('.pdf', '')}_markdown.md",
+                        mime="text/markdown"
+                    )
+            
+            with col2:
                 if chunks:
-                    for i, chunk in enumerate(chunks[:3], 1):
-                        with st.expander(f"청크 {i}: {chunk.get('id', '')}"):
-                            st.write("**메타데이터:**")
-                            st.json(chunk.get('metadata', {}))
-                            st.write("**내용:**")
-                            st.text(chunk.get('content', ''))
-                    
-                    if len(chunks) > 3:
-                        st.info(f"📋 총 {len(chunks)}개 청크")
-                
-                # 다운로드 버튼
-                st.subheader("📥 다운로드")
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    if markdown:
-                        timestamp = time.strftime("%Y%m%d_%H%M%S")
-                        filename = f"{uploaded_file.name.replace('.pdf', '')}_{timestamp}_markdown.md"
-                        
-                        st.download_button(
-                            label="📝 Markdown 다운로드",
-                            data=markdown,
-                            file_name=filename,
-                            mime="text/markdown"
-                        )
-                
-                with col2:
-                    if chunks:
-                        timestamp = time.strftime("%Y%m%d_%H%M%S")
-                        filename = f"{uploaded_file.name.replace('.pdf', '')}_{timestamp}_chunks.json"
-                        
-                        chunks_json = json.dumps(chunks, ensure_ascii=False, indent=2)
-                        
-                        st.download_button(
-                            label="📦 JSON 다운로드",
-                            data=chunks_json,
-                            file_name=filename,
-                            mime="application/json"
-                        )
+                    chunks_json = json.dumps(chunks, ensure_ascii=False, indent=2)
+                    st.download_button(
+                        "📦 JSON",
+                        chunks_json,
+                        f"{uploaded_file.name.replace('.pdf', '')}_chunks.json",
+                        mime="application/json"
+                    )
         
-        elif result:
-            st.error(f"❌ 처리 실패: {result.get('error', 'Unknown error')}")
+        elif result is not None:
+            st.error("❌ 처리 실패")
 
 
 if __name__ == "__main__":
