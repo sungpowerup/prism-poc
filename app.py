@@ -1,17 +1,16 @@
 """
-app.py - PRISM Phase 0.3.4 P2.5.3 최종 완성 (상용 배포 버전)
-GPT 피드백 100% 반영 + 마창수산팀 주도 설계
+app.py - PRISM Phase 0.4.0 P0-3 완전판
+GPT 피드백 100% 반영 + DualQA 통합
 
-✅ 개선 사항:
-1. 제4조 누락 방지 (헤더 절대 보호 + 자동 QA)
-2. OCR 오탈자 23개 패턴 (유연한 정규식)
-3. 리뷰용 파일 생성 (*_review.md)
-4. 정규식 경고 완전 제거 (raw string)
-5. 세션 상태 관리 + UUID 캐시 무효화
+✅ Phase 0.4.0 P0-3 개선 사항:
+1. QA 헤더 추출 정교화 (인라인 참조 노이즈 제거)
+2. DualQAGate 이중 검증 (PDF vs VLM)
+3. 관찰 모드 (하드 fail 금지)
+4. UI에 QA 경고 표시
 
-Author: 마창수산팀 (최동현 Frontend Lead) + GPT 보정
+Author: 마창수산팀 + GPT 보정
 Date: 2025-11-13
-Version: Phase 0.3.4 P2.5.3 (Production Ready)
+Version: Phase 0.4.0 P0-3
 """
 
 import streamlit as st
@@ -50,9 +49,10 @@ try:
     from core.typo_normalizer_safe import TypoNormalizer
     from core.post_merge_normalizer_safe import PostMergeNormalizer
     from core.semantic_chunker import SemanticChunker
+    from core.dual_qa_gate import DualQAGate, extract_pdf_text_layer
     from core.utils_fs import safe_temp_path, safe_remove
     
-    logger.info("✅ 모듈 import 성공 (Phase 0.3.4 P2.5.3)")
+    logger.info("✅ 모듈 import 성공 (Phase 0.4.0 P0-3)")
     
 except Exception as e:
     logger.error(f"❌ Import 실패: {e}")
@@ -86,124 +86,134 @@ def image_to_base64(image_data):
 
 def to_review_md(chunks: list, markdown: str) -> str:
     """
-    ✅ GPT 피드백: 리뷰용 Markdown 생성
-    
-    목적: 사람이 읽기 좋은 형식으로 변환
-    - 조문마다 ### 헤더
-    - 항목(①②) 앞에 줄바꿈
-    - 80자 소프트 래핑
+    리뷰용 Markdown 생성 (사람이 읽기 좋은 형식)
     """
     lines = []
     
     # 개정 이력 (상단에 유지)
-    if '제37차 개정' in markdown or '제정' in markdown:
-        header_end = markdown.find('기본정신')
-        if header_end > 0:
-            header = markdown[:header_end].strip()
-            lines.append("# 인사규정")
-            lines.append("")
-            lines.append("## 개정 이력")
-            lines.append(header)
-            lines.append("")
+    if '제37차' in markdown or '개정' in markdown[:200]:
+        first_section = markdown.split('\n\n')[0]
+        lines.append("# 인사규정\n")
+        lines.append("## 개정 이력")
+        lines.append(first_section + "\n")
     
-    for ch in chunks:
-        # ✅ None 처리 추가
-        t = ch["metadata"].get("title") or ""
-        t = t.strip() if t else ""
+    # 청크별 변환
+    for chunk in chunks:
+        content = chunk['content']
+        chunk_type = chunk['metadata']['type']
+        title = chunk['metadata'].get('title')
         
-        b = ch["metadata"].get("boundary") or ""
-        b = b.strip() if b else ""
+        # 기본정신
+        if chunk_type == 'basic':
+            lines.append("\n## 기본정신\n")
+            lines.append(content.replace('기본정신', '', 1).strip())
         
-        btype = ch["metadata"].get("type", "")
+        # 장
+        elif chunk_type == 'chapter':
+            chapter_match = re.search(r'제\s*\d+\s*장', content)
+            if chapter_match:
+                lines.append(f"\n## {chapter_match.group()}\n")
+                rest = content[chapter_match.end():].strip()
+                if rest:
+                    lines.append(rest)
         
-        # 헤더 생성
-        if btype == 'chapter':
-            head = f"## {b}"
-        elif btype == 'basic':
-            head = "## 기본정신"
-        elif b:
-            if t:
-                head = f"### {b}{t})"
+        # 조문
+        elif chunk_type in ['article', 'article_loose']:
+            header_match = re.search(r'(제\s*\d+조(?:의\d+)?)\s*\(([^)]+)\)', content)
+            if header_match:
+                article_num = header_match.group(1)
+                article_title = header_match.group(2)
+                lines.append(f"\n### {article_num}({article_title})\n")
+                
+                # 본문 (항목 앞에 줄바꿈)
+                rest = content[header_match.end():].strip()
+                rest = re.sub(r'([。\.])(\s*)(①)', r'\1\n\3', rest)
+                rest = re.sub(r'([。\.])(\s*)(②)', r'\1\n\3', rest)
+                rest = re.sub(r'([。\.])(\s*)(③)', r'\1\n\3', rest)
+                rest = re.sub(r'([。\.])(\s*)(④)', r'\1\n\3', rest)
+                
+                lines.append(rest)
             else:
-                head = f"### {b}"
-        else:
-            head = "### 내용"
-        
-        # 본문 처리
-        body = ch.get("content", "")
-        body = body.strip() if body else ""
-        
-        # ✅ 항목 줄바꿈 보정
-        body = re.sub(r'\s*(①|②|③|④|⑤|⑥|⑦|⑧|⑨|⑩)', r'\n\1', body)
-        body = re.sub(r'\s*(?=^\d+\.)', r'\n', body, flags=re.M)
-        
-        lines += [head, "", body, ""]
+                lines.append(f"\n### {content[:30]}...\n")
+                lines.append(content)
     
-    return "\n".join(lines).strip()
+    return '\n'.join(lines)
 
 
-def process_pdf_direct(pdf_path, pdf_processor, vlm_service):
+# ============================================
+# 문서 처리 파이프라인
+# ============================================
+
+def process_document(pdf_path: str, max_pages: int = 20, provider: str = 'azure_openai'):
     """
-    PDF 직접 처리 (Phase 0.3.4 P2.5.3)
+    문서 처리 파이프라인
     
-    플로우:
-    1. PDF → 이미지 변환
-    2. HybridExtractor로 페이지별 처리
-    3. Markdown 병합
-    4. 오탈자 정규화 (33가지 패턴)
-    5. 후처리 정규화
-    6. 의미 기반 청킹 (제4조 누락 방지 + 자동 QA)
+    ✅ Phase 0.4.0 P0-3: DualQA 통합
     """
     
-    # 1. PDF → 이미지 변환
-    st.info("📄 PDF를 이미지로 변환 중...")
-    images = pdf_processor.pdf_to_images(pdf_path)
+    # 0. DualQA 준비: PDF 텍스트 레이어 추출
+    st.info("📄 PDF 원본 텍스트 추출 중...")
+    pdf_text = extract_pdf_text_layer(pdf_path)
+    logger.info(f"✅ PDF 텍스트 추출 완료: {len(pdf_text)}자")
+    
+    # 1. PDF 처리
+    st.info("📄 PDF 이미지 변환 중...")
+    pdf_processor = PDFProcessor()
+    images = pdf_processor.pdf_to_images(pdf_path, max_pages=max_pages)
     logger.info(f"✅ {len(images)}개 페이지 추출")
-    st.success(f"✅ {len(images)}개 페이지 추출 완료")
+    st.success(f"✅ {len(images)}개 페이지 변환 완료")
     
-    # 2. HybridExtractor 초기화
-    extractor = HybridExtractor(vlm_service, pdf_path)
-    logger.info(f"✅ HybridExtractor 초기화")
+    # 2. VLM 초기화
+    vlm_service = VLMServiceV50(provider=provider)
+    logger.info("✅ 서비스 초기화 완료")
     
-    # 3. 페이지별 추출 및 병합
-    st.info(f"🔍 {len(images)}개 페이지 추출 중...")
+    # 3. Hybrid 추출 (페이지별 처리)
+    st.info("🤖 VLM 기반 추출 중...")
+    extractor = HybridExtractor(
+        vlm_service=vlm_service,
+        pdf_path=pdf_path
+    )
+    logger.info("✅ HybridExtractor 초기화")
     
-    markdown_parts = []
-    progress_bar = st.progress(0)
-    
-    for idx, image_data in enumerate(images, 1):
-        try:
-            # 이미지 → Base64
-            if not isinstance(image_data, str):
-                image_base64 = image_to_base64(image_data)
-            else:
-                image_base64 = image_data
-            
-            # 페이지 추출
-            page_result = extractor.extract(image_base64, idx)
-            
-            # Markdown 병합
-            if page_result and 'content' in page_result:
-                markdown_parts.append(page_result['content'])
-                logger.info(f"   ✅ 페이지 {idx}: {len(page_result['content'])}자")
-            else:
-                logger.warning(f"   ⚠️ 페이지 {idx}: 내용 없음")
-            
-            # 진행률 업데이트
-            progress_bar.progress(idx / len(images))
-            
-        except Exception as e:
-            logger.error(f"   ❌ 페이지 {idx} 오류: {e}")
-            st.warning(f"⚠️ 페이지 {idx} 처리 실패: {str(e)}")
-    
-    progress_bar.empty()
+    # 페이지별 추출
+    all_pages = []
+    for i, image_item in enumerate(images, 1):
+        # 디버깅: 타입 확인
+        logger.info(f"   🔍 Page {i} image type: {type(image_item)}")
+        
+        # 여러 케이스 처리
+        if isinstance(image_item, tuple):
+            # Case 1: (image_data, metadata) 튜플
+            image_data = image_item[0]
+            logger.info(f"   📦 튜플에서 이미지 추출 (요소 타입: {type(image_data)})")
+        elif isinstance(image_item, dict):
+            # Case 2: {'image': ..., 'metadata': ...} 딕셔너리
+            image_data = image_item.get('image', image_item)
+            logger.info(f"   📦 딕셔너리에서 이미지 추출")
+        else:
+            # Case 3: 직접 이미지 데이터
+            image_data = image_item
+            logger.info(f"   📦 직접 이미지 사용")
+        
+        # 최종 확인: 여전히 튜플이면 재귀적으로 추출
+        while isinstance(image_data, tuple):
+            logger.warning(f"   ⚠️ 중첩 튜플 감지! 재귀 추출")
+            image_data = image_data[0]
+        
+        logger.info(f"   ✅ 최종 image_data 타입: {type(image_data)}")
+        
+        page_result = extractor.extract(image_data, page_num=i)
+        all_pages.append(page_result)
+        
+        st.info(f"   ✅ 페이지 {i}: {len(page_result['content'])}자")
+        logger.info(f"   ✅ 페이지 {i}: {len(page_result['content'])}자")
     
     # Markdown 병합
-    markdown = '\n\n'.join(markdown_parts)
+    markdown = '\n\n'.join([p['content'] for p in all_pages])
     logger.info(f"✅ Markdown 병합 완료: {len(markdown)}자")
-    st.success(f"✅ 추출 완료: {len(markdown):,}자")
+    st.success(f"✅ VLM 추출 완료: {len(markdown)}자")
     
-    # 4. 오탈자 정규화 (33가지 패턴)
+    # 4. 오탈자 정규화
     st.info("🔧 오탈자 정규화 중...")
     normalizer = TypoNormalizer()
     normalized_md = normalizer.normalize(markdown)
@@ -215,21 +225,51 @@ def process_pdf_direct(pdf_path, pdf_processor, vlm_service):
     final_md = post_normalizer.normalize(normalized_md)
     logger.info(f"✅ 후처리 완료: {len(final_md)}자")
     
-    # 6. 의미 기반 청킹 (제4조 누락 방지 + 자동 QA)
+    # 6. 의미 기반 청킹
     st.info("✂️ 의미 기반 청킹 중...")
     chunker = SemanticChunker()
     chunks = chunker.chunk(final_md)
     logger.info(f"✅ 청킹 완료: {len(chunks)}개")
     st.success(f"✅ 청킹 완료: {len(chunks)}개")
     
+    # ✅ 7. DualQA 검증 (Phase 0.4.0 P0-3 신규)
+    st.info("🔬 DualQA 이중 검증 중...")
+    dual_qa = DualQAGate()
+    qa_result = dual_qa.validate(pdf_text, final_md)
+    logger.info("✅ DualQA 검증 완료")
+    
+    # QA 결과 UI 표시
+    if qa_result['qa_flags']:
+        st.warning(f"⚠️ QA 경고: {', '.join(qa_result['qa_flags'])}")
+        
+        with st.expander("🔬 DualQA 상세 결과"):
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("PDF 조문", qa_result['pdf_count'])
+            with col2:
+                st.metric("VLM 조문", qa_result['vlm_count'])
+            with col3:
+                st.metric("매칭률", f"{qa_result['match_rate']:.1%}")
+            
+            if qa_result['missing_in_vlm']:
+                st.error(f"❌ VLM 누락: {qa_result['missing_in_vlm']}")
+            
+            if qa_result['extra_in_vlm']:
+                st.warning(f"⚠️ VLM 추가: {qa_result['extra_in_vlm']}")
+    else:
+        st.success("✅ DualQA 검증 통과 (원본과 일치)")
+    
     return {
         'markdown': final_md,
         'chunks': chunks,
+        'qa_result': qa_result,
         'metadata': {
             'total_pages': len(images),
             'total_chars': len(final_md),
             'total_chunks': len(chunks),
-            'processing_time': datetime.now().isoformat()
+            'processing_time': datetime.now().isoformat(),
+            'qa_flags': qa_result['qa_flags']
         }
     }
 
@@ -243,37 +283,42 @@ def main():
     
     # 페이지 설정
     st.set_page_config(
-        page_title="PRISM Phase 0.3.4 P2.5.3",
+        page_title="PRISM Phase 0.4.0 P0-3",
         page_icon="🔷",
         layout="wide"
     )
     
-    # ✅ 세션 상태 초기화
+    # 세션 상태 초기화
     if 'last_result' not in st.session_state:
         st.session_state.last_result = None
     if 'last_filename' not in st.session_state:
         st.session_state.last_filename = None
     
     # 헤더
-    st.title("🔷 PRISM Phase 0.3.4 P2.5.3")
-    st.caption("차세대 지능형 문서 이해 플랫폼 - 최종 완성 (상용 배포 버전)")
+    st.title("🔷 PRISM Phase 0.4.0 P0-3")
+    st.caption("차세대 지능형 문서 이해 플랫폼 - DualQA 완전판")
     
     st.markdown("---")
     
-    # 사이드바 - 설정
+    # 사이드바
     with st.sidebar:
         st.header("⚙️ 설정")
         
         st.subheader("📊 버전 정보")
         st.info("""
-**Phase 0.3.4 P2.5.3 (Production Ready)**
-- ✅ 제4조 누락 방지 (헤더 절대 보호)
-- ✅ OCR 오탈자 23개 패턴
-- ✅ 리뷰용 파일 생성 (사람 눈 친화)
-- ✅ 자동 QA 게이트 (누락 조문 감지)
-- ✅ 정규식 경고 완전 제거
+**Phase 0.4.0 P0-3 (QA-Stable)**
 
-**GPT 보정 + 마창수산팀 주도 설계**
+✅ **P0-3a: QA 헤더 정교화**
+- 인라인 참조 노이즈 제거
+- 청킹 경계 패턴 통합
+
+✅ **P0-3b: DualQA 이중 검증**
+- PDF 원본 vs VLM 결과
+- 관찰 모드 (하드 fail 금지)
+- 원문 불일치 자동 감지
+
+**GPT 피드백 100% 반영**
+**마창수산팀 주도 설계**
         """)
         
         st.markdown("---")
@@ -289,19 +334,17 @@ def main():
             "최대 처리 페이지",
             min_value=1,
             max_value=20,
-            value=20,
-            help="한 번에 처리할 최대 페이지 수"
+            value=20
         )
         
         st.markdown("---")
         
         st.subheader("📖 사용 방법")
         st.markdown("""
-1. PDF 파일 업로드 (최대 10MB)
+1. PDF 파일 업로드
 2. '처리 시작' 버튼 클릭
-3. 결과 확인 및 다운로드
-   - RAG용: Markdown + JSON
-   - 검수용: Review Markdown
+3. DualQA 검증 결과 확인
+4. 결과 다운로드
         """)
     
     # 메인 영역
@@ -314,263 +357,158 @@ def main():
     )
     
     if uploaded_file is not None:
-        # 파일 정보 표시
+        # 파일 정보
         file_size = len(uploaded_file.getvalue()) / (1024 * 1024)
         st.info(f"📁 파일명: {uploaded_file.name} ({file_size:.2f} MB)")
         
-        # 파일 크기 체크
         if file_size > 10:
             st.error("❌ 파일 크기가 10MB를 초과합니다!")
             return
         
-        # 처리 시작 버튼
+        # 처리 버튼
         if st.button("🚀 처리 시작", type="primary"):
+            # 캐시 무효화
+            file_id = f"{uploaded_file.name}_{uuid.uuid4().hex[:8]}"
             
-            # 안전한 임시 파일 생성
+            # 임시 파일 저장
             pdf_path = safe_temp_path(".pdf")
+            with open(pdf_path, 'wb') as f:
+                f.write(uploaded_file.getvalue())
+            
+            logger.info(f"✅ 임시 파일 저장: {pdf_path}")
             
             try:
-                # 임시 파일 저장
-                with open(pdf_path, 'wb') as f:
-                    f.write(uploaded_file.getvalue())
+                # 진행 표시
+                with st.spinner("⏳ 문서 처리 중... (최대 2분 소요)"):
+                    start_time = time.time()
+                    
+                    # 처리 실행
+                    result = process_document(
+                        pdf_path=pdf_path,
+                        max_pages=max_pages,
+                        provider=provider
+                    )
+                    
+                    elapsed = time.time() - start_time
+                    logger.info(f"✅ 처리 완료: {elapsed:.1f}초")
                 
-                logger.info(f"✅ 임시 파일 저장: {pdf_path}")
-                
-                # 서비스 초기화
-                with st.spinner("🔧 서비스 초기화 중..."):
-                    pdf_processor = PDFProcessor()
-                    vlm_service = VLMServiceV50(provider=provider)
-                    logger.info("✅ 서비스 초기화 완료")
-                
-                # PDF 처리
-                start_time = time.time()
-                
-                with st.spinner("🔄 PDF 처리 중..."):
-                    result = process_pdf_direct(pdf_path, pdf_processor, vlm_service)
-                
-                processing_time = time.time() - start_time
-                
-                # ✅ 세션 상태에 결과 저장
+                # 세션 상태 저장
                 st.session_state.last_result = result
                 st.session_state.last_filename = uploaded_file.name
                 
-                # 성공 메시지
-                st.success(f"✅ 처리 완료! ({processing_time:.1f}초)")
+                st.success(f"✅ 처리 완료! ({elapsed:.1f}초)")
                 
             except Exception as e:
                 logger.error(f"❌ 처리 실패: {e}", exc_info=True)
-                st.error(f"❌ 처리 중 오류 발생: {str(e)}")
-            
+                st.error(f"❌ 처리 실패: {str(e)}")
+                
             finally:
-                # 안전한 파일 삭제
+                # 임시 파일 삭제
                 safe_remove(pdf_path)
                 gc.collect()
     
-    # ✅ 결과 표시 (세션 상태에서)
+    # 결과 표시
     if st.session_state.last_result is not None:
-        result = st.session_state.last_result
-        filename = st.session_state.last_filename
-        base_name = filename.replace('.pdf', '')
-        
-        # 결과 표시
         st.markdown("---")
         st.header("📊 처리 결과")
+        
+        result = st.session_state.last_result
+        filename = st.session_state.last_filename
         
         # 메타데이터
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            st.metric("총 페이지", result['metadata']['total_pages'])
-        
+            st.metric("전체 문자", f"{result['metadata']['total_chars']:,}")
         with col2:
-            st.metric("추출 문자", f"{result['metadata']['total_chars']:,}자")
-        
+            st.metric("청크 개수", result['metadata']['total_chunks'])
         with col3:
-            st.metric("생성 청크", result['metadata']['total_chunks'])
+            qa_status = "⚠️ 경고" if result['metadata']['qa_flags'] else "✅ 통과"
+            st.metric("QA 상태", qa_status)
         
-        # 탭으로 결과 구분
-        tab1, tab2, tab3, tab4 = st.tabs(["📝 RAG Markdown", "✂️ 청크 JSON", "📄 리뷰용 MD", "📊 분석"])
+        # 탭
+        tab1, tab2, tab3, tab4 = st.tabs([
+            "📝 Markdown",
+            "📦 JSON",
+            "📖 Review",
+            "🔬 QA 상세"
+        ])
         
         with tab1:
-            st.subheader("RAG용 Markdown (임베딩 최적화)")
             st.text_area(
-                "Markdown 내용",
+                "Markdown 결과",
                 result['markdown'],
-                height=400,
-                key="markdown_display"
+                height=400
             )
             
-            # ✅ UUID로 캐시 무효화
-            download_id = uuid.uuid4().hex[:8]
+            # 다운로드
+            filename_base = Path(filename).stem
             st.download_button(
-                label="📥 RAG용 Markdown 다운로드",
-                data=result['markdown'],
-                file_name=f"{base_name}_{download_id}.md",
-                mime="text/markdown",
-                key=f"md_download_{download_id}"
+                "⬇️ Markdown 다운로드",
+                result['markdown'],
+                file_name=f"{filename_base}_{uuid.uuid4().hex[:8]}.md",
+                mime="text/markdown"
             )
         
         with tab2:
-            st.subheader(f"청크 JSON ({len(result['chunks'])}개)")
+            json_str = json.dumps(result['chunks'], ensure_ascii=False, indent=2)
+            st.text_area(
+                "JSON 결과",
+                json_str,
+                height=400
+            )
             
-            # 청크 미리보기
-            for i, chunk in enumerate(result['chunks'][:3], 1):
-                with st.expander(f"청크 {i} 미리보기 - {chunk['metadata']['type']} ({chunk['metadata']['char_count']}자)"):
-                    st.markdown(f"**경계:** `{chunk['metadata']['boundary']}`")
-                    if chunk['metadata'].get('title'):
-                        st.markdown(f"**제목:** {chunk['metadata']['title']}")
-                    st.text_area(
-                        "내용",
-                        chunk['content'][:200] + "...",
-                        height=100,
-                        key=f"chunk_preview_{i}"
-                    )
-            
-            if len(result['chunks']) > 3:
-                st.info(f"💡 전체 {len(result['chunks'])}개 청크는 JSON 파일에서 확인하세요")
-            
-            # ✅ UUID로 캐시 무효화
-            chunks_json = json.dumps(result['chunks'], ensure_ascii=False, indent=2)
-            download_id = uuid.uuid4().hex[:8]
             st.download_button(
-                label="📥 청크 JSON 다운로드",
-                data=chunks_json,
-                file_name=f"{base_name}_{download_id}.json",
-                mime="application/json",
-                key=f"json_download_{download_id}"
+                "⬇️ JSON 다운로드",
+                json_str,
+                file_name=f"{filename_base}_{uuid.uuid4().hex[:8]}.json",
+                mime="application/json"
             )
         
         with tab3:
-            st.subheader("📄 리뷰용 Markdown (사람 눈 친화)")
-            st.info("✅ 조문마다 헤더 + 항목 줄바꿈 + 읽기 좋은 형식")
-            
-            # ✅ GPT 피드백: 리뷰용 파일 생성
             review_md = to_review_md(result['chunks'], result['markdown'])
-            
             st.text_area(
-                "리뷰용 내용",
-                review_md[:1000] + "\n\n... (하단 생략, 전체는 다운로드에서 확인)",
-                height=400,
-                key="review_display"
+                "리뷰용 Markdown",
+                review_md,
+                height=400
             )
             
-            # ✅ UUID로 캐시 무효화
-            download_id = uuid.uuid4().hex[:8]
             st.download_button(
-                label="📥 리뷰용 Markdown 다운로드",
-                data=review_md,
-                file_name=f"{base_name}_review_{download_id}.md",
-                mime="text/markdown",
-                key=f"review_download_{download_id}"
+                "⬇️ 리뷰용 다운로드",
+                review_md,
+                file_name=f"{filename_base}_review_{uuid.uuid4().hex[:8]}.md",
+                mime="text/markdown"
             )
         
         with tab4:
-            st.subheader("📊 청크 품질 분석")
+            qa_result = result['qa_result']
             
-            # 타입별 분포
-            type_counts = {}
-            for chunk in result['chunks']:
-                chunk_type = chunk['metadata']['type']
-                type_counts[chunk_type] = type_counts.get(chunk_type, 0) + 1
+            st.subheader("🔬 DualQA 검증 상세")
             
-            st.markdown("### 타입별 분포")
-            for chunk_type, count in sorted(type_counts.items()):
-                percentage = (count / len(result['chunks'])) * 100
-                st.markdown(f"- **{chunk_type}**: {count}개 ({percentage:.1f}%)")
+            # 메트릭
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("PDF 조문", qa_result['pdf_count'])
+            with col2:
+                st.metric("VLM 조문", qa_result['vlm_count'])
+            with col3:
+                st.metric("매칭률", f"{qa_result['match_rate']:.1%}")
             
-            # 크기 분석
-            sizes = [c['metadata']['char_count'] for c in result['chunks']]
-            if sizes:
-                st.markdown("### 크기 분석")
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    avg_size = sum(sizes) / len(sizes)
-                    st.metric("평균 청크 크기", f"{avg_size:.0f}자")
-                
-                with col2:
-                    st.metric("최소 크기", f"{min(sizes)}자")
-                
-                with col3:
-                    st.metric("최대 크기", f"{max(sizes)}자")
+            # 불일치 상세
+            if qa_result['missing_in_vlm']:
+                st.error("❌ VLM 누락 (PDF에는 있지만 VLM이 못 찾음)")
+                st.json(qa_result['missing_in_vlm'])
             
-            # ✅ 조문 헤더 목록
-            st.markdown("### 감지된 조문 헤더")
-            headers = []
-            for chunk in result['chunks']:
-                boundary = chunk['metadata'].get('boundary', '')
-                if boundary and ('조' in boundary or '장' in boundary):
-                    headers.append(boundary)
+            if qa_result['extra_in_vlm']:
+                st.warning("⚠️ VLM 추가 (VLM이 만들어낸 조문)")
+                st.json(qa_result['extra_in_vlm'])
             
-            if headers:
-                st.markdown(", ".join(headers))
+            if not qa_result['qa_flags']:
+                st.success("✅ 원본과 완전 일치!")
             else:
-                st.warning("조문 헤더를 감지하지 못했습니다")
-    
-    else:
-        st.info("👆 PDF 파일을 업로드하여 시작하세요")
-        
-        # 샘플 결과 표시
-        st.markdown("---")
-        st.header("📖 Phase 0.3.4 P2.5.3 주요 개선사항")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("🎯 제4조 누락 방지")
-            st.code("""
-# Before
-제4조(임용권) → JSON에서 누락 ❌
-
-# After (GPT 보정)
-헤더 절대 보호:
-- 50자 미만 조문도 헤더로 간주
-- 병합 시 양쪽 모두 헤더 아니어야 병합
-- 자동 QA: MD vs JSON 헤더 비교
-
-→ 제4조 완전 보존 ✅
-            """, language="python")
-            
-            st.subheader("🔧 OCR 오탈자 23개")
-            st.code(r"""
-# 유연한 정규식 (실측 기반)
-채\s*채\s*규정 → 채용규정
-인턴\s*채\s*통상 → 인턴·통상
-설\s*차\s*적 → 절차적
-직원\s*방식\s*절차 → 직권면직
-... 외 19개
-            """, language="python")
-        
-        with col2:
-            st.subheader("📄 리뷰용 파일 생성")
-            st.code("""
-# RAG용 (AI 최적화)
-제1조(목적) 이 규정은...
-
-# 리뷰용 (사람 눈 친화)
-### 제1조(목적)
-
-이 규정은 한국농어촌공사 직원에게
-적용할 인사관리의 기준을 정하여...
-
-① 제1항
-② 제2항
-            """, language="markdown")
-            
-            st.subheader("🔍 자동 QA 게이트")
-            st.code("""
-# 누락 조문 자동 감지
-MD 헤더: {제1조, 제2조, ..., 제92조}
-JSON 헤더: {제1조, 제2조, ..., 제92조}
-
-⚠️ 누락: 없음
-✅ QA 통과
-            """, language="python")
-    
-    # 푸터
-    st.markdown("---")
-    st.caption("🔷 PRISM Phase 0.3.4 P2.5.3 (상용 배포 버전) | 마창수산팀 + GPT 보정")
+                st.warning(f"⚠️ QA 플래그: {qa_result['qa_flags']}")
+                st.info("→ 수동 검수 권장")
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
