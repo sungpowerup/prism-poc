@@ -1,16 +1,15 @@
 """
 core/dual_qa_gate.py
-PRISM Phase 0.4.0 P0-3b - Dual QA Gate
+PRISM Phase 0.4.0 P0-3.1 - Hotfix (SemanticChunker와 패턴 통합)
 
-✅ GPT 피드백 반영:
-1. PDF 원본 vs VLM 결과 이중 검증
-2. VLM을 거치지 않은 순수 텍스트 추출
-3. 관찰 모드 (하드 fail 금지)
-4. 경고 + 메타데이터 플래그만
+✅ P0-3.1 긴급 수정:
+1. SemanticChunker와 완전히 동일한 패턴 사용
+2. 공백/특수문자 허용 강화
+3. 이중 검증 로직 유지
 
-Author: 이서영 (Backend Lead) + GPT 보정
+Author: 마창수산팀 + GPT 피드백 반영
 Date: 2025-11-13
-Version: Phase 0.4.0 P0-3b
+Version: Phase 0.4.0 P0-3.1
 """
 
 import re
@@ -21,37 +20,67 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def extract_pdf_text_layer(pdf_path: str) -> str:
+    """
+    PDF 텍스트 레이어 추출 (VLM 거치지 않음)
+    
+    Args:
+        pdf_path: PDF 파일 경로
+    
+    Returns:
+        순수 텍스트
+    """
+    try:
+        import pypdfium2 as pdfium
+        
+        pdf = pdfium.PdfDocument(pdf_path)
+        text_parts = []
+        
+        for page_num in range(len(pdf)):
+            page = pdf[page_num]
+            textpage = page.get_textpage()
+            text = textpage.get_text_range()
+            text_parts.append(text)
+        
+        full_text = '\n'.join(text_parts)
+        logger.info(f"   📄 PDF 텍스트 추출 완료: {len(full_text)}자")
+        
+        return full_text
+    
+    except Exception as e:
+        logger.error(f"   ❌ PDF 텍스트 추출 실패: {e}")
+        return ""
+
+
 class DualQAGate:
     """
     PDF 원본 vs VLM 결과 이중 검증
     
-    ✅ GPT 핵심:
-    - VLM을 진실로 가정하지 않음
-    - PDF 텍스트 레이어와 직접 비교
-    - 불일치는 경고만 (하드 fail 금지)
+    ✅ P0-3.1: SemanticChunker와 완전히 동일한 패턴 사용
     """
     
     # ============================================
-    # 조문 헤더 패턴 (semantic_chunker와 동일)
+    # ✅ P0-3.1: SemanticChunker와 완전히 동일한 패턴
     # ============================================
     NUM = r'\d+(?:의\d+)?'
-    AFTER_JO_NOT_NUM = r'(?!\s*제?\s*\d)'
     
     # Strict: 제N조( 형식
+    # ✅ SemanticChunker와 동일: 앞에 공백/특수문자 허용
     ARTICLE_STRICT = re.compile(
-        rf'(제\s*{NUM}\s*조){AFTER_JO_NOT_NUM}(?=\s*\()',
+        rf'^[\s⟨<\[]*(제\s*{NUM}\s*조)\s*\(',
         re.MULTILINE
     )
     
     # Loose: 제N조 단독
+    # ✅ SemanticChunker와 동일: 앞에 공백/특수문자 허용
     ARTICLE_LOOSE = re.compile(
-        rf'(제\s*{NUM}\s*조){AFTER_JO_NOT_NUM}(?=\s|$)',
+        rf'^[\s⟨<\[]*(제\s*{NUM}\s*조)(?=\s|$)',
         re.MULTILINE
     )
     
     def __init__(self):
-        logger.info("✅ DualQAGate Phase 0.4.0 P0-3b 초기화")
-        logger.info("   🔬 PDF vs VLM 이중 검증 (관찰 모드)")
+        logger.info("✅ DualQAGate Phase 0.4.0 P0-3.1 초기화 (Hotfix)")
+        logger.info("   🔬 PDF vs VLM 이중 검증 (SemanticChunker 패턴 통합)")
     
     def validate(self, pdf_text: str, vlm_markdown: str) -> Dict:
         """
@@ -104,141 +133,80 @@ class DualQAGate:
         if extra_in_vlm:
             result['qa_flags'].append('vlm_extra_articles')
         
-        # 7. 로깅
-        self._log_result(result)
-        
-        return result
-    
-    def _extract_article_headers(self, text: str, source: str = "TEXT") -> Set[str]:
-        """
-        텍스트에서 조문 헤더 추출
-        
-        ✅ GPT 핵심: 인라인 참조 필터링
-        """
-        headers = set()
-        
-        # Strict 패턴으로 추출
-        for m in self.ARTICLE_STRICT.finditer(text):
-            header = m.group(1).strip()
-            header = re.sub(r'\s+', '', header)  # 공백 제거
-            headers.add(header)
-        
-        # Loose 패턴으로 보강 (인라인 참조 필터링)
-        loose_candidates = []
-        for m in self.ARTICLE_LOOSE.finditer(text):
-            pos = m.start()
-            header = m.group(1).strip()
-            header = re.sub(r'\s+', '', header)
-            
-            if header not in headers:
-                loose_candidates.append((pos, header))
-        
-        # 인라인 참조 필터링
-        loose_candidates = self._filter_inline_references(text, loose_candidates)
-        for _, header in loose_candidates:
-            headers.add(header)
-        
-        logger.info(f"   📖 {source} 조문 헤더: {len(headers)}개")
-        if headers:
-            sample = sorted(headers)[:5]
-            logger.info(f"      샘플: {sample}")
-        
-        return headers
-    
-    def _filter_inline_references(self, text: str, candidates: List[tuple]) -> List[tuple]:
-        """
-        인라인 참조 필터링
-        
-        제28조에 따른, 제73조제1항 같은 참조 제거
-        """
-        filtered = []
-        
-        for pos, matched in candidates:
-            # 전후 컨텍스트
-            start = max(0, pos - 50)
-            end = min(len(text), pos + 100)
-            context = text[start:end]
-            
-            # 인라인 참조 패턴
-            inline_patterns = [
-                rf'{re.escape(matched)}\s*제\s*\d+항',      # 제73조제1항
-                rf'{re.escape(matched)}\s*에\s*따른',       # 제34조에 따른
-                rf'{re.escape(matched)}\s*및',              # 제41조 및
-                rf'{re.escape(matched)}\s*또는',            # 제28조 또는
-                rf'{re.escape(matched)}\s*의\s*규정',       # 제35조의 규정
-                rf'{re.escape(matched)}\s*과',              # 제28조과
-            ]
-            
-            is_inline = any(re.search(p, context) for p in inline_patterns)
-            
-            if not is_inline:
-                filtered.append((pos, matched))
-        
-        return filtered
-    
-    def _log_result(self, result: Dict) -> None:
-        """
-        검증 결과 로깅
-        
-        ✅ GPT 핵심: 관찰 모드 (ERROR 레벨이지만 중단 없음)
-        """
+        # 7. 로그 출력
         logger.info("✅ DualQA 검증 완료:")
-        logger.info(f"   📊 PDF 조문: {result['pdf_count']}개")
-        logger.info(f"   📊 VLM 조문: {result['vlm_count']}개")
-        logger.info(f"   📊 일치: {result['matched_count']}개")
-        logger.info(f"   📊 매칭률: {result['match_rate']:.1%}")
+        logger.info(f"   📊 PDF 조문: {len(pdf_articles)}개")
+        logger.info(f"   📊 VLM 조문: {len(vlm_articles)}개")
+        logger.info(f"   📊 일치: {len(matched)}개")
+        logger.info(f"   📊 매칭률: {match_rate:.1%}")
         
-        if result['missing_in_vlm']:
-            logger.error(f"   ❌ VLM 누락: {result['missing_in_vlm']}")
+        if missing_in_vlm:
+            logger.error(f"   ❌ VLM 누락: {sorted(missing_in_vlm)}")
             logger.error(f"      → PDF에는 있지만 VLM이 추출하지 못한 조문입니다!")
         
-        if result['extra_in_vlm']:
-            logger.warning(f"   ⚠️ VLM 추가: {result['extra_in_vlm']}")
+        if extra_in_vlm:
+            logger.warning(f"   ⚠️ VLM 추가: {sorted(extra_in_vlm)}")
             logger.warning(f"      → VLM이 만들어낸 조문입니다 (PDF 원본에 없음)")
         
         if result['qa_flags']:
             logger.error(f"   🚨 QA 플래그: {result['qa_flags']}")
             logger.error(f"      → 원문 불일치! 수동 검수 필요합니다!")
         else:
-            logger.info(f"   ✅ QA 플래그: 없음 (원본과 일치)")
-
-
-# ============================================
-# 유틸리티: PDF 텍스트 추출
-# ============================================
-
-def extract_pdf_text_layer(pdf_path: str) -> str:
-    """
-    pypdfium2로 PDF 텍스트 레이어 추출
+            logger.info("   ✅ 원문 일치 (QA 통과)")
+        
+        return result
     
-    ✅ GPT 핵심: VLM을 거치지 않은 순수 텍스트
-    """
-    try:
-        import pypdfium2 as pdfium
-    except ImportError:
-        logger.error("❌ pypdfium2 없음 - DualQA 불가")
-        return ""
-    
-    pdf_path = Path(pdf_path)
-    if not pdf_path.exists():
-        logger.error(f"❌ PDF 파일 없음: {pdf_path}")
-        return ""
-    
-    try:
-        pdf = pdfium.PdfDocument(str(pdf_path))
-        all_text = []
+    def _extract_article_headers(self, text: str, source: str = "") -> Set[str]:
+        """
+        조문 헤더 추출 (SemanticChunker와 완전히 동일한 로직)
         
-        for page_num in range(len(pdf)):
-            page = pdf[page_num]
-            textpage = page.get_textpage()
-            text = textpage.get_text_range()
-            all_text.append(text)
+        Args:
+            text: 텍스트
+            source: 소스명 (로깅용)
         
-        combined = '\n'.join(all_text)
-        logger.info(f"   📄 PDF 텍스트 추출 완료: {len(combined)}자")
+        Returns:
+            조문 헤더 집합 (예: {'제1조', '제2조', ...})
+        """
+        headers = set()
         
-        return combined
+        # 1. Strict 패턴 (제N조( 형식)
+        for m in self.ARTICLE_STRICT.finditer(text):
+            matched = m.group(1).strip()
+            # 공백 정규화 (제 1 조 → 제1조)
+            matched = re.sub(r'\s+', '', matched)
+            headers.add(matched)
         
-    except Exception as e:
-        logger.error(f"❌ PDF 텍스트 추출 실패: {e}")
-        return ""
+        # 2. Loose 패턴 (제N조 단독)
+        for m in self.ARTICLE_LOOSE.finditer(text):
+            matched = m.group(1).strip()
+            # 공백 정규화
+            matched = re.sub(r'\s+', '', matched)
+            
+            # ✅ 인라인 참조 필터링 (SemanticChunker와 동일)
+            pos = m.start()
+            
+            # 패턴 1: "제N조제M항" (조문 참조)
+            context_start = max(0, pos - 20)
+            context_end = min(len(text), pos + len(matched) + 20)
+            context = text[context_start:context_end]
+            
+            if re.search(r'제\d+조제\d+[항호]', context):
+                continue  # 인라인 참조 제외
+            
+            # 패턴 2: "제N조 및 제M조" (나열)
+            if re.search(r'제\d+조\s*[및과]\s*제\d+조', context):
+                continue  # 나열 제외
+            
+            # 패턴 3: 문장 중간 (앞에 한글이 바로 붙음)
+            if pos > 0 and re.match(r'[가-힣]', text[pos-1]):
+                continue  # 문장 중간 제외
+            
+            headers.add(matched)
+        
+        # 3. 로그 출력
+        headers_list = sorted(headers)
+        logger.info(f"   📖 {source} 조문 헤더: {len(headers_list)}개")
+        if headers_list:
+            logger.info(f"      샘플: {headers_list[:5]}")
+        
+        return headers

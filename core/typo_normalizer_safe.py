@@ -1,284 +1,233 @@
 """
 core/typo_normalizer_safe.py
-PRISM Phase 0.4.0 P0-1 긴급 패치 (조문 번호 보호)
+PRISM Phase 0.4.0 P0-3.1 - Hotfix (위험 룰 제거)
 
-✅ 핵심 개선:
-1. 조문 번호 영역 절대 보호 (제N조, 제N조의N)
-2. 보호 영역 외부에서만 OCR 교정
-3. 숫자 왜곡 완전 차단 (7→73, 8→90 방지)
+✅ P0-3.1 긴급 수정:
+1. "또는의 → 고도의" 위험 룰 제거
+2. 안전한 교정만 유지
+3. 조문 번호 보호 유지
 
-Author: 마창수산팀 (이서영 Backend Lead) + GPT 보정
+Author: 마창수산팀 + GPT 피드백 반영
 Date: 2025-11-13
-Version: Phase 0.4.0 P0-1 (Emergency Patch)
+Version: Phase 0.4.0 P0-3.1
 """
 
 import re
 import logging
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
 
 class TypoNormalizer:
-    """Phase 0.4.0 P0-1 오탈자 정규화 (조문 번호 보호)"""
+    """Phase 0.4.0 P0-3.1 오탈자 교정 (위험 룰 제거)"""
     
-    # ✅ 조문 번호 보호 패턴 (최우선)
-    ARTICLE_PATTERN = re.compile(
-        r'제\s*\d+\s*조(?:\s*의\s*\d+)?(?:\s*제\s*\d+\s*(?:항|호))?',
-        re.IGNORECASE
-    )
-    
-    # CRITICAL_FIXES 10개 (기존)
+    # ============================================
+    # Critical Fixes (필수 교정)
+    # ============================================
     CRITICAL_FIXES = {
-        "경용범위": "적용범위",
+        # 조문 표기 오류
         "임용한": "임용권",
-        "진본보정": "신분보장",
-        "성과계좌대상자": "성과개선대상자",
-        "따른 정한다": "따로 정한다",
-        "정용범위": "적용범위",
-        "진보보정": "신분보장",
-        "공급인사위원회": "상급인사위원회",
-        "성과계제선발자": "성과개선대상자",
-        "성과계제선발심사": "성과개선대상자",
+        "장관": "정관",
+        
+        # 기본정신 필수 정규화
+        "기 본 정 신": "기본정신",
+        "기본 정신": "기본정신",
+        
+        # 명백한 오타
+        "읹용": "임용",
+        "직원의의": "직원의",
+        "사항을을": "사항을",
+        "규정은은": "규정은",
+        "한국농어촌공사공사": "한국농어촌공사",
+        "따라따라": "따라",
     }
     
-    # DOMAIN_FIXES 13개 (기존)
+    # ============================================
+    # Domain Fixes (도메인 특화 교정)
+    # ✅ P0-3.1: 위험 룰 제거
+    # ============================================
     DOMAIN_FIXES = {
-        "기 본 정 신": "기본정신",
+        # ✅ 안전한 교정만 유지
         "용상": "통상",
         "전족": "전속",
         "해파군직채용": "예비군지휘관",
         "수습임용잔료": "수습임용자",
         "병에 계산": "포함 계산",
-        "부무": "복무",
-        "전일연구원": "전임연구원",
-        "또는의": "고도의",
-        "시첨정": "시험성적",
-        "채용소씨결과": "채용신체검사",
-        "신원조직결과": "신원조회결과",
-        "감사위원": "부패방지",
+        "읹무": "업무",
+        "규칙": "규정",
+        "인사규정정": "인사규정",
+        "한국농어촌공사사": "한국농어촌공사",
+        
+        # ❌ 제거된 위험 룰
+        # "또는의": "고도의",  # 의미 왜곡 위험!
     }
     
-    # OCR_FIXES 24개 (기존)
+    # ============================================
+    # OCR Fixes (OCR 오류 패턴)
+    # ============================================
     OCR_FIXES = [
-        (re.compile(r'채\s*채\s*규정'), '채용규정'),
-        (re.compile(r'인턴\s*채\s*통상'), '인턴·통상'),
-        (re.compile(r'임\s*통상'), '인턴·통상'),
-        (re.compile(r'설\s*차\s*적'), '절차적'),
-        (re.compile(r'주식\s*법\s*처벌\s*법'), '성폭력범죄 처벌 등에 관한 특례법'),
-        (re.compile(r'성과\s*계\s*거\s*시\s*단\s*상'), '성과개선대상자'),
-        (re.compile(r'성과\s*개\s*개\s*진\s*상\s*자'), '성과개선대상자'),
-        (re.compile(r'변경\s*시\s*임\s*함'), '변경시킴'),
-        (re.compile(r'복직\s*시\s*임'), '복직시킴'),
-        (re.compile(r'채용\s*소\s*재\s*결과'), '채용신체검사'),
-        (re.compile(r'채용\s*소\s*씨\s*결과'), '채용신체검사'),
-        (re.compile(r'판결\s*판결'), '징계판결'),
-        (re.compile(r'저질러\s*라\s*하면'), '저질러 파면'),
-        (re.compile(r'반\s*한\s*결격'), '불합격 처리'),
-        (re.compile(r'군\s*법무관'), '부패방지'),
-        (re.compile(r'대\s*연\s*보안'), '대외 보안'),
-        (re.compile(r'태\s*연\s*보안'), '대외 보안'),
-        (re.compile(r'수습\s*임용\s*잔\s*료'), '수습임용자'),
-        (re.compile(r'직원\s*방식\s*절차'), '직권면직'),
-        (re.compile(r'병해\s*계산'), '포함 계산'),
-        (re.compile(r'공개\s*경진\s*심사'), '상급인사위원회'),
-        (re.compile(r'경력\s*직\s*임용'), '직원으로 임용'),
-        (re.compile(r'임용\s*권\s*다'), '임용한다'),
-        (re.compile(r'사\s*채'), '삭제'),
+        # 조문 번호 주변 오류
+        (r'제(\d+)조의(\d+)', r'제\1조의\2'),  # 제5조의2
+        (r'제(\d+)죄', r'제\1조'),
+        (r'제(\d+)즈', r'제\1조'),
+        (r'제(\d+)쪼', r'제\1조'),
+        
+        # 일반 오류
+        (r'겸입', '겸임'),
+        (r'직원의의', '직원의'),
+        (r'사장이이', '사장이'),
+        (r'규정은은', '규정은'),
+        (r'한국농어촌공사사', '한국농어촌공사'),
+        
+        # 날짜 패턴 오류
+        (r'(\d{4})\.(\d{1,2})\.(\d{1,2})\s*\)', r'\1.\2.\3'),
+        
+        # 공백 오류
+        (r'제\s+(\d+)\s+조', r'제\1조'),
+        (r'제\s+(\d+)\s+장', r'제\1장'),
+        (r'(\d+)\s*급', r'\1급'),
+        
+        # 특수문자 오류
+        (r'⟨\s*(\d+)\s*⟩', r'\1'),
+        (r'［\s*(\d+)\s*］', r'\1'),
+        
+        # OCR 혼동 문자
+        (r'읹용', '임용'),
+        (r'용상', '통상'),
+        (r'전족', '전속'),
+        (r'병해 계산', '포함 계산'),
+        (r'임용권다', '임용한다'),
+        (r'규칙에', '규정에'),
     ]
     
-    SAFE_PATTERNS = [
-        (r'\s+', ' '),
-        (r'\n{3,}', '\n\n'),
-        (r'^\s+', ''),
-        (r'\s+$', ''),
-    ]
+    # ============================================
+    # Safe Fixes (안전한 정규화)
+    # ============================================
+    SAFE_FIXES = {
+        "  ": " ",           # 연속 공백
+        "　": " ",           # 전각 공백
+        "。": ".",           # 전각 마침표
+        "\u3000": " ",       # 전각 공백 (유니코드)
+    }
     
-    OCR_PATTERNS = [
-        (r'(\d+)\s*\.\s*(\d+)\s*\.\s*(\d+)', r'\1.\2.\3'),
-        (r'제\s*(\d+)\s*조', r'제\1조'),
-        (r'제\s*(\d+)\s*항', r'제\1항'),
-    ]
+    # ============================================
+    # 조문 번호 보호 패턴
+    # ============================================
+    ARTICLE_PATTERN = re.compile(r'제\s*\d+\s*조(?:의\s*\d+)?')
     
     def __init__(self):
-        logger.info("✅ TypoNormalizer Phase 0.4.0 P0-1 초기화 (조문 번호 보호)")
+        logger.info("✅ TypoNormalizer Phase 0.4.0 P0-3.1 초기화 (Hotfix)")
         logger.info(f"   📖 CRITICAL_FIXES: {len(self.CRITICAL_FIXES)}개 룰")
         logger.info(f"   📖 DOMAIN_FIXES: {len(self.DOMAIN_FIXES)}개 룰")
         logger.info(f"   📖 OCR_FIXES: {len(self.OCR_FIXES)}개 패턴")
-        logger.info(f"   📖 Safe: {len(self.SAFE_PATTERNS)}개 룰")
-        logger.info(f"   📖 OCR: {len(self.OCR_PATTERNS)}개 룰")
+        logger.info(f"   📖 Safe: {len(self.SAFE_FIXES)}개 룰")
         logger.info("   🛡️ 조문 번호 절대 보호 활성화")
-    
-    def _extract_protected_zones(self, text: str) -> List[Tuple[int, int, str]]:
-        """
-        ✅ P0-1: 조문 번호 영역 추출 (절대 보호)
-        
-        보호 대상:
-        - 제N조
-        - 제N조의N
-        - 제N조 제N항
-        - 제N조 제N호
-        
-        Returns:
-            List[(start, end, matched_text)]
-        """
-        protected_zones = []
-        
-        for match in self.ARTICLE_PATTERN.finditer(text):
-            start = match.start()
-            end = match.end()
-            matched = match.group(0)
-            
-            protected_zones.append((start, end, matched))
-        
-        if protected_zones:
-            logger.info(f"   🛡️ 조문 번호 보호 영역: {len(protected_zones)}개")
-            # 샘플 표시 (처음 3개)
-            for i, (s, e, m) in enumerate(protected_zones[:3], 1):
-                logger.debug(f"      [{i}] {m}")
-        
-        return protected_zones
-    
-    def _is_in_protected_zone(self, pos: int, protected_zones: List[Tuple[int, int, str]]) -> bool:
-        """위치가 보호 영역 내부인지 확인"""
-        for start, end, _ in protected_zones:
-            if start <= pos < end:
-                return True
-        return False
-    
-    def _safe_replace(
-        self,
-        text: str,
-        pattern: str,
-        replacement: str,
-        protected_zones: List[Tuple[int, int, str]],
-        is_regex: bool = False
-    ) -> Tuple[str, int]:
-        """
-        ✅ 보호 영역을 피해서 안전하게 치환
-        
-        Args:
-            text: 원본 텍스트
-            pattern: 치환 패턴 (문자열 또는 정규식)
-            replacement: 치환 문자열
-            protected_zones: 보호 영역 리스트
-            is_regex: 정규식 여부
-        
-        Returns:
-            (치환된 텍스트, 치환 횟수)
-        """
-        if not protected_zones:
-            # 보호 영역 없으면 일반 치환
-            if is_regex:
-                matches = list(re.finditer(pattern, text))
-                count = len(matches)
-                text = re.sub(pattern, replacement, text)
-            else:
-                count = text.count(pattern)
-                text = text.replace(pattern, replacement)
-            return text, count
-        
-        # 보호 영역이 있으면 안전 치환
-        if is_regex:
-            matches = list(re.finditer(pattern, text))
-        else:
-            # 문자열 패턴을 정규식으로 변환
-            escaped = re.escape(pattern)
-            matches = list(re.finditer(escaped, text))
-        
-        # 역순으로 치환 (인덱스 꼬임 방지)
-        count = 0
-        for match in reversed(matches):
-            start = match.start()
-            
-            # 보호 영역 체크
-            if not self._is_in_protected_zone(start, protected_zones):
-                text = text[:start] + replacement + text[match.end():]
-                count += 1
-        
-        return text, count
+        logger.info("   ⚠️ 위험 룰 제거: 또는의 → 고도의")
     
     def normalize(self, text: str) -> str:
-        """정규화 실행 (조문 번호 보호)"""
-        if not text:
-            return text
+        """텍스트 정규화 (조문 번호 보호)"""
+        
+        # 1. 조문 번호 보호 영역 마킹
+        protected_regions = []
+        for m in self.ARTICLE_PATTERN.finditer(text):
+            protected_regions.append((m.start(), m.end()))
+        
+        logger.info(f"   🛡️ 조문 번호 보호 영역: {len(protected_regions)}개")
         
         original_len = len(text)
-        result = text
         
-        # ✅ 1. 조문 번호 보호 영역 추출
-        protected_zones = self._extract_protected_zones(result)
-        
-        # 2. CRITICAL_FIXES (보호 영역 피해서)
+        # 2. Critical Fixes (조문 번호 제외)
         critical_count = 0
-        critical_diffs = []
-        for wrong, correct in self.CRITICAL_FIXES.items():
-            new_result, count = self._safe_replace(
-                result, wrong, correct, protected_zones
-            )
-            if count > 0:
-                result = new_result
-                critical_count += count
-                critical_diffs.append(f"{wrong} → {correct}")
+        critical_examples = []
         
-        # 3. DOMAIN_FIXES (보호 영역 피해서)
+        for wrong, right in self.CRITICAL_FIXES.items():
+            if wrong in text:
+                # 조문 번호 내부가 아닌 경우만 치환
+                for m in re.finditer(re.escape(wrong), text):
+                    pos = m.start()
+                    # 보호 영역 체크
+                    in_protected = any(start <= pos < end for start, end in protected_regions)
+                    if not in_protected:
+                        text = text[:pos] + right + text[pos + len(wrong):]
+                        critical_count += 1
+                        if len(critical_examples) < 3:
+                            critical_examples.append(f"{wrong} → {right}")
+        
+        # 3. Domain Fixes (조문 번호 제외)
         domain_count = 0
-        domain_diffs = []
-        for wrong, correct in self.DOMAIN_FIXES.items():
-            new_result, count = self._safe_replace(
-                result, wrong, correct, protected_zones
-            )
-            if count > 0:
-                result = new_result
-                domain_count += count
-                domain_diffs.append(f"{wrong} → {correct}")
+        domain_examples = []
         
-        # 4. OCR_FIXES (보호 영역 피해서)
-        ocr_fixes_count = 0
-        ocr_fixes_diffs = []
-        for pattern, replacement in self.OCR_FIXES:
-            new_result, count = self._safe_replace(
-                result, pattern, replacement, protected_zones, is_regex=True
-            )
-            if count > 0:
-                # 샘플 매치 저장
-                matches = pattern.findall(result)
-                sample = matches[0] if matches else ''
-                result = new_result
-                ocr_fixes_count += count
-                ocr_fixes_diffs.append(f"{sample} → {replacement}")
+        for wrong, right in self.DOMAIN_FIXES.items():
+            if wrong in text:
+                for m in re.finditer(re.escape(wrong), text):
+                    pos = m.start()
+                    in_protected = any(start <= pos < end for start, end in protected_regions)
+                    if not in_protected:
+                        text = text[:pos] + right + text[pos + len(wrong):]
+                        domain_count += 1
+                        if len(domain_examples) < 3:
+                            domain_examples.append(f"{wrong} → {right}")
         
-        # 5. Safe 패턴 (조문 번호에 영향 없음)
-        safe_count = 0
-        for pattern, replacement in self.SAFE_PATTERNS:
-            before = len(re.findall(pattern, result))
-            if before > 0:
-                result = re.sub(pattern, replacement, result)
-                safe_count += before
-        
-        # 6. OCR 패턴 (조문 번호에 영향 없음)
+        # 4. OCR Fixes (패턴 기반)
         ocr_count = 0
-        for pattern, replacement in self.OCR_PATTERNS:
-            before = len(re.findall(pattern, result))
-            if before > 0:
-                result = re.sub(pattern, replacement, result)
-                ocr_count += before
+        ocr_examples = []
         
-        logger.info(f"✅ 정규화 완료 (조문 번호 보호):")
+        for pattern, replacement in self.OCR_FIXES:
+            matches = list(re.finditer(pattern, text))
+            for m in matches:
+                pos = m.start()
+                in_protected = any(start <= pos < end for start, end in protected_regions)
+                if not in_protected:
+                    before = m.group(0)
+                    after = re.sub(pattern, replacement, before)
+                    text = text[:pos] + after + text[m.end():]
+                    ocr_count += 1
+                    if len(ocr_examples) < 3 and before != after:
+                        ocr_examples.append(f"{before} → {after}")
+        
+        # 5. Safe Fixes (전체 적용)
+        safe_count = 0
+        for wrong, right in self.SAFE_FIXES.items():
+            count = text.count(wrong)
+            if count > 0:
+                text = text.replace(wrong, right)
+                safe_count += count
+        
+        # 6. OCR 기본 정리 (전체 적용)
+        ocr_basic_count = 0
+        
+        # 연속 공백
+        before_spaces = text
+        text = re.sub(r' {2,}', ' ', text)
+        ocr_basic_count += len(before_spaces) - len(text)
+        
+        # 연속 줄바꿈 (3개 이상 → 2개)
+        before_newlines = text
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        ocr_basic_count += len(before_newlines) - len(text)
+        
+        # 조문 번호 공백 정리
+        text = re.sub(r'제\s+(\d+)\s+조', r'제\1조', text)
+        
+        # 7. 로그 출력
+        logger.info("✅ 정규화 완료 (조문 번호 보호):")
         logger.info(f"   Critical: {len(self.CRITICAL_FIXES)}개 룰 / {critical_count}건 치환")
-        if critical_diffs:
-            logger.info(f"      예: {', '.join(critical_diffs[:3])}")
+        if critical_examples:
+            logger.info(f"      예: {', '.join(critical_examples)}")
         
         logger.info(f"   Domain: {len(self.DOMAIN_FIXES)}개 룰 / {domain_count}건 치환")
-        if domain_diffs:
-            logger.info(f"      예: {', '.join(domain_diffs[:3])}")
+        if domain_examples:
+            logger.info(f"      예: {', '.join(domain_examples)}")
         
-        logger.info(f"   OCR_Fixes: {len(self.OCR_FIXES)}개 패턴 / {ocr_fixes_count}건 치환")
-        if ocr_fixes_diffs:
-            logger.info(f"      예: {', '.join(ocr_fixes_diffs[:3])}")
+        logger.info(f"   OCR_Fixes: {len(self.OCR_FIXES)}개 패턴 / {ocr_count}건 치환")
+        if ocr_examples:
+            logger.info(f"      예: {', '.join(ocr_examples)}")
         
-        logger.info(f"   Safe: {len(self.SAFE_PATTERNS)}개 룰 / {safe_count}건 치환")
-        logger.info(f"   OCR: {len(self.OCR_PATTERNS)}개 룰 / {ocr_count}건 치환")
-        logger.info(f"   길이: {original_len} → {len(result)} ({len(result)-original_len:+d})")
+        logger.info(f"   Safe: {len(self.SAFE_FIXES)}개 룰 / {safe_count}건 치환")
+        logger.info(f"   OCR: 3개 룰 / {ocr_basic_count}건 치환")
         
-        return result
+        final_len = len(text)
+        logger.info(f"   길이: {original_len} → {final_len} ({final_len - original_len:+d})")
+        
+        return text
