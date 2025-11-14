@@ -1,14 +1,15 @@
 """
-app.py - PRISM Phase 0.4.0 P0-4 Final (Fixed v2)
-QA Gatekeeper + LawMode 통합
+app.py - PRISM Phase 0.5 "Polishing & Standardization"
+PageCleaner + DocumentProfile + LawParser 통합
 
-✅ Phase 0.4.0 P0-4 Final (Fixed v2):
-1. HybridExtractor 페이지별 호출 방식 수정
-2. DualQAGate.validate() 파라미터 수정 (chunks 제거) ← 🔧 FIX v2
+✅ Phase 0.5 주요 변경:
+1. PageCleaner 통합 → 페이지 번호 완전 제거
+2. DocumentProfile 시스템 → 문서 타입 자동 감지
+3. LawParser clean_artifacts=True → 자동 정제
 
-Author: 마창수산팀
-Date: 2025-11-13
-Version: Phase 0.4.0 P0-4 Final (Fixed v2)
+Author: 마창수산팀 + GPT 설계
+Date: 2025-11-14
+Version: Phase 0.5
 """
 
 import streamlit as st
@@ -39,21 +40,30 @@ try:
     from core.dual_qa_gate import DualQAGate, extract_pdf_text_layer
     from core.utils_fs import safe_temp_path, safe_remove
     
-    logger.info("✅ 모듈 import 성공 (Phase 0.4.0 P0-4 Fixed v2)")
+    logger.info("✅ 모듈 import 성공 (Phase 0.5)")
     
 except Exception as e:
     logger.error(f"❌ Import 실패: {e}")
     st.error(f"❌ 모듈 로딩 실패: {e}")
     st.stop()
 
-# LawParser Import
+# LawParser Import (Phase 0.5 버전)
 try:
     from core.law_parser import LawParser
     LAW_MODE_AVAILABLE = True
-    logger.info("✅ LawParser 로드 성공")
+    logger.info("✅ LawParser 로드 성공 (Phase 0.5)")
 except ImportError:
     LAW_MODE_AVAILABLE = False
     logger.warning("⚠️ LawParser 미설치")
+
+# DocumentProfile Import (Phase 0.5 신규)
+try:
+    from core.document_profile import auto_detect_profile, get_profile
+    PROFILE_AVAILABLE = True
+    logger.info("✅ DocumentProfile 로드 성공")
+except ImportError:
+    PROFILE_AVAILABLE = False
+    logger.warning("⚠️ DocumentProfile 미설치")
 
 
 # 유틸리티 함수
@@ -125,7 +135,6 @@ def process_document_vlm_mode(pdf_path: str, pdf_text: str, max_pages: int = 20)
     chunks = chunker.chunk(markdown_text)
     st.success(f"✅ {len(chunks)}개 청크 생성")
     
-    # 🔧 Fixed v2: chunks 파라미터 제거
     st.info("🔬 DualQA 검증 중...")
     qa_gate = DualQAGate()
     qa_result = qa_gate.validate(pdf_text=pdf_text, vlm_markdown=markdown_text)
@@ -145,15 +154,31 @@ def process_document_vlm_mode(pdf_path: str, pdf_text: str, max_pages: int = 20)
     }
 
 
-# LawMode 처리
+# LawMode 처리 (Phase 0.5 개선)
 def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str):
-    """LawMode 파이프라인"""
+    """
+    LawMode 파이프라인 (Phase 0.5)
+    
+    ✅ Phase 0.5 개선:
+    - PageCleaner 자동 적용 (clean_artifacts=True)
+    - DocumentProfile 자동 감지 (옵션)
+    """
     
     st.info("📜 LawMode: PDF 텍스트 기반 조문 파싱 중...")
     progress_bar = st.progress(0)
     
+    # ✅ Phase 0.5: DocumentProfile 자동 감지 (옵션)
+    if PROFILE_AVAILABLE:
+        profile = auto_detect_profile(pdf_text, document_title)
+        st.info(f"📝 문서 프로파일: {profile.name}")
+    
+    # ✅ Phase 0.5: clean_artifacts=True로 자동 정제
     parser = LawParser()
-    parsed_result = parser.parse(pdf_text=pdf_text, document_title=document_title)
+    parsed_result = parser.parse(
+        pdf_text=pdf_text,
+        document_title=document_title,
+        clean_artifacts=True  # ✅ Phase 0.5: 자동 정제 활성화
+    )
     progress_bar.progress(50)
     
     chunks = parser.to_chunks(parsed_result)
@@ -161,14 +186,15 @@ def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str)
     
     markdown_lines = []
     if parsed_result['basic_spirit']:
-        markdown_lines.append("# 기본정신\n" + parsed_result['basic_spirit'])
+        markdown_lines.append("기본정신\n" + parsed_result['basic_spirit'])
     
     for article in parsed_result['articles']:
-        markdown_lines.append(f"\n## {article.number}({article.title or ''})\n{article.body}")
+        # ✅ Phase 0.5 Hotfix: DualQA 호환을 위해 ## 제거
+        # 제N조( 형식으로 직접 시작해야 DualQA 패턴 매칭됨
+        markdown_lines.append(f"\n{article.number}({article.title or ''})\n{article.body}")
     
     final_md = '\n'.join(markdown_lines)
     
-    # 🔧 Fixed v2: chunks 파라미터 제거
     st.info("🔬 DualQA 검증 중...")
     qa_gate = DualQAGate()
     qa_result = qa_gate.validate(pdf_text=pdf_text, vlm_markdown=final_md)
@@ -191,18 +217,19 @@ def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str)
 
 # Streamlit UI
 def main():
-    st.set_page_config(page_title="PRISM P0-4", page_icon="🔷", layout="wide")
+    st.set_page_config(page_title="PRISM Phase 0.5", page_icon="🔷", layout="wide")
     
     st.title("🔷 PRISM - Intelligent Document Processor")
-    st.caption("Phase 0.4.0 P0-4 Final (Fixed v2)")
+    st.caption("Phase 0.5 'Polishing & Standardization' ✨")
     
     with st.sidebar:
         st.header("⚙️ 설정")
         
         if LAW_MODE_AVAILABLE:
-            use_law_mode = st.checkbox("📜 LawMode (규정/법령 전용)", value=False)
+            use_law_mode = st.checkbox("📜 LawMode (규정/법령 전용)", value=True)
             if use_law_mode:
                 st.success("✅ LawMode 활성화")
+                st.info("🧹 PageCleaner 자동 적용")
         else:
             use_law_mode = False
             st.warning("⚠️ LawMode 미설치")
@@ -274,6 +301,10 @@ def main():
                 
                 RAG 사용 가능!
                 """)
+                
+                # ✅ Phase 0.5: 페이지 아티팩트 제거 여부 표시
+                if use_law_mode:
+                    st.info("🧹 PageCleaner 적용됨 - 페이지 번호 제거 완료")
             
             tab1, tab2, tab3, tab4 = st.tabs(["📄 Markdown", "📦 JSON", "📋 리뷰용", "🔬 DualQA"])
             

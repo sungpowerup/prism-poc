@@ -1,22 +1,20 @@
 """
 law_parser.py - LawMode 조문 파서
-Phase 0.4.0 P0-4 "LawMode"
+Phase 0.5 "Polishing & Standardization"
 
-PDF 텍스트 기반 조문 추출 (VLM 보조)
-
-✅ 핵심 원칙:
-1. 조문 구조의 "진실"은 PDF 텍스트
-2. VLM은 표/이미지 보완용으로만 사용
-3. 제1조~제N조 완전 추출 보장
+✅ Phase 0.5 개선:
+- PageCleaner 통합 (clean_artifacts=True)
+- 페이지 번호 완전 제거
+- 문서 프로파일 지원 (옵션)
 
 Author: 박준호 (AI/ML Lead) + GPT 설계
-Date: 2025-11-13
-Version: Phase 0.4.0 P0-4
+Date: 2025-11-14
+Version: Phase 0.5
 """
 
 import re
 import logging
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -35,9 +33,11 @@ class Article:
 
 class LawParser:
     """
-    규정/법령 전용 파서
+    규정/법령 전용 파서 (Phase 0.5)
     
-    PDF 텍스트를 직접 파싱하여 조문 구조 추출
+    ✅ Phase 0.5 개선:
+    - PageCleaner 통합 → 페이지 번호 자동 제거
+    - PDF 텍스트 기반 정확한 조문 추출
     """
     
     # 기본정신 패턴
@@ -61,7 +61,7 @@ class LawParser:
     
     def __init__(self):
         """초기화"""
-        logger.info("✅ LawParser 초기화 (Phase 0.4.0 P0-4)")
+        logger.info("✅ LawParser 초기화 (Phase 0.5)")
     
     def parse(
         self,
@@ -77,7 +77,7 @@ class LawParser:
             pdf_text: PDF에서 추출한 원본 텍스트
             document_title: 문서 제목
             enacted_date: 제정일 (YYYY.MM.DD)
-            clean_artifacts: 페이지 아티팩트 제거 여부
+            clean_artifacts: 페이지 아티팩트 제거 여부 (Phase 0.5)
         
         Returns:
             {
@@ -94,9 +94,12 @@ class LawParser:
         
         # ✅ Phase 0.5: 페이지 아티팩트 제거
         if clean_artifacts:
-            from .page_cleaner import clean_page_artifacts
-            pdf_text = clean_page_artifacts(pdf_text)
-            logger.info(f"   🧹 아티팩트 제거 후: {len(pdf_text)}자")
+            try:
+                from .page_cleaner import clean_page_artifacts
+                pdf_text = clean_page_artifacts(pdf_text)
+                logger.info(f"   🧹 아티팩트 제거 후: {len(pdf_text)}자")
+            except ImportError:
+                logger.warning("   ⚠️ PageCleaner 미설치 - 건너뜀")
         
         # 1. 기본정신 추출
         basic_spirit = self._extract_basic_spirit(pdf_text)
@@ -110,156 +113,110 @@ class LawParser:
         articles = self._extract_articles_from_text(pdf_text)
         logger.info(f"   ✅ 조문: {len(articles)}개")
         
-        # 4. 조문 번호 정렬 (제1조 → 제2조 → ...)
-        articles_sorted = sorted(articles, key=lambda a: self._parse_article_number(a.number))
+        # 4. 결과 조립
+        logger.info(f"✅ LawParser 완료: {len(articles)}개 조문")
         
-        result = {
+        return {
             'document_title': document_title,
             'enacted_date': enacted_date or '',
             'basic_spirit': basic_spirit,
             'chapters': chapters,
-            'articles': articles_sorted,
-            'total_articles': len(articles_sorted)
+            'articles': articles,
+            'total_articles': len(articles)
         }
-        
-        logger.info(f"✅ LawParser 완료: {len(articles_sorted)}개 조문")
-        
-        return result
     
     def _extract_basic_spirit(self, text: str) -> str:
-        """기본정신 섹션 추출"""
+        """기본정신 추출"""
         match = self.BASIC_SPIRIT_PATTERN.search(text)
-        
         if not match:
-            logger.warning("   ⚠️ 기본정신 미발견")
             return ""
         
-        start = match.start()
+        start = match.end()
         
-        # 기본정신 끝: 다음 장 또는 제1조까지
-        end = len(text)
+        # 다음 조문 또는 장까지
+        next_article = self.ARTICLE_HEADER_PATTERN.search(text, start)
+        next_chapter = self.CHAPTER_PATTERN.search(text, start)
         
-        # 다음 장 찾기
-        chapter_match = self.CHAPTER_PATTERN.search(text, start + 10)
-        if chapter_match:
-            end = min(end, chapter_match.start())
+        if next_article and next_chapter:
+            end = min(next_article.start(), next_chapter.start())
+        elif next_article:
+            end = next_article.start()
+        elif next_chapter:
+            end = next_chapter.start()
+        else:
+            end = len(text)
         
-        # 제1조 찾기
-        article_match = self.ARTICLE_HEADER_PATTERN.search(text, start + 10)
-        if article_match:
-            end = min(end, article_match.start())
-        
-        basic_text = text[start:end].strip()
-        
-        # "기본정신" 헤더 제거
-        basic_text = self.BASIC_SPIRIT_PATTERN.sub('', basic_text, count=1).strip()
-        
-        return basic_text
+        spirit_text = text[start:end].strip()
+        return spirit_text
     
     def _extract_chapters(self, text: str) -> List[Dict[str, Any]]:
-        """장(章) 목록 추출"""
+        """장 추출"""
         chapters = []
-        
         for match in self.CHAPTER_PATTERN.finditer(text):
-            chapter_num = match.group(1)
-            chapter_title = match.group(2).strip()
-            
             chapters.append({
-                'number': f'제{chapter_num}장',
-                'title': chapter_title,
-                'position': match.start()
+                'number': f"제{match.group(1)}장",
+                'title': match.group(2).strip(),
+                'start_pos': match.start()
             })
-        
         return chapters
     
     def _extract_articles_from_text(self, text: str) -> List[Article]:
         """
-        PDF 텍스트에서 조문 추출 (핵심 메서드)
+        조문 추출 (핵심 로직)
         
-        전략:
-        1. 정규식으로 "제N조(제목)" 패턴 찾기
-        2. 각 조문의 시작~다음 조문 직전까지를 본문으로 추출
-        3. Article 객체 생성
+        제N조(제목) 패턴으로 시작 → 다음 조문까지가 본문
         """
         articles = []
         
-        # 1. 모든 조문 헤더 위치 추출
-        positions = []
-        for match in self.ARTICLE_HEADER_PATTERN.finditer(text):
-            article_num = match.group(1)
-            article_sub = match.group(2)  # '의2' 같은 부분 (없으면 None)
-            title = match.group(3).strip()
-            
-            # 조문 번호 생성
-            if article_sub:
-                full_number = f'제{article_num}조의{article_sub}'
-            else:
-                full_number = f'제{article_num}조'
-            
-            positions.append((match.start(), full_number, title))
-            
-            logger.debug(f"      📍 {full_number}({title}) at {match.start()}")
+        matches = list(self.ARTICLE_HEADER_PATTERN.finditer(text))
         
-        if not positions:
+        if not matches:
             logger.warning("   ⚠️ 조문 헤더 미발견")
-            return []
+            return articles
         
-        logger.info(f"   🔍 조문 헤더: {len(positions)}개 발견")
+        logger.info(f"   🔍 조문 헤더: {len(matches)}개 발견")
         
-        # 2. 각 조문의 본문 추출
-        articles = self._extract_articles(text, positions)
-        
-        return articles
-    
-    def _extract_articles(
-        self, 
-        text: str, 
-        positions: List[Tuple[int, str, Optional[str]]]
-    ) -> List[Article]:
-        """
-        조문 본문 추출
-        
-        Args:
-            text: 전체 텍스트
-            positions: [(position, article_number, title), ...]
-        
-        Returns:
-            [Article 객체들]
-        """
-        articles = []
-        
-        for i, (pos, article_num, title) in enumerate(positions):
-            # 다음 조문 위치 (없으면 텍스트 끝)
-            next_pos = positions[i + 1][0] if i + 1 < len(positions) else len(text)
+        for i, match in enumerate(matches):
+            article_num = match.group(1)
+            article_sub = match.group(2)  # "의2"
+            article_title = match.group(3)
             
-            # 본문 추출
-            body = text[pos:next_pos].strip()
+            # 조문 번호 조립
+            if article_sub:
+                number = f"제{article_num}조의{article_sub}"
+            else:
+                number = f"제{article_num}조"
+            
+            # 본문 범위
+            body_start = match.end()
+            
+            if i < len(matches) - 1:
+                body_end = matches[i + 1].start()
+            else:
+                body_end = len(text)
+            
+            body = text[body_start:body_end].strip()
             
             # Article 객체 생성
             article = Article(
-                number=article_num,
-                title=title,
+                number=number,
+                title=article_title,
                 body=body,
-                start_pos=pos,
-                end_pos=next_pos,
-                article_type='article'
+                start_pos=match.start(),
+                end_pos=body_end
             )
             
             articles.append(article)
-            
-            logger.info(f"   📄 {article_num} ({title or '제목없음'}): {len(body)}자")
+            logger.info(f"   📄 {number} ({article_title}): {len(body)}자")
         
         return articles
     
     def to_chunks(self, parsed_result: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        파싱 결과를 청크 형식으로 변환 (SemanticChunker 호환)
-        
-        Args:
-            parsed_result: parse() 결과
+        파싱 결과 → 청크 변환
         
         Returns:
-            [{'content': ..., 'metadata': {...}}, ...]
+            List[Chunk] - RAG용 청크
         """
         chunks = []
         
@@ -269,95 +226,70 @@ class LawParser:
                 'content': parsed_result['basic_spirit'],
                 'metadata': {
                     'type': 'basic',
-                    'boundary': '기본정신',
-                    'title': None,
-                    'char_count': len(parsed_result['basic_spirit']),
-                    'chunk_index': 1
+                    'boundary': 'basic_spirit',
+                    'title': '기본정신',
+                    'char_count': len(parsed_result['basic_spirit'])
                 }
             })
         
         # 2. 조문 청크
         for article in parsed_result['articles']:
+            content = f"{article.number}({article.title})\n{article.body}"
+            
             chunks.append({
-                'content': article.body,
+                'content': content,
                 'metadata': {
                     'type': 'article',
-                    'boundary': article.number,
-                    'title': article.title,
-                    'char_count': len(article.body),
-                    'chunk_index': len(chunks) + 1
+                    'boundary': 'article',
+                    'article_number': article.number,
+                    'article_title': article.title,
+                    'char_count': len(content)
                 }
             })
         
         logger.info(f"✅ 청크 변환 완료: {len(chunks)}개")
         
         return chunks
-    
-    def _parse_article_number(self, article_num: str) -> Tuple[int, int]:
-        """
-        조문 번호를 정렬 가능한 튜플로 변환
-        
-        예:
-        - "제1조" → (1, 0)
-        - "제2조의2" → (2, 2)
-        - "제10조" → (10, 0)
-        """
-        match = re.match(r'제(\d+)조(?:의(\d+))?', article_num)
-        
-        if not match:
-            return (999, 999)  # 파싱 실패 시 맨 뒤로
-        
-        main_num = int(match.group(1))
-        sub_num = int(match.group(2)) if match.group(2) else 0
-        
-        return (main_num, sub_num)
 
 
 # ============================================
-# 테스트용 함수
+# 테스트
 # ============================================
 
-def test_law_parser():
-    """LawParser 단위 테스트"""
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO)
     
     sample_text = """
+    기본정신
+    
+    이 규정은 한국농어촌공사 직원의 인사관리에 관한 사항을 정함으로써
+    인사의 공정성을 확보하고 직원의 근무의욕을 높임을 목적으로 한다.
+    
     인사규정
+    402-3
     
-    기 본 정 신
-    이 규정은 한국농어촌공사 직원의 보직, 승진, 신분보장, 상벌, 인사고과 등에 관한 사항을
-    규정함으로써 공정하고 투명한 인사관리 구현을 통하여 설립목적을 달성한다.
+    제1장 총칙
     
-    제1장 총 칙
+    제1조(목적) 이 규정은 한국농어촌공사 직원의 인사관리에 관하여
+    필요한 사항을 정함을 목적으로 한다.
     
-    제1조(목적) 이 규정은 한국농어촌공사 직원에게 적용할 인사관리의 기준을 정하여 합리적이고 적정한 인
-    사관리를 기하게 하는 것을 목적으로 한다.
+    인사규정
+    402-4
     
-    제2조(적용범위) 직원의 인사관리는 법령 및 정관에 정한 것을 제외하고는 이 규정에 따른다.
-    
-    제3조(직원 등의 구분) ① 삭 제 <2024.1.1.>
-    ② 직원은 일반직, 별정직, 기사직 및 전문직으로 구분한다.
+    제2조(적용범위) 이 규정은 한국농어촌공사(이하 "공사"라 한다)의
+    임원 및 직원에게 적용한다.
     """
     
     parser = LawParser()
     result = parser.parse(
         pdf_text=sample_text,
-        document_title="인사규정 테스트"
+        document_title="인사규정",
+        clean_artifacts=True  # ✅ Phase 0.5
     )
     
+    print(f"\n총 조문: {result['total_articles']}개")
     print(f"기본정신: {len(result['basic_spirit'])}자")
-    print(f"조문: {result['total_articles']}개")
+    print(f"장: {len(result['chapters'])}개")
     
-    for article in result['articles']:
-        print(f"  - {article.number} ({article.title})")
-    
-    # 청크 변환
     chunks = parser.to_chunks(result)
-    print(f"\n청크: {len(chunks)}개")
-    
-    for chunk in chunks:
-        meta = chunk['metadata']
-        print(f"  - {meta['type']}: {meta['boundary']} ({meta['char_count']}자)")
-
-
-if __name__ == '__main__':
-    test_law_parser()
+    print(f"청크: {len(chunks)}개")

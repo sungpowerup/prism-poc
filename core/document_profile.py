@@ -5,7 +5,7 @@ Phase 0.5 "Standardization"
 GPT 설계: 문서 타입별 처리 전략 + 패턴 + QA 기준
 
 Author: 박준호 (AI/ML Lead) + GPT 설계
-Date: 2025-11-13
+Date: 2025-11-14
 Version: Phase 0.5
 """
 
@@ -230,7 +230,10 @@ def auto_detect_profile(text: str, filename: str = "") -> DocumentProfile:
     return VLM_GENERAL_PROFILE
 
 
+# ============================================
 # 테스트
+# ============================================
+
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
     
