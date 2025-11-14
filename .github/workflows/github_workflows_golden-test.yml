@@ -1,0 +1,104 @@
+name: PRISM Phase 0.8 Golden File Regression Test
+
+# GPT 권장: "Golden File + 회귀 테스트를 CI에 붙여서 회귀 깨지면 빌드 실패"
+
+on:
+  push:
+    branches: [ main, develop, phase-0.8 ]
+  pull_request:
+    branches: [ main, develop ]
+  
+  # 수동 실행 가능
+  workflow_dispatch:
+
+jobs:
+  golden-regression-test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    # 1. 체크아웃
+    - name: 📥 Checkout code
+      uses: actions/checkout@v3
+    
+    # 2. Python 설정
+    - name: 🐍 Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    # 3. 의존성 설치
+    - name: 📦 Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    # 4. Tesseract OCR 설치 (PDF 처리용)
+    - name: 📝 Install Tesseract OCR
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y tesseract-ocr tesseract-ocr-kor
+    
+    # 5. Golden File 회귀 테스트 실행
+    - name: 🔬 Run Golden File Regression Tests
+      run: |
+        python tests/example_golden_usage.py regression
+    
+    # 6. 테스트 리포트 업로드
+    - name: 📊 Upload test reports
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: golden-diff-reports
+        path: tests/golden/**/*_diff_report.json
+    
+    # 7. 실패 시 슬랙 알림 (옵션)
+    - name: 📢 Slack notification on failure
+      if: failure()
+      uses: slackapi/slack-github-action@v1
+      with:
+        webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+        payload: |
+          {
+            "text": "🚨 PRISM Golden File Regression Test FAILED",
+            "blocks": [
+              {
+                "type": "section",
+                "text": {
+                  "type": "mrkdwn",
+                  "text": "*Golden File Regression Test Failed*\n\nBranch: `${{ github.ref }}`\nCommit: `${{ github.sha }}`\nAuthor: ${{ github.actor }}\n\n<${{ github.event.head_commit.url }}|View Commit>"
+                }
+              }
+            ]
+          }
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # Job 2: 성능 벤치마크 (옵션)
+  performance-benchmark:
+    runs-on: ubuntu-latest
+    needs: golden-regression-test
+    
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v3
+    
+    - name: 🐍 Set up Python 3.11
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: 📦 Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: ⚡ Run performance benchmark
+      run: |
+        python tests/benchmark_golden.py
+    
+    - name: 📊 Upload benchmark results
+      uses: actions/upload-artifact@v3
+      with:
+        name: performance-benchmark
+        path: tests/benchmark_results.json

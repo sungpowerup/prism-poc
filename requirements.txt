@@ -1,6 +1,6 @@
-# PRISM Phase 5.7.6 - Python Dependencies (License-Safe Edition)
+# PRISM Phase 0.7 - Python Dependencies
 # Python 3.11+ 호환 (Python 3.12 완전 지원)
-# 최종 수정: 2025-11-02 (Phase 5.7.6 - AGPL/GPL 제거)
+# 최종 수정: 2025-11-14 (Phase 0.7 - 룰 기반 띄어쓰기)
 
 # ============================================
 # Core Framework
@@ -9,17 +9,12 @@ streamlit==1.31.0          # Apache-2.0
 python-dotenv==1.0.0       # BSD-3
 
 # ============================================
-# PDF Processing (Phase 5.7.6 라이선스 교체)
+# PDF Processing (Phase 5.7.6 라이선스 안전)
 # ============================================
-pypdfium2==4.28.0          # BSD-3 (PyMuPDF 대체) ✅ NEW
-pypdf==4.0.1               # BSD-3 (PyPDF2 대체) ✅ NEW
+pypdfium2==4.28.0          # BSD-3 (PyMuPDF 대체)
+pypdf==4.0.1               # BSD-3 (PyPDF2 대체)
 pdfplumber==0.10.3         # MIT (레거시 호환)
 Pillow==10.2.0             # HPND (PIL License)
-
-# ❌ 제거된 패키지 (AGPL/GPL 리스크)
-# pymupdf==1.24.14         # AGPL-3.0 ❌
-# pdf2image==1.16.3        # GPL-2.0 (Poppler) ❌
-# PyPDF2==3.0.1            # 레거시 (pypdf로 대체) ❌
 
 # ============================================
 # Computer Vision
@@ -31,7 +26,6 @@ numpy==1.26.3              # BSD-3
 # OCR
 # ============================================
 pytesseract==0.3.10        # Apache-2.0
-# paddlepaddle==2.6.0      # ❌ 제거 (사용 안 함)
 
 # ============================================
 # VLM APIs
@@ -40,18 +34,19 @@ anthropic==0.40.0          # Apache-2.0
 openai==1.58.1             # Apache-2.0
 
 # ============================================
+# ✅ Phase 0.7: 띄어쓰기 개선
+# ============================================
+# pykospacing 제거 (설치 불가 이슈)
+# 대안: 순수 Python 정규식 기반 룰 (app.py 내장)
+
+# ============================================
 # Utilities
 # ============================================
 requests==2.31.0           # Apache-2.0
 setuptools>=65.0.0         # MIT
 
 # ============================================
-# Phase 5.8.1 준비 (선택)
-# ============================================
-# sentence-transformers==2.2.2  # Apache-2.0 (임베딩 청킹용)
-
-# ============================================
-# 설치 가이드 (Phase 5.7.6)
+# 설치 가이드 (Phase 0.7)
 # ============================================
 #
 # 1. pip 업그레이드:
@@ -65,9 +60,7 @@ setuptools>=65.0.0         # MIT
 #    Mac: brew install tesseract tesseract-lang
 #    Linux: sudo apt-get install tesseract-ocr tesseract-ocr-kor
 #
-# 4. ❌ Poppler 불필요 (pypdfium2 사용)
-#
-# 5. 설치 확인:
+# 4. 설치 확인:
 #    python -c "import cv2; print(f'OpenCV: {cv2.__version__}')"
 #    python -c "import pytesseract; print('Tesseract OK')"
 #    python -c "import pypdfium2; print(f'pypdfium2: OK')"
@@ -75,9 +68,10 @@ setuptools>=65.0.0         # MIT
 #    python -c "import anthropic; print(f'Anthropic: {anthropic.__version__}')"
 
 # ============================================
-# 라이선스 요약 (Phase 5.7.6)
+# 라이선스 요약 (Phase 0.7)
 # ============================================
 # 모든 패키지: BSD-3, MIT, Apache-2.0
 # ✅ 상용 배포 안전
 # ✅ 소스 공개 의무 없음
 # ✅ AGPL/GPL 완전 제거
+# ✅ Phase 0.7: 외부 라이브러리 없는 순수 Python 띄어쓰기

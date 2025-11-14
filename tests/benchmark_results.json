@@ -1,0 +1,12 @@
+{
+  "timestamp": "2025-11-14T13:50:24.995837",
+  "total_documents": 0,
+  "average_times": {
+    "parse_sec": 0.0,
+    "golden_create_sec": 0.0,
+    "golden_compare_sec": 0.0,
+    "total_sec": 0.0
+  },
+  "average_memory_mb": 0.0,
+  "results": []
+}
