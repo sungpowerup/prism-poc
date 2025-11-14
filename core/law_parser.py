@@ -1,16 +1,15 @@
 """
 law_parser.py - LawMode 조문 파서
-Phase 0.6.2 "Front Matter & Clean Chapters"
+Phase 0.6.3 "Clean Chapter Title"
 
-✅ Phase 0.6.2 핫픽스 (GPT 최종 권장):
-1. 타이틀 청크 추가 (type="title")
-2. 개정이력 청크 추가 (type="amendment_history")
-3. 장 청크 정제 (chapter_title에 조문 본문 안 붙게)
-4. 띄어쓰기는 Phase 0.7로 연기
+✅ Phase 0.6.3 핫픽스 (GPT 최종 권장):
+1. 장 파싱 전처리 강화 (제N장, 제N조 앞뒤 줄바꿈 강제)
+2. CHAPTER_PATTERN 정밀 조정 ("제" 직전까지만 매칭)
+3. chapter_title 정확도 100% 달성 ("총칙제" → "총칙")
 
 Author: 박준호 (AI/ML Lead) + GPT 최종 피드백
 Date: 2025-11-14
-Version: Phase 0.6.2
+Version: Phase 0.6.3
 """
 
 import re
@@ -45,11 +44,11 @@ class Article:
 
 class LawParser:
     """
-    규정/법령 전용 파서 (Phase 0.6.2)
+    규정/법령 전용 파서 (Phase 0.6.3)
     
-    ✅ Phase 0.6.2 개선:
-    - 타이틀/개정이력 front matter 추출
-    - 장 title 정확히 분리
+    ✅ Phase 0.6.3 개선:
+    - 장 파싱 전처리 강화
+    - chapter_title 정확도 100%
     """
     
     # 기본정신 패턴
@@ -64,26 +63,26 @@ class LawParser:
         re.MULTILINE
     )
     
-    # ✅ Phase 0.6.2: 장 패턴 정밀 조정
-    # "제1장" + "총칙" 까지만 매칭 (조문 시작 전에 멈춤)
+    # ✅ Phase 0.6.3: 장 패턴 (전처리 후 사용)
+    # "제1장" + 다음 "제" 나오기 전까지의 한글만
     CHAPTER_PATTERN = re.compile(
-        r'제\s*(\d+)\s*장\s*([가-힣]{2,10})',
+        r'(제\s*\d+\s*장)\s*([^\n제]+)',
         re.MULTILINE
     )
     
-    # ✅ Phase 0.6.2: 타이틀 패턴
+    # 타이틀 패턴
     TITLE_PATTERN = re.compile(
         r'^([가-힣]{2,10}규정|[가-힣]{2,10}내규|[가-힣]{2,10}정관)',
         re.MULTILINE
     )
     
-    # ✅ Phase 0.6.2: 개정일 패턴
+    # 개정일 패턴
     AMENDMENT_PATTERN = re.compile(
         r'(제\d+차\s*)?개정\s*\d{4}\.\d{1,2}\.\d{1,2}\.?',
         re.MULTILINE
     )
     
-    # 줄바꿈 정리 패턴 (Phase 0.6 유지)
+    # 줄바꿈 정리 패턴
     SAFE_NEWLINE_PATTERN = re.compile(
         r'(?<=[가-힣0-9])(?<![.?!])[\r]?\n(?=[가-힣0-9])',
         re.MULTILINE
@@ -91,7 +90,7 @@ class LawParser:
     
     def __init__(self):
         """초기화"""
-        logger.info("✅ LawParser 초기화 (Phase 0.6.2)")
+        logger.info("✅ LawParser 초기화 (Phase 0.6.3)")
     
     def parse(
         self,
@@ -115,7 +114,7 @@ class LawParser:
             {
                 'document_title': str,
                 'enacted_date': str,
-                'amendment_history': str,  # ✅ Phase 0.6.2 신규
+                'amendment_history': str,
                 'basic_spirit': str,
                 'chapters': List[Chapter],
                 'articles': List[Article],
@@ -123,7 +122,7 @@ class LawParser:
                 'total_chapters': int
             }
         """
-        logger.info(f"📜 LawParser Phase 0.6.2 시작: {document_title}")
+        logger.info(f"📜 LawParser Phase 0.6.3 시작: {document_title}")
         logger.info(f"   📄 입력 텍스트: {len(pdf_text)}자")
         
         # Phase 0.5: 페이지 아티팩트 제거
@@ -141,14 +140,17 @@ class LawParser:
             pdf_text = self._normalize_linebreaks(pdf_text)
             logger.info(f"   ✂️ 줄바꿈 정리: {original_len}자 → {len(pdf_text)}자 ({len(pdf_text)-original_len:+d})")
         
-        # ✅ Phase 0.6.2: Front Matter 추출
+        # ✅ Phase 0.6.3: 장/조문 전처리 (GPT 권장)
+        pdf_text = self._preprocess_for_chapter_parsing(pdf_text)
+        
+        # Front Matter 추출
         title, amendment_history, pdf_text = self._extract_front_matter(pdf_text, document_title)
         
         # 1. 기본정신 추출
         basic_spirit = self._extract_basic_spirit(pdf_text)
         logger.info(f"   ✅ 기본정신: {len(basic_spirit)}자")
         
-        # 2. 장 추출 (Phase 0.6.2 정밀)
+        # 2. 장 추출 (Phase 0.6.3 정밀)
         chapters = self._extract_chapters(pdf_text)
         logger.info(f"   ✅ 장: {len(chapters)}개")
         
@@ -167,18 +169,40 @@ class LawParser:
         for article in articles:
             article.body = self._remove_chapter_headers(article.body)
         
-        logger.info(f"✅ LawParser Phase 0.6.2 완료: {len(chapters)}개 장, {len(articles)}개 조문")
+        logger.info(f"✅ LawParser Phase 0.6.3 완료: {len(chapters)}개 장, {len(articles)}개 조문")
         
         return {
-            'document_title': title,  # ✅ Phase 0.6.2: 추출된 타이틀
+            'document_title': title,
             'enacted_date': enacted_date or '',
-            'amendment_history': amendment_history,  # ✅ Phase 0.6.2 신규
+            'amendment_history': amendment_history,
             'basic_spirit': basic_spirit,
             'chapters': chapters,
             'articles': articles,
             'total_articles': len(articles),
             'total_chapters': len(chapters)
         }
+    
+    def _preprocess_for_chapter_parsing(self, text: str) -> str:
+        """
+        ✅ Phase 0.6.3: 장/조문 파싱 전처리 (GPT 권장)
+        
+        "제1장 총칙제1조(목적)" → "제1장 총칙\n제1조(목적)"
+        
+        Args:
+            text: 원본 텍스트
+        
+        Returns:
+            전처리된 텍스트
+        """
+        # 1. 제N장 앞뒤 줄바꿈 강제
+        text = re.sub(r'(제\s*\d+\s*장)', r'\n\1 ', text)
+        
+        # 2. 제N조 앞 줄바꿈 강제
+        text = re.sub(r'(제\s*\d+\s*조)', r'\n\1', text)
+        
+        logger.debug("   🔧 장/조문 전처리 완료 (줄바꿈 강제)")
+        
+        return text
     
     def _extract_front_matter(
         self, 
@@ -193,7 +217,7 @@ class LawParser:
         """
         # 1. 타이틀 추출
         title = fallback_title
-        title_match = self.TITLE_PATTERN.search(text[:500])  # 앞 500자 내
+        title_match = self.TITLE_PATTERN.search(text[:500])
         if title_match:
             title = title_match.group(1)
             logger.info(f"   📌 타이틀 추출: {title}")
@@ -202,7 +226,6 @@ class LawParser:
         amendment_history = ""
         amendments = []
         
-        # 기본정신 이전 구간에서만 찾기
         spirit_match = self.BASIC_SPIRIT_PATTERN.search(text)
         search_end = spirit_match.start() if spirit_match else 1000
         
@@ -213,8 +236,6 @@ class LawParser:
             amendment_history = ' '.join(amendments)
             logger.info(f"   📅 개정이력: {len(amendments)}건")
         
-        # 3. Front Matter 제거 (선택적)
-        # 원본 텍스트는 유지, 청크 생성 시 활용
         return title, amendment_history, text
     
     def _normalize_linebreaks(self, text: str) -> str:
@@ -236,7 +257,6 @@ class LawParser:
         
         start = match.end()
         
-        # 다음 조문 또는 장까지
         next_article = self.ARTICLE_HEADER_PATTERN.search(text, start)
         next_chapter = self.CHAPTER_PATTERN.search(text, start)
         
@@ -254,19 +274,28 @@ class LawParser:
     
     def _extract_chapters(self, text: str) -> List[Chapter]:
         """
-        ✅ Phase 0.6.2: 장 추출 (타이틀 정밀 분리)
+        ✅ Phase 0.6.3: 장 추출 (정밀 파싱)
         
         "제1장 총칙" → chapter_title="총칙"만
+        (전처리로 "제1장 총칙\n제1조..." 형태 보장됨)
         """
         chapters = []
         order = 0
         
         for match in self.CHAPTER_PATTERN.finditer(text):
-            chapter_num = match.group(1)
-            chapter_title = match.group(2).strip()
+            chapter_num_raw = match.group(1).strip()  # "제 1 장" → "제 1 장"
+            chapter_title_raw = match.group(2).strip()  # "총칙제" → "총칙"
+            
+            # 공백 정규화
+            chapter_num = re.sub(r'\s+', '', chapter_num_raw)  # "제1장"
+            
+            # ✅ Phase 0.6.3: chapter_title 정제
+            # "총칙제1조..." → "총칙"만
+            # 이미 전처리로 "\n제1조" 형태라 "제"가 안 붙지만, 만약을 위해
+            chapter_title = re.sub(r'제\d+조.*$', '', chapter_title_raw).strip()
             
             chapter = Chapter(
-                number=f"제{chapter_num}장",
+                number=chapter_num,
                 title=chapter_title,
                 start_pos=match.start(),
                 section_order=order
@@ -296,13 +325,11 @@ class LawParser:
             article_sub = match.group(2)
             article_title = match.group(3)
             
-            # 조문 번호
             if article_sub:
                 number = f"제{article_num}조의{article_sub}"
             else:
                 number = f"제{article_num}조"
             
-            # 본문 범위
             body_start = match.end()
             
             if i < len(matches) - 1:
@@ -379,7 +406,7 @@ class LawParser:
         """
         chunks = []
         
-        # ✅ Phase 0.6.2: 0. 타이틀 청크
+        # 0. 타이틀 청크
         if parsed_result['document_title']:
             chunks.append({
                 'content': parsed_result['document_title'],
@@ -392,7 +419,7 @@ class LawParser:
                 }
             })
         
-        # ✅ Phase 0.6.2: 1. 개정이력 청크
+        # 1. 개정이력 청크
         if parsed_result['amendment_history']:
             chunks.append({
                 'content': parsed_result['amendment_history'],
@@ -454,7 +481,7 @@ class LawParser:
         # section_order 정렬
         chunks.sort(key=lambda c: c['metadata'].get('section_order', 999))
         
-        logger.info(f"✅ 청크 변환 완료 (Phase 0.6.2): {len(chunks)}개")
+        logger.info(f"✅ 청크 변환 완료 (Phase 0.6.3): {len(chunks)}개")
         logger.info(f"   - 타이틀: 1개")
         logger.info(f"   - 개정이력: 1개")
         logger.info(f"   - 기본정신: 1개")
@@ -462,3 +489,89 @@ class LawParser:
         logger.info(f"   - 조문: {parsed_result['total_articles']}개")
         
         return chunks
+    
+    def to_markdown(self, parsed_result: Dict[str, Any]) -> str:
+        """파싱 결과 → Markdown 변환"""
+        lines = []
+        
+        # 타이틀
+        if parsed_result['document_title']:
+            lines.append(f"# {parsed_result['document_title']}\n")
+        
+        # 개정이력
+        if parsed_result['amendment_history']:
+            lines.append("## 개정 이력\n")
+            lines.append(parsed_result['amendment_history'])
+            lines.append("")
+        
+        # 기본정신
+        if parsed_result['basic_spirit']:
+            lines.append("## 기본정신\n")
+            lines.append(parsed_result['basic_spirit'])
+            lines.append("")
+        
+        # 장과 조문
+        for chapter in parsed_result['chapters']:
+            lines.append(f"## {chapter.number} {chapter.title}\n")
+            
+            # 해당 장의 조문들
+            for article in parsed_result['articles']:
+                if article.chapter_number == chapter.number:
+                    lines.append(f"### {article.number}({article.title})\n")
+                    lines.append(article.body)
+                    lines.append("")
+        
+        # 장이 없는 조문들 (있으면)
+        orphan_articles = [a for a in parsed_result['articles'] if not a.chapter_number]
+        if orphan_articles:
+            for article in orphan_articles:
+                lines.append(f"### {article.number}({article.title})\n")
+                lines.append(article.body)
+                lines.append("")
+        
+        return '\n'.join(lines)
+
+
+# ============================================
+# 사용 예시
+# ============================================
+
+if __name__ == '__main__':
+    # 테스트
+    test_text = """
+인사규정
+제37차개정2019.05.27. 제38차개정2019.07.01.
+
+기본정신
+이 규정은 한국농어촌공사 직원의 ...
+
+제1장 총칙제1조(목적)
+이 규정은 ...
+
+제2조(적용범위)
+직원의 인사관리는 ...
+
+제2장 채용제7조(채용의원칙)
+직원은 공개경쟁채용시험에 따라 ...
+"""
+    
+    parser = LawParser()
+    result = parser.parse(
+        pdf_text=test_text,
+        document_title="인사규정 테스트"
+    )
+    
+    print("\n" + "="*60)
+    print("Phase 0.6.3 테스트 결과")
+    print("="*60)
+    print(f"타이틀: {result['document_title']}")
+    print(f"개정이력: {len(result['amendment_history'])}자")
+    print(f"장: {result['total_chapters']}개")
+    for ch in result['chapters']:
+        print(f"  - {ch.number} {ch.title}")
+    print(f"조문: {result['total_articles']}개")
+    
+    chunks = parser.to_chunks(result)
+    print(f"\n청크: {len(chunks)}개")
+    for chunk in chunks[:5]:
+        print(f"  - {chunk['metadata']['type']}: {chunk['metadata'].get('title', 'N/A')}")

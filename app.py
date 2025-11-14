@@ -1,15 +1,15 @@
 """
-app.py - PRISM Phase 0.6 "Elegance & Refinement"
-GPT 피드백 100% 반영: 장 분리 + 줄바꿈 정리 + 로그 개선
+app.py - PRISM Phase 0.6.3 "Clean View"
+GPT 피드백 100% 반영: MD 렌더링 개선
 
-✅ Phase 0.6 주요 변경 (GPT 권장):
-1. 장(Chapter) 독립 청크 생성 + article에 chapter_number 참조
-2. 줄바꿈 정리 (LawMode 전용, idempotent)
-3. DualQA 로그 개선 ([PDF] vs [LawMode] 명확화)
+✅ Phase 0.6.3 핫픽스:
+1. to_review_md() 완전 재설계 (타입 기반 렌더링)
+2. 타이틀/개정이력/장/조문 명확한 헤더 표시
+3. section_order 기준 정렬 보장
 
-Author: 마창수산팀 + GPT 설계
+Author: 마창수산팀 + GPT 최종 피드백
 Date: 2025-11-14
-Version: Phase 0.6
+Version: Phase 0.6.3
 """
 
 import streamlit as st
@@ -40,23 +40,23 @@ try:
     from core.dual_qa_gate import DualQAGate, extract_pdf_text_layer
     from core.utils_fs import safe_temp_path, safe_remove
     
-    logger.info("✅ 모듈 import 성공 (Phase 0.6)")
+    logger.info("✅ 모듈 import 성공 (Phase 0.6.3)")
     
 except Exception as e:
     logger.error(f"❌ Import 실패: {e}")
     st.error(f"❌ 모듈 로딩 실패: {e}")
     st.stop()
 
-# LawParser Import (Phase 0.6 버전)
+# LawParser Import (Phase 0.6.3)
 try:
     from core.law_parser import LawParser
     LAW_MODE_AVAILABLE = True
-    logger.info("✅ LawParser 로드 성공 (Phase 0.6)")
+    logger.info("✅ LawParser 로드 성공 (Phase 0.6.3)")
 except ImportError:
     LAW_MODE_AVAILABLE = False
     logger.warning("⚠️ LawParser 미설치")
 
-# DocumentProfile Import (Phase 0.5+)
+# DocumentProfile Import
 try:
     from core.document_profile import auto_detect_profile, get_profile
     PROFILE_AVAILABLE = True
@@ -66,44 +66,82 @@ except ImportError:
     logger.warning("⚠️ DocumentProfile 미설치")
 
 
-# 유틸리티 함수
+# ============================================
+# ✅ Phase 0.6.3: 완전 재설계된 to_review_md()
+# ============================================
+
 def to_review_md(chunks: list, markdown: str = None) -> str:
     """
-    ✅ Phase 0.6: 리뷰용 Markdown 생성 (장 청크 지원)
+    ✅ Phase 0.6.3: 리뷰용 Markdown 생성 (GPT 권장 방식)
+    
+    타입별로 정확히 렌더링:
+    - title → # 타이틀
+    - amendment_history → ## 개정 이력 + 리스트
+    - basic → ## 기본정신
+    - chapter → ## 제N장 제목
+    - article → ### 제N조(제목)
+    
+    Args:
+        chunks: 청크 리스트
+        markdown: 사용 안 함 (하위 호환)
+    
+    Returns:
+        Markdown 문자열
     """
     lines = []
     
-    if markdown and ('제37차' in markdown or '개정' in markdown[:200]):
-        lines.append("# 인사규정\n## 개정 이력\n")
+    # ✅ section_order 기준 정렬 (필수!)
+    chunks_sorted = sorted(chunks, key=lambda c: c['metadata'].get('section_order', 999))
     
-    for chunk in chunks:
-        content = chunk['content']
-        chunk_type = chunk['metadata']['type']
+    for chunk in chunks_sorted:
+        meta = chunk["metadata"]
+        text = chunk["content"]
+        chunk_type = meta["type"]
         
-        if chunk_type == 'basic':
-            lines.append("\n## 기본정신\n")
-            lines.append(content.replace('기본정신', '', 1).strip())
+        # 1. 타이틀
+        if chunk_type == "title":
+            title = meta.get('title', text)
+            lines.append(f"# {title}\n")
         
-        # ✅ Phase 0.6: 장(Chapter) 청크 처리
-        elif chunk_type == 'chapter':
-            chapter_num = chunk['metadata'].get('chapter_number', '')
-            chapter_title = chunk['metadata'].get('chapter_title', '')
-            lines.append(f"\n## {chapter_num} {chapter_title}\n")
+        # 2. 개정이력 (리스트로 분리)
+        elif chunk_type == "amendment_history":
+            lines.append("## 개정 이력\n")
+            # "제37차개정2019.05.27." 단위로 분리
+            items = re.split(r'(?=제\d+차)', text)
+            for item in items:
+                item = item.strip()
+                if item:
+                    lines.append(f"- {item}")
+            lines.append("")  # 빈 줄
         
-        elif chunk_type in ['article', 'article_loose']:
-            header_match = re.search(r'(제\s*\d+조(?:의\d+)?[^\n]*)', content)
-            if header_match:
-                header = header_match.group(1)
-                body = content[header_match.end():].strip()
-                lines.append(f"\n### {header}\n")
-                lines.append(body)
-            else:
-                lines.append(content)
+        # 3. 기본정신
+        elif chunk_type == "basic":
+            lines.append("## 기본정신\n")
+            lines.append(text)
+            lines.append("")
         
-        else:
-            lines.append(content)
+        # 4. 장 (Chapter)
+        elif chunk_type == "chapter":
+            ch_num = meta["chapter_number"]
+            ch_title = meta["chapter_title"]
+            lines.append(f"## {ch_num} {ch_title}\n")
+        
+        # 5. 조문 (Article)
+        elif chunk_type == "article":
+            art_num = meta["article_number"]
+            art_title = meta["article_title"]
+            lines.append(f"### {art_num}({art_title})\n")
+            
+            # 본문에서 헤더 제거 (중복 방지)
+            body = text
+            header = f"{art_num}({art_title})"
+            if header in body:
+                body = body.replace(header, '', 1).strip()
+            
+            lines.append(body)
+            lines.append("")
     
-    return '\n'.join(lines)
+    return "\n".join(lines)
 
 
 # VLM 모드 처리
@@ -135,13 +173,13 @@ def process_document_vlm_mode(pdf_path: str, pdf_text: str, max_pages: int = 20)
         chunks = chunker.chunk(markdown_text)
         st.success(f"✅ {len(chunks)}개 청크 생성")
         
-        # ✅ Phase 0.6: DualQA 검증 (source="vlm")
+        # DualQA 검증
         st.info("🔬 DualQA 검증 중...")
         qa_gate = DualQAGate()
         qa_result = qa_gate.validate(
             pdf_text=pdf_text,
             processed_text=markdown_text,
-            source="vlm"  # ✅ Phase 0.6: 소스 명시
+            source="vlm"
         )
         
         match_rate = qa_result.get('match_rate', 0.0)
@@ -163,35 +201,31 @@ def process_document_vlm_mode(pdf_path: str, pdf_text: str, max_pages: int = 20)
         raise
 
 
-# LawMode 처리 (Phase 0.6 업그레이드)
+# LawMode 처리 (Phase 0.6.3)
 def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str):
     """
-    ✅ Phase 0.6: LawMode 파이프라인 (GPT 피드백 반영)
-    
-    - 장(Chapter) 독립 청크 생성
-    - 줄바꿈 정리 (normalize_linebreaks=True)
-    - DualQA source="lawmode"
+    ✅ Phase 0.6.3: LawMode 파이프라인
     """
     
-    st.info("📜 LawMode Phase 0.6: 규정/법령 파싱 중...")
+    st.info("📜 LawMode Phase 0.6.3: 규정/법령 파싱 중...")
     progress_bar = st.progress(0)
     
-    # ✅ Phase 0.5+: DocumentProfile 자동 감지 (옵션)
+    # DocumentProfile 자동 감지 (옵션)
     if PROFILE_AVAILABLE:
         profile = auto_detect_profile(pdf_text, document_title)
         st.info(f"📝 문서 프로파일: {profile.name}")
     
-    # ✅ Phase 0.6: LawParser (장 분리 + 줄바꿈 정리)
+    # LawParser 파싱
     parser = LawParser()
     parsed_result = parser.parse(
         pdf_text=pdf_text,
         document_title=document_title,
-        clean_artifacts=True,  # Phase 0.5: 페이지 아티팩트 제거
-        normalize_linebreaks=True  # ✅ Phase 0.6: 줄바꿈 정리 (GPT 권장)
+        clean_artifacts=True,
+        normalize_linebreaks=True
     )
     progress_bar.progress(50)
     
-    # ✅ Phase 0.6: 청크 변환 (장 독립 청크 포함)
+    # 청크 변환
     chunks = parser.to_chunks(parsed_result)
     progress_bar.progress(75)
     
@@ -204,19 +238,16 @@ def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str)
         markdown_lines.append(parsed_result['basic_spirit'])
         markdown_lines.append("")
     
-    # ✅ Phase 0.6: 장과 조문 (section_order 기준 정렬)
-    # 이미 to_chunks()에서 정렬되어 있음
+    # 장과 조문 (section_order 기준 정렬)
     for chunk in chunks:
         chunk_type = chunk['metadata']['type']
         
         if chunk_type == 'chapter':
-            # 장 헤더
             chapter_num = chunk['metadata']['chapter_number']
             chapter_title = chunk['metadata']['chapter_title']
             markdown_lines.append(f"## {chapter_num} {chapter_title}\n")
         
         elif chunk_type == 'article':
-            # 조문
             article_num = chunk['metadata']['article_number']
             article_title = chunk['metadata']['article_title']
             markdown_lines.append(f"### {article_num}({article_title})\n")
@@ -231,13 +262,13 @@ def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str)
     
     markdown_text = '\n'.join(markdown_lines)
     
-    # ✅ Phase 0.6: DualQA 검증 (source="lawmode")
+    # DualQA 검증
     st.info("🔬 DualQA 검증 중...")
     qa_gate = DualQAGate()
     qa_result = qa_gate.validate(
         pdf_text=pdf_text,
         processed_text=markdown_text,
-        source="lawmode"  # ✅ Phase 0.6: 소스 명시 (GPT 권장)
+        source="lawmode"
     )
     
     match_rate = qa_result.get('match_rate', 0.0)
@@ -252,20 +283,20 @@ def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str)
         'qa_result': qa_result,
         'is_qa_pass': is_qa_pass,
         'mode': 'LawMode',
-        'parsed_result': parsed_result  # ✅ Phase 0.6: 파싱 상세 정보
+        'parsed_result': parsed_result
     }
 
 
 # Streamlit UI
 def main():
     st.set_page_config(
-        page_title="PRISM Phase 0.6",
+        page_title="PRISM Phase 0.6.3",
         page_icon="🔷",
         layout="wide"
     )
     
-    st.title("🔷 PRISM Phase 0.6 \"Elegance & Refinement\"")
-    st.caption("GPT 피드백 100% 반영: 장 분리 + 줄바꿈 정리 + 로그 개선")
+    st.title("🔷 PRISM Phase 0.6.3 \"Clean View\"")
+    st.caption("GPT 피드백 반영: MD 렌더링 완전 개선")
     
     # 사이드바: 설정
     with st.sidebar:
@@ -276,7 +307,7 @@ def main():
             "📜 LawMode 사용 (규정/법령 전용)",
             value=LAW_MODE_AVAILABLE,
             disabled=not LAW_MODE_AVAILABLE,
-            help="PDF 텍스트 기반 정확한 조문 추출 + 장 분리 + 줄바꿈 정리"
+            help="PDF 텍스트 기반 정확한 조문 추출"
         )
         
         if not LAW_MODE_AVAILABLE:
@@ -284,24 +315,43 @@ def main():
         
         st.divider()
         
-        # Phase 0.6 변경사항
-        with st.expander("✨ Phase 0.6 변경사항"):
+        # Phase 0.6.3 변경사항
+        with st.expander("✨ Phase 0.6.3 핫픽스"):
             st.markdown("""
             **GPT 피드백 100% 반영:**
             
-            1️⃣ **장(Chapter) 헤더 분리**
-            - `type="chapter"` 독립 청크 생성
-            - Article에 `chapter_number` 참조 추가
-            - RAG에서 "제2장 채용" 단위 질의 가능
+            ### 1. MD 렌더링 완전 재설계
             
-            2️⃣ **줄바꿈 정리 (LawMode 전용)**
-            - "채\\n용을" → "채용을"
-            - 문장/구조 줄바꿈 보존
-            - Idempotent 구현
+            **Before (0.6.2):**
+            - 타이틀/개정이력이 "안 보임"
+            - 헤더 없이 텍스트만 쭉 나열
             
-            3️⃣ **로그 개선**
-            - [PDF] vs [LawMode] 명확한 prefix
-            - 새벽 2시 디버깅 편의성 극대화
+            **After (0.6.3):**
+            ```markdown
+            # 인사규정
+            
+            ## 개정 이력
+            - 제37차개정2019.05.27.
+            - 제38차개정2019.07.01.
+            ...
+            
+            ## 기본정신
+            이규정은한국농어촌공사직원의...
+            
+            ## 제1장 총칙
+            
+            ### 제1조(목적)
+            이규정은한국농어촌공사직원에게...
+            ```
+            
+            ### 2. 장 제목 정확히 파싱
+            
+            **Before:** `chapter_title: "총칙제"`  
+            **After:** `chapter_title: "총칙"` ✅
+            
+            ---
+            
+            **다음 Phase 0.7**: 띄어쓰기 전용 모듈
             """)
     
     # 파일 업로드
@@ -313,58 +363,6 @@ def main():
     
     if not uploaded_file:
         st.info("👆 PDF 파일을 업로드하세요")
-        
-        # Phase 0.6 데모
-        with st.expander("🎯 Phase 0.6 주요 개선 사항"):
-            st.markdown("""
-            ### 1. 장(Chapter) 독립 청크
-            
-            **Before (Phase 0.5):**
-            ```
-            제6조(소급임용의 금지)
-            ...
-            제2장 채용  ← 조문에 붙어있음
-            ```
-            
-            **After (Phase 0.6):**
-            ```json
-            [
-              {"type": "article", "article_number": "제6조", ...},
-              {"type": "chapter", "chapter_number": "제2장", "chapter_title": "채용"}
-            ]
-            ```
-            
-            ---
-            
-            ### 2. 줄바꿈 정리
-            
-            **Before:**
-            ```
-            ...채
-            용을 실시하여...
-            ```
-            
-            **After:**
-            ```
-            ...채용을 실시하여...
-            ```
-            
-            ---
-            
-            ### 3. 로그 개선
-            
-            **Before:**
-            ```
-            📖 VLM 조문 헤더: 9개
-            ```
-            
-            **After:**
-            ```
-            📖 [PDF] 조문 헤더: 9개
-            📖 [LawMode] 조문 헤더: 9개
-            ```
-            """)
-        
         return
     
     # 문서 처리
@@ -412,8 +410,6 @@ def main():
             match_rate = qa_result['match_rate']
             qa_flags = qa_result['qa_flags']
             is_pass = result['is_qa_pass']
-            
-            # ✅ Phase 0.6: 소스 표시
             source_label = qa_result.get('source', result['mode'])
             
             col1, col2, col3 = st.columns(3)
@@ -440,10 +436,10 @@ def main():
                 if qa_flags:
                     st.warning(f"⚠️ QA 플래그: {qa_flags}")
             
-            # ✅ Phase 0.6: LawMode 상세 정보
+            # LawMode 상세 정보
             if use_law_mode and 'parsed_result' in result:
                 st.divider()
-                st.subheader("📜 LawMode Phase 0.6 파싱 상세")
+                st.subheader("📜 LawMode Phase 0.6.3 파싱 상세")
                 
                 parsed = result['parsed_result']
                 
@@ -455,7 +451,7 @@ def main():
                 with col3:
                     st.metric("기본정신", f"{len(parsed['basic_spirit'])}자")
                 
-                # ✅ Phase 0.6: 장 목록 표시
+                # 장 목록 표시
                 if parsed['chapters']:
                     with st.expander("📂 장(Chapter) 목록"):
                         for chapter in parsed['chapters']:
@@ -467,14 +463,14 @@ def main():
             st.download_button(
                 "💾 Markdown 다운로드",
                 data=result['markdown'],
-                file_name=f"{uploaded_file.name}_phase06.md",
+                file_name=f"{uploaded_file.name}_phase063.md",
                 mime="text/markdown"
             )
         
         with tab3:
             st.subheader("🧩 청크 (JSON)")
             
-            # ✅ Phase 0.6: 청크 통계
+            # 청크 통계
             chunk_types = {}
             for chunk in result['chunks']:
                 chunk_type = chunk['metadata']['type']
@@ -488,18 +484,21 @@ def main():
             st.download_button(
                 "💾 JSON 다운로드",
                 data=json.dumps(result['chunks'], ensure_ascii=False, indent=2),
-                file_name=f"{uploaded_file.name}_chunks_phase06.json",
+                file_name=f"{uploaded_file.name}_chunks_phase063.json",
                 mime="application/json"
             )
         
         with tab4:
-            st.subheader("📖 리뷰용 Markdown")
-            review_md = to_review_md(result['chunks'], result['markdown'])
+            st.subheader("📖 리뷰용 Markdown (Phase 0.6.3 개선)")
+            
+            # ✅ Phase 0.6.3: 재설계된 to_review_md() 사용
+            review_md = to_review_md(result['chunks'])
+            
             st.markdown(review_md)
             st.download_button(
                 "💾 리뷰용 다운로드",
                 data=review_md,
-                file_name=f"{uploaded_file.name}_review_phase06.md",
+                file_name=f"{uploaded_file.name}_review_phase063.md",
                 mime="text/markdown"
             )
     
