@@ -1,15 +1,18 @@
 """
 law_parser.py - LawMode 조문 파서
-Phase 0.6.3 "Clean Chapter Title"
+Phase 0.6.3 → Phase 0.5 Rollback (텍스트 품질 복구)
 
-✅ Phase 0.6.3 핫픽스 (GPT 최종 권장):
-1. 장 파싱 전처리 강화 (제N장, 제N조 앞뒤 줄바꿈 강제)
-2. CHAPTER_PATTERN 정밀 조정 ("제" 직전까지만 매칭)
-3. chapter_title 정확도 100% 달성 ("총칙제" → "총칙")
+✅ Phase 0.5 복구 핫픽스 (GPT 권장):
+1. _normalize_linebreaks(): sub('', text) → sub(' ', text) (공백 보존!)
+2. parse() 기본값: normalize_linebreaks=True → False (0.5 스타일)
 
-Author: 박준호 (AI/ML Lead) + GPT 최종 피드백
+🎯 목표:
+- 구조 메타 = Phase 0.6 유지 (타이틀/장/조문/section_order)
+- 텍스트 품질 = Phase 0.5 복구 (띄어쓰기 보존)
+
+Author: 박준호 (AI/ML Lead) + GPT 최종 권장
 Date: 2025-11-14
-Version: Phase 0.6.3
+Version: Phase 0.5 Rollback
 """
 
 import re
@@ -44,11 +47,11 @@ class Article:
 
 class LawParser:
     """
-    규정/법령 전용 파서 (Phase 0.6.3)
+    규정/법령 전용 파서 (Phase 0.5 Rollback)
     
-    ✅ Phase 0.6.3 개선:
-    - 장 파싱 전처리 강화
-    - chapter_title 정확도 100%
+    ✅ Phase 0.5 복구:
+    - 텍스트 품질 = Phase 0.5 수준 (띄어쓰기 보존)
+    - 구조 메타 = Phase 0.6 유지 (타이틀/장/조문)
     """
     
     # 기본정신 패턴
@@ -90,7 +93,9 @@ class LawParser:
     
     def __init__(self):
         """초기화"""
-        logger.info("✅ LawParser 초기화 (Phase 0.6.3)")
+        logger.info("✅ LawParser 초기화 (Phase 0.5 Rollback)")
+        logger.info("   📌 텍스트 품질: Phase 0.5 (띄어쓰기 보존)")
+        logger.info("   📌 구조 메타: Phase 0.6 (타이틀/장/조문)")
     
     def parse(
         self,
@@ -98,7 +103,7 @@ class LawParser:
         document_title: str = "",
         enacted_date: Optional[str] = None,
         clean_artifacts: bool = True,
-        normalize_linebreaks: bool = True
+        normalize_linebreaks: bool = False  # ✅ Phase 0.5: 기본 OFF
     ) -> Dict[str, Any]:
         """
         PDF 텍스트를 파싱하여 조문 구조 추출
@@ -108,7 +113,7 @@ class LawParser:
             document_title: 문서 제목
             enacted_date: 제정일
             clean_artifacts: 페이지 아티팩트 제거 여부
-            normalize_linebreaks: 줄바꿈 정리 여부
+            normalize_linebreaks: 줄바꿈 정리 여부 (✅ False = Phase 0.5 스타일)
         
         Returns:
             {
@@ -122,8 +127,9 @@ class LawParser:
                 'total_chapters': int
             }
         """
-        logger.info(f"📜 LawParser Phase 0.6.3 시작: {document_title}")
+        logger.info(f"📜 LawParser Phase 0.5 Rollback 시작: {document_title}")
         logger.info(f"   📄 입력 텍스트: {len(pdf_text)}자")
+        logger.info(f"   🔧 normalize_linebreaks: {normalize_linebreaks} (False = 0.5 스타일)")
         
         # Phase 0.5: 페이지 아티팩트 제거
         if clean_artifacts:
@@ -134,11 +140,13 @@ class LawParser:
             except ImportError:
                 logger.warning("   ⚠️ PageCleaner 미설치 - 건너뜀")
         
-        # Phase 0.6: 줄바꿈 정리
+        # Phase 0.5/0.6: 줄바꿈 정리 (선택)
         if normalize_linebreaks:
             original_len = len(pdf_text)
             pdf_text = self._normalize_linebreaks(pdf_text)
             logger.info(f"   ✂️ 줄바꿈 정리: {original_len}자 → {len(pdf_text)}자 ({len(pdf_text)-original_len:+d})")
+        else:
+            logger.info(f"   ⏸️ 줄바꿈 정리 건너뜀 (Phase 0.5 모드)")
         
         # ✅ Phase 0.6.3: 장/조문 전처리 (GPT 권장)
         pdf_text = self._preprocess_for_chapter_parsing(pdf_text)
@@ -169,7 +177,7 @@ class LawParser:
         for article in articles:
             article.body = self._remove_chapter_headers(article.body)
         
-        logger.info(f"✅ LawParser Phase 0.6.3 완료: {len(chapters)}개 장, {len(articles)}개 조문")
+        logger.info(f"✅ LawParser Phase 0.5 Rollback 완료: {len(chapters)}개 장, {len(articles)}개 조문")
         
         return {
             'document_title': title,
@@ -181,6 +189,34 @@ class LawParser:
             'total_articles': len(articles),
             'total_chapters': len(chapters)
         }
+    
+    def _normalize_linebreaks(self, text: str) -> str:
+        """
+        ✅ Phase 0.5 Rollback: 안전 모드 줄바꿈 정리
+        
+        🔥 핵심 수정:
+        - sub('', text) → sub(' ', text)
+        - 줄바꿈 제거 시 공백(' ') 삽입하여 단어 붙음 방지
+        
+        Before (Phase 0.6):
+            "이 규정은\n한국농어촌공사" → "이규정은한국농어촌공사" ❌
+        
+        After (Phase 0.5):
+            "이 규정은\n한국농어촌공사" → "이 규정은 한국농어촌공사" ✅
+        """
+        before = text
+        
+        # ✅ 핵심: 줄바꿈을 공백으로 치환 (공백 보존!)
+        after = self.SAFE_NEWLINE_PATTERN.sub(' ', text)  # '' → ' ' (공백 하나!)
+        #                                       ^
+        #                                  Phase 0.5 핵심 수정!
+        
+        removed_count = before.count('\n') - after.count('\n')
+        
+        if removed_count > 0:
+            logger.info(f"      ✂️ 단어 중간 줄바꿈 제거: {removed_count}개 (✅ 공백 보존)")
+        
+        return after
     
     def _preprocess_for_chapter_parsing(self, text: str) -> str:
         """
@@ -238,17 +274,6 @@ class LawParser:
         
         return title, amendment_history, text
     
-    def _normalize_linebreaks(self, text: str) -> str:
-        """줄바꿈 정리 (Phase 0.6)"""
-        before = text
-        after = self.SAFE_NEWLINE_PATTERN.sub('', text)
-        removed_count = before.count('\n') - after.count('\n')
-        
-        if removed_count > 0:
-            logger.info(f"      ✂️ 단어 중간 줄바꿈 제거: {removed_count}개")
-        
-        return after
-    
     def _extract_basic_spirit(self, text: str) -> str:
         """기본정신 추출"""
         match = self.BASIC_SPIRIT_PATTERN.search(text)
@@ -300,70 +325,56 @@ class LawParser:
                 start_pos=match.start(),
                 section_order=order
             )
-            
             chapters.append(chapter)
-            order += 1
             
-            logger.info(f"   📂 {chapter.number} {chapter.title} (순서: {chapter.section_order})")
+            logger.info(f"   📂 {chapter_num} {chapter_title} (순서: {order})")
+            order += 1
         
         return chapters
     
     def _extract_articles_from_text(self, text: str) -> List[Article]:
         """조문 추출"""
         articles = []
-        
         matches = list(self.ARTICLE_HEADER_PATTERN.finditer(text))
-        
-        if not matches:
-            logger.warning("   ⚠️ 조문 헤더 미발견")
-            return articles
-        
-        logger.info(f"   🔍 조문 헤더: {len(matches)}개 발견")
         
         for i, match in enumerate(matches):
             article_num = match.group(1)
-            article_sub = match.group(2)
             article_title = match.group(3)
+            article_full_num = f"제{article_num}조"
             
-            if article_sub:
-                number = f"제{article_num}조의{article_sub}"
+            if match.group(2):
+                article_full_num += f"의{match.group(2)}"
+            
+            start_pos = match.start()
+            
+            if i + 1 < len(matches):
+                end_pos = matches[i + 1].start()
             else:
-                number = f"제{article_num}조"
+                end_pos = len(text)
             
-            body_start = match.end()
-            
-            if i < len(matches) - 1:
-                body_end = matches[i + 1].start()
-            else:
-                body_end = len(text)
-            
-            body = text[body_start:body_end].strip()
+            body = text[start_pos:end_pos].strip()
             
             article = Article(
-                number=number,
+                number=article_full_num,
                 title=article_title,
                 body=body,
-                start_pos=match.start(),
-                end_pos=body_end,
-                chapter_number=None,
-                section_order=0
+                start_pos=start_pos,
+                end_pos=end_pos
             )
-            
             articles.append(article)
-            logger.info(f"   📄 {number} ({article_title}): {len(body)}자")
         
         return articles
     
     def _assign_chapters_to_articles(self, chapters: List[Chapter], articles: List[Article]) -> None:
         """조문에 chapter_number 할당"""
         if not chapters:
-            logger.info("   ℹ️ 장 없음 - chapter_number 할당 건너뜀")
             return
         
         for article in articles:
             assigned_chapter = None
-            for chapter in chapters:
-                if chapter.start_pos < article.start_pos:
+            
+            for i, chapter in enumerate(chapters):
+                if article.start_pos >= chapter.start_pos:
                     assigned_chapter = chapter.number
                 else:
                     break
@@ -445,7 +456,7 @@ class LawParser:
                 }
             })
         
-        # 3. 장(Chapter) 청크
+        # 3. 장 청크
         for chapter in parsed_result['chapters']:
             content = f"{chapter.number} {chapter.title}"
             
@@ -478,10 +489,9 @@ class LawParser:
                 }
             })
         
-        # section_order 정렬
         chunks.sort(key=lambda c: c['metadata'].get('section_order', 999))
         
-        logger.info(f"✅ 청크 변환 완료 (Phase 0.6.3): {len(chunks)}개")
+        logger.info(f"✅ 청크 변환 완료 (Phase 0.5 Rollback): {len(chunks)}개")
         logger.info(f"   - 타이틀: 1개")
         logger.info(f"   - 개정이력: 1개")
         logger.info(f"   - 기본정신: 1개")
@@ -491,87 +501,76 @@ class LawParser:
         return chunks
     
     def to_markdown(self, parsed_result: Dict[str, Any]) -> str:
-        """파싱 결과 → Markdown 변환"""
+        """
+        ✅ Phase 0.6.2: 파싱 결과 → Markdown 변환
+        
+        구조:
+        # 타이틀
+        ## 개정 이력
+        - 개정1
+        - 개정2
+        ## 기본정신
+        ...
+        ## 제1장 총칙
+        ### 제1조(목적)
+        ...
+        """
         lines = []
         
-        # 타이틀
+        # 1. 타이틀
         if parsed_result['document_title']:
-            lines.append(f"# {parsed_result['document_title']}\n")
-        
-        # 개정이력
-        if parsed_result['amendment_history']:
-            lines.append("## 개정 이력\n")
-            lines.append(parsed_result['amendment_history'])
+            lines.append(f"# {parsed_result['document_title']}")
             lines.append("")
         
-        # 기본정신
+        # 2. 개정이력
+        if parsed_result['amendment_history']:
+            lines.append("## 개정 이력")
+            lines.append("")
+            
+            amendments = parsed_result['amendment_history'].split()
+            for amendment in amendments:
+                lines.append(f"- {amendment}")
+            
+            lines.append("")
+        
+        # 3. 기본정신
         if parsed_result['basic_spirit']:
-            lines.append("## 기본정신\n")
+            lines.append("## 기본정신")
+            lines.append("")
             lines.append(parsed_result['basic_spirit'])
             lines.append("")
         
-        # 장과 조문
-        for chapter in parsed_result['chapters']:
-            lines.append(f"## {chapter.number} {chapter.title}\n")
-            
-            # 해당 장의 조문들
-            for article in parsed_result['articles']:
-                if article.chapter_number == chapter.number:
-                    lines.append(f"### {article.number}({article.title})\n")
-                    lines.append(article.body)
-                    lines.append("")
+        # 4. 장/조문 (section_order 순)
+        all_sections = []
         
-        # 장이 없는 조문들 (있으면)
-        orphan_articles = [a for a in parsed_result['articles'] if not a.chapter_number]
-        if orphan_articles:
-            for article in orphan_articles:
-                lines.append(f"### {article.number}({article.title})\n")
-                lines.append(article.body)
+        for chapter in parsed_result['chapters']:
+            all_sections.append(('chapter', chapter))
+        
+        for article in parsed_result['articles']:
+            all_sections.append(('article', article))
+        
+        all_sections.sort(key=lambda x: x[1].section_order)
+        
+        for section_type, section in all_sections:
+            if section_type == 'chapter':
+                lines.append(f"## {section.number} {section.title}")
+                lines.append("")
+            else:
+                lines.append(f"### {section.number}({section.title})")
+                lines.append("")
+                lines.append(section.body)
                 lines.append("")
         
-        return '\n'.join(lines)
-
-
-# ============================================
-# 사용 예시
-# ============================================
-
-if __name__ == '__main__':
-    # 테스트
-    test_text = """
-인사규정
-제37차개정2019.05.27. 제38차개정2019.07.01.
-
-기본정신
-이 규정은 한국농어촌공사 직원의 ...
-
-제1장 총칙제1조(목적)
-이 규정은 ...
-
-제2조(적용범위)
-직원의 인사관리는 ...
-
-제2장 채용제7조(채용의원칙)
-직원은 공개경쟁채용시험에 따라 ...
-"""
+        markdown = "\n".join(lines)
+        
+        logger.info(f"✅ Markdown 변환 완료: {len(markdown)}자")
+        
+        return markdown
     
-    parser = LawParser()
-    result = parser.parse(
-        pdf_text=test_text,
-        document_title="인사규정 테스트"
-    )
-    
-    print("\n" + "="*60)
-    print("Phase 0.6.3 테스트 결과")
-    print("="*60)
-    print(f"타이틀: {result['document_title']}")
-    print(f"개정이력: {len(result['amendment_history'])}자")
-    print(f"장: {result['total_chapters']}개")
-    for ch in result['chapters']:
-        print(f"  - {ch.number} {ch.title}")
-    print(f"조문: {result['total_articles']}개")
-    
-    chunks = parser.to_chunks(result)
-    print(f"\n청크: {len(chunks)}개")
-    for chunk in chunks[:5]:
-        print(f"  - {chunk['metadata']['type']}: {chunk['metadata'].get('title', 'N/A')}")
+    def to_review_md(self, parsed_result: Dict[str, Any]) -> str:
+        """
+        ✅ Phase 0.6.2: 리뷰용 Markdown (to_markdown과 동일)
+        
+        Phase 0.7/0.9에서 추가 뷰 레이어 적용 가능
+        """
+        return self.to_markdown(parsed_result)
