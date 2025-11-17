@@ -1,10 +1,10 @@
 """
-app.py - PRISM Phase 0.7.5b Final
-Annex Fallback + Review MD 완성
+app.py - PRISM Phase 0.8
+Annex 서브청킹 UI 통합
 
 Author: 마창수산팀
-Date: 2025-11-16
-Version: Phase 0.7.5b
+Date: 2025-11-17
+Version: Phase 0.8
 """
 
 import streamlit as st
@@ -131,28 +131,17 @@ def to_review_md_basic(
     parsed_result: dict = None,
     base_markdown: str = None
 ) -> str:
-    """
-    청크/파싱 결과 → 리뷰용 Markdown
+    """청크/파싱 결과 → 리뷰용 Markdown"""
     
-    ✅ Phase 0.7.5b: LawParser 마크다운 우선
-    
-    Args:
-        chunks: 청크 리스트
-        parsed_result: LawParser 파싱 결과
-        base_markdown: 이미 생성된 마크다운
-    """
-    # 1) base_markdown 최우선
     if base_markdown:
         logger.info("   📋 base_markdown 사용")
         return base_markdown
     
-    # 2) parsed_result로 LawParser 마크다운 생성
     if parsed_result is not None:
         logger.info("   📋 LawParser 마크다운 생성")
         parser = LawParser()
         return parser.to_markdown(parsed_result)
     
-    # 3) 백업: chunks 조합
     logger.info("   📋 chunks 조합 (백업)")
     lines = []
     
@@ -193,17 +182,14 @@ def to_review_md_basic(
             lines.append(body)
             lines.append("")
         
-        elif chunk_type == 'annex':
-            annex_title = meta.get('title', '별표/부록')
-            annex_no = meta.get('annex_no')
-            
-            if annex_no:
-                lines.append(f"## [별표 {annex_no}] {annex_title}")
+        elif chunk_type.startswith('annex'):
+            # Phase 0.8: 서브청크 타입 처리
+            if 'header' in chunk_type:
+                lines.append(f"## {content.split(chr(10))[0]}")
+            elif 'note' in chunk_type:
+                lines.append(content)
             else:
-                lines.append(f"## {annex_title}")
-            
-            lines.append("")
-            lines.append(content)
+                lines.append(content)
             lines.append("")
     
     return "\n".join(lines)
@@ -257,7 +243,7 @@ def process_document_vlm_mode(pdf_path: str, pdf_text: str):
 
 
 def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str):
-    """LawMode 파이프라인 (Phase 0.7.5b)"""
+    """LawMode 파이프라인 (Phase 0.8)"""
     
     st.info("📜 LawMode: 규정/법령 파싱 중...")
     progress_bar = st.progress(0)
@@ -275,6 +261,7 @@ def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str)
     )
     progress_bar.progress(50)
     
+    # ✅ Phase 0.8: 서브청킹 적용된 chunks
     chunks = parser.to_chunks(parsed_result)
     progress_bar.progress(75)
     
@@ -294,7 +281,7 @@ def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str)
         'rag_markdown': rag_markdown,
         'chunks': chunks,
         'qa_result': qa_result,
-        'is_qa_pass': qa_result.get('is_pass', False),
+        'is_qa_pass': qa_result.get('is_qa_pass', False),
         'mode': 'LawMode',
         'parsed_result': parsed_result,
         'base_markdown': rag_markdown
@@ -303,13 +290,13 @@ def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str)
 
 def main():
     st.set_page_config(
-        page_title="PRISM - Phase 0.7.5b",
+        page_title="PRISM - Phase 0.8",
         page_icon="🔷",
         layout="wide"
     )
     
-    st.title("🔷 PRISM - Phase 0.7.5b Final")
-    st.caption("Annex Fallback + Review MD 완성")
+    st.title("🔷 PRISM - Phase 0.8")
+    st.caption("Annex 서브청킹 완료")
     
     with st.sidebar:
         st.header("⚙️ 설정")
@@ -325,8 +312,9 @@ def main():
         
         st.divider()
         
-        st.subheader("✨ 리뷰용 MD 모드")
-        st.info("✅ Phase 0.7 룰 기반 띄어쓰기")
+        st.subheader("✨ Phase 0.8 새 기능")
+        st.success("✅ Annex 서브청킹")
+        st.info("청크가 의미 단위로 세분화됩니다")
     
     uploaded_file = st.file_uploader(
         "📄 PDF 파일 업로드",
@@ -372,7 +360,14 @@ def main():
         else:
             st.warning(f"⚠️ DualQA 검토 필요: {match_rate:.1%}")
         
-        # ✅ Phase 0.7.5b: 리뷰용 Markdown 생성
+        # ✅ Phase 0.8: 서브청킹 통계
+        annex_chunks = [c for c in result['chunks'] 
+                       if c['metadata']['type'].startswith('annex_')]
+        
+        if annex_chunks:
+            st.info(f"🎉 Phase 0.8: Annex 서브청킹 {len(annex_chunks)}개 생성!")
+        
+        # 리뷰용 Markdown 생성
         logger.info("📝 리뷰용 Markdown 생성 시작...")
         
         basic_review_md = to_review_md_basic(
@@ -391,7 +386,7 @@ def main():
         tab_names = [
             "📊 요약",
             "🤖 RAG용 Markdown",
-            "🤖 RAG용 JSON",
+            "🤖 RAG용 JSON (✨서브청킹)",
             "👤 리뷰용 Markdown"
         ]
         
@@ -413,6 +408,40 @@ def main():
             with col3:
                 st.metric("엔진 MD 길이", f"{len(result['rag_markdown'])}자")
                 st.metric("리뷰 MD 길이", f"{len(review_markdown)}자")
+            
+            # ✅ Phase 0.8: 서브청킹 통계
+            if annex_chunks:
+                st.divider()
+                st.subheader("🎉 Phase 0.8: Annex 서브청킹")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.metric("Annex 서브청크", len(annex_chunks))
+                    
+                    # 타입별 분포
+                    type_counts = {}
+                    for chunk in annex_chunks:
+                        ctype = chunk['metadata']['section_type']
+                        type_counts[ctype] = type_counts.get(ctype, 0) + 1
+                    
+                    st.write("**타입 분포:**")
+                    for ctype, count in sorted(type_counts.items()):
+                        st.write(f"- {ctype}: {count}개")
+                
+                with col2:
+                    # 텍스트 손실률
+                    total_chars = sum(c['metadata']['char_count'] 
+                                     for c in annex_chunks)
+                    
+                    st.metric("서브청크 총 문자", f"{total_chars}자")
+                    
+                    # Before/After 비교
+                    st.write("**Before (0.7.5b):**")
+                    st.write("- Annex: 1개 (단일 청크)")
+                    
+                    st.write("**After (0.8):**")
+                    st.write(f"- Annex: {len(annex_chunks)}개 (서브청킹)")
         
         with tabs[1]:
             st.subheader("🤖 RAG용 Markdown (엔진)")
@@ -427,6 +456,20 @@ def main():
         
         with tabs[2]:
             st.subheader("🤖 RAG용 JSON (청크)")
+            
+            # ✅ Phase 0.8: 서브청킹 하이라이트
+            if annex_chunks:
+                st.success(f"✨ Phase 0.8: Annex 서브청킹 적용 ({len(annex_chunks)}개)")
+                
+                # 서브청크만 먼저 표시
+                st.write("**Annex 서브청크:**")
+                for i, chunk in enumerate(annex_chunks):
+                    with st.expander(f"{i+1}. {chunk['metadata']['section_type']} ({chunk['metadata']['char_count']}자)"):
+                        st.json(chunk)
+                
+                st.divider()
+            
+            st.write("**전체 청크:**")
             st.json(result['chunks'])
             
             st.download_button(
