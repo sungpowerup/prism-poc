@@ -4,7 +4,7 @@ Annex 서브청킹 UI 통합
 
 Author: 마창수산팀
 Date: 2025-11-17
-Version: Phase 0.8
+Version: Phase 0.8 - 긴급 수정
 """
 
 import streamlit as st
@@ -243,7 +243,7 @@ def process_document_vlm_mode(pdf_path: str, pdf_text: str):
 
 
 def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str):
-    """LawMode 파이프라인 (Phase 0.8)"""
+    """LawMode 파이프라인 (Phase 0.8) - 긴급 수정"""
     
     st.info("📜 LawMode: 규정/법령 파싱 중...")
     progress_bar = st.progress(0)
@@ -253,12 +253,15 @@ def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str)
         st.info(f"📝 문서 프로파일: {profile.name}")
     
     parser = LawParser()
+    
+    # ✅ Phase 0.8: parser.parse() 직접 호출
     parsed_result = parser.parse(
         pdf_text=pdf_text,
         document_title=document_title,
         clean_artifacts=True,
         normalize_linebreaks=True
     )
+    
     progress_bar.progress(50)
     
     # ✅ Phase 0.8: 서브청킹 적용된 chunks
@@ -272,7 +275,7 @@ def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str)
     qa_result = qa_gate.validate(
         pdf_text=pdf_text,
         processed_text=rag_markdown,
-        source="lawmode"
+        source="law"
     )
     
     progress_bar.progress(100)
@@ -281,223 +284,133 @@ def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str)
         'rag_markdown': rag_markdown,
         'chunks': chunks,
         'qa_result': qa_result,
-        'is_qa_pass': qa_result.get('is_qa_pass', False),
-        'mode': 'LawMode',
+        'is_qa_pass': qa_result.get('is_pass', False),
         'parsed_result': parsed_result,
-        'base_markdown': rag_markdown
+        'mode': 'LawMode'
     }
 
 
 def main():
+    """메인 함수"""
+    
     st.set_page_config(
-        page_title="PRISM - Phase 0.8",
+        page_title="PRISM Phase 0.8",
         page_icon="🔷",
         layout="wide"
     )
     
-    st.title("🔷 PRISM - Phase 0.8")
-    st.caption("Annex 서브청킹 완료")
+    st.title("🔷 PRISM Phase 0.8 - Annex 서브청킹")
+    st.markdown("**Progressive Reasoning & Intelligence for Structured Materials**")
     
-    with st.sidebar:
-        st.header("⚙️ 설정")
-        
-        use_law_mode = st.checkbox(
-            "📜 LawMode 사용",
-            value=LAW_MODE_AVAILABLE,
-            disabled=not LAW_MODE_AVAILABLE
-        )
-        
-        if not LAW_MODE_AVAILABLE:
-            st.warning("⚠️ LawParser 미설치")
-        
-        st.divider()
-        
-        st.subheader("✨ Phase 0.8 새 기능")
-        st.success("✅ Annex 서브청킹")
-        st.info("청크가 의미 단위로 세분화됩니다")
-    
+    # 파일 업로드
     uploaded_file = st.file_uploader(
-        "📄 PDF 파일 업로드",
-        type=['pdf']
+        "PDF 파일을 업로드하세요",
+        type=['pdf'],
+        help="인사규정, 법령 등 규정 문서"
     )
     
     if not uploaded_file:
-        st.info("👆 PDF 파일을 업로드하세요")
+        st.info("👆 PDF 파일을 업로드하면 처리가 시작됩니다.")
         return
     
-    try:
-        pdf_path = safe_temp_path('.pdf')
-        with open(pdf_path, 'wb') as f:
-            f.write(uploaded_file.read())
-        
-        pdf_text = extract_pdf_text_layer(pdf_path)
-        
-        if not pdf_text:
-            st.error("❌ PDF 텍스트 추출 실패")
-            return
-        
-        base_filename = uploaded_file.name.rsplit('.', 1)[0]
-        
-        if use_law_mode:
-            result = process_document_law_mode(
-                pdf_path=pdf_path,
-                pdf_text=pdf_text,
-                document_title=uploaded_file.name
-            )
-        else:
-            result = process_document_vlm_mode(
-                pdf_path=pdf_path,
-                pdf_text=pdf_text
-            )
-        
-        st.success(f"✅ {result['mode']} 처리 완료!")
-        
-        match_rate = result['qa_result']['match_rate']
-        is_qa_pass = result['is_qa_pass']
-        
-        if is_qa_pass:
-            st.success(f"🎯 DualQA 통과: {match_rate:.1%}")
-        else:
-            st.warning(f"⚠️ DualQA 검토 필요: {match_rate:.1%}")
-        
-        # ✅ Phase 0.8: 서브청킹 통계
-        annex_chunks = [c for c in result['chunks'] 
-                       if c['metadata']['type'].startswith('annex_')]
-        
-        if annex_chunks:
-            st.info(f"🎉 Phase 0.8: Annex 서브청킹 {len(annex_chunks)}개 생성!")
-        
-        # 리뷰용 Markdown 생성
-        logger.info("📝 리뷰용 Markdown 생성 시작...")
-        
-        basic_review_md = to_review_md_basic(
-            result.get('chunks', []),
-            parsed_result=result.get('parsed_result'),
-            base_markdown=result.get('base_markdown')
-        )
-        
-        review_md_with_spacing = apply_law_spacing(basic_review_md)
-        
-        review_markdown = review_md_with_spacing
-        review_filename = f"{base_filename}_review.md"
-        
-        logger.info(f"✅ 리뷰용 Markdown 생성 완료: {len(review_markdown)}자")
-        
-        tab_names = [
-            "📊 요약",
-            "🤖 RAG용 Markdown",
-            "🤖 RAG용 JSON (✨서브청킹)",
-            "👤 리뷰용 Markdown"
-        ]
-        
-        tabs = st.tabs(tab_names)
-        
-        with tabs[0]:
-            st.subheader("📊 처리 요약")
+    # 처리 모드 선택
+    mode = st.radio(
+        "처리 모드 선택",
+        ["LawMode (규정/법령)", "VLM Mode (일반 문서)"],
+        help="LawMode: 조문 구조 파싱 | VLM Mode: 이미지 기반 처리"
+    )
+    
+    process_mode = "law" if "LawMode" in mode else "vlm"
+    
+    if st.button("🚀 처리 시작", type="primary"):
+        try:
+            # 임시 파일 저장
+            temp_pdf = safe_temp_path(uploaded_file.name)
+            with open(temp_pdf, 'wb') as f:
+                f.write(uploaded_file.getbuffer())
             
+            # PDF 텍스트 추출
+            pdf_text = extract_pdf_text_layer(str(temp_pdf))
+            
+            # 처리 모드 분기
+            if process_mode == "law":
+                result = process_document_law_mode(
+                    str(temp_pdf),
+                    pdf_text,
+                    uploaded_file.name
+                )
+            else:
+                result = process_document_vlm_mode(
+                    str(temp_pdf),
+                    pdf_text
+                )
+            
+            # 결과 표시
+            st.success(f"✅ 처리 완료 ({result['mode']})")
+            
+            # DualQA 결과
+            qa_result = result['qa_result']
+            if result['is_qa_pass']:
+                st.success(f"✅ DualQA 통과 (커버리지: {qa_result.get('coverage_pct', 0):.1f}%)")
+            else:
+                st.warning(f"⚠️ DualQA 경고 (커버리지: {qa_result.get('coverage_pct', 0):.1f}%)")
+            
+            # 청크 통계
+            st.subheader("📊 청크 통계")
+            chunks = result['chunks']
+            st.write(f"- 총 청크: {len(chunks)}개")
+            
+            # Phase 0.8: Annex 서브청크 강조
+            annex_chunks = [c for c in chunks if 'annex' in c.get('metadata', {}).get('type', '')]
+            if annex_chunks:
+                st.success(f"✅ Annex 서브청크: {len(annex_chunks)}개")
+            
+            # 다운로드 버튼
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                st.metric("처리 모드", result['mode'])
-                st.metric("DualQA 매칭률", f"{match_rate:.1%}")
+                st.download_button(
+                    label="📥 engine.md",
+                    data=result['rag_markdown'],
+                    file_name="engine.md",
+                    mime="text/markdown"
+                )
             
             with col2:
-                st.metric("QA 통과", "✅" if is_qa_pass else "⚠️")
-                st.metric("총 청크 수", len(result['chunks']))
+                st.download_button(
+                    label="📥 chunks.json",
+                    data=json.dumps(chunks, ensure_ascii=False, indent=2),
+                    file_name="chunks.json",
+                    mime="application/json"
+                )
             
             with col3:
-                st.metric("엔진 MD 길이", f"{len(result['rag_markdown'])}자")
-                st.metric("리뷰 MD 길이", f"{len(review_markdown)}자")
+                review_md = to_review_md_basic(
+                    chunks,
+                    result.get('parsed_result'),
+                    result['rag_markdown']
+                )
+                st.download_button(
+                    label="📥 review.md",
+                    data=review_md,
+                    file_name="review.md",
+                    mime="text/markdown"
+                )
             
-            # ✅ Phase 0.8: 서브청킹 통계
-            if annex_chunks:
-                st.divider()
-                st.subheader("🎉 Phase 0.8: Annex 서브청킹")
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.metric("Annex 서브청크", len(annex_chunks))
-                    
-                    # 타입별 분포
-                    type_counts = {}
-                    for chunk in annex_chunks:
-                        ctype = chunk['metadata']['section_type']
-                        type_counts[ctype] = type_counts.get(ctype, 0) + 1
-                    
-                    st.write("**타입 분포:**")
-                    for ctype, count in sorted(type_counts.items()):
-                        st.write(f"- {ctype}: {count}개")
-                
-                with col2:
-                    # 텍스트 손실률
-                    total_chars = sum(c['metadata']['char_count'] 
-                                     for c in annex_chunks)
-                    
-                    st.metric("서브청크 총 문자", f"{total_chars}자")
-                    
-                    # Before/After 비교
-                    st.write("**Before (0.7.5b):**")
-                    st.write("- Annex: 1개 (단일 청크)")
-                    
-                    st.write("**After (0.8):**")
-                    st.write(f"- Annex: {len(annex_chunks)}개 (서브청킹)")
+            # 미리보기
+            with st.expander("📄 engine.md 미리보기"):
+                st.markdown(result['rag_markdown'][:2000] + "..." if len(result['rag_markdown']) > 2000 else result['rag_markdown'])
+            
+            with st.expander("🔍 chunks.json 미리보기"):
+                st.json(chunks[:3])
+            
+            # 임시 파일 삭제
+            safe_remove(temp_pdf)
         
-        with tabs[1]:
-            st.subheader("🤖 RAG용 Markdown (엔진)")
-            st.code(result['rag_markdown'], language="markdown")
-            
-            st.download_button(
-                "💾 RAG용 Markdown 다운로드",
-                data=result['rag_markdown'],
-                file_name=f"{base_filename}_engine.md",
-                mime="text/markdown"
-            )
-        
-        with tabs[2]:
-            st.subheader("🤖 RAG용 JSON (청크)")
-            
-            # ✅ Phase 0.8: 서브청킹 하이라이트
-            if annex_chunks:
-                st.success(f"✨ Phase 0.8: Annex 서브청킹 적용 ({len(annex_chunks)}개)")
-                
-                # 서브청크만 먼저 표시
-                st.write("**Annex 서브청크:**")
-                for i, chunk in enumerate(annex_chunks):
-                    with st.expander(f"{i+1}. {chunk['metadata']['section_type']} ({chunk['metadata']['char_count']}자)"):
-                        st.json(chunk)
-                
-                st.divider()
-            
-            st.write("**전체 청크:**")
-            st.json(result['chunks'])
-            
-            st.download_button(
-                "💾 청크 JSON 다운로드",
-                data=json.dumps(result['chunks'], ensure_ascii=False, indent=2),
-                file_name=f"{base_filename}_chunks.json",
-                mime="application/json"
-            )
-        
-        with tabs[3]:
-            st.subheader("👤 리뷰용 Markdown")
-            st.code(review_markdown, language="markdown")
-            
-            st.download_button(
-                "💾 리뷰용 Markdown 다운로드",
-                data=review_markdown,
-                file_name=review_filename,
-                mime="text/markdown"
-            )
-        
-        safe_remove(pdf_path)
-        
-    except Exception as e:
-        logger.error(f"❌ 처리 실패: {e}")
-        st.error(f"❌ 처리 실패: {e}")
-        import traceback
-        st.code(traceback.format_exc())
+        except Exception as e:
+            logger.error(f"❌ 처리 실패: {e}", exc_info=True)
+            st.error(f"❌ 처리 실패: {e}")
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
