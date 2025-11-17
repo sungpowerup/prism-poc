@@ -1,17 +1,10 @@
 """
-app.py - PRISM Phase 0.7 룰 미세조정 완료
+app.py - PRISM Phase 0.7.5b Final
+Annex Fallback + Review MD 완성
 
-✅ 4대 핵심 조정:
-1. 조사 앞 공백 제거 (직원에게 ✅)
-2. 숫자/단위 사이 공백 최적화 (100만원 ✅)
-3. 조문/표 제목 패턴 보정 (제5조의2 ✅)
-4. 표 아래 주석 줄바꿈 안정화 (※ 비고 ✅)
-
-✅ 표 문서 테스트 준비 완료
-
-Author: 마창수산팀 + CEO + GPT 피드백
-Date: 2025-11-15
-Version: Phase 0.7 Final
+Author: 마창수산팀
+Date: 2025-11-16
+Version: Phase 0.7.5b
 """
 
 import streamlit as st
@@ -67,7 +60,7 @@ except ImportError:
     PROFILE_AVAILABLE = False
     logger.warning("⚠️ DocumentProfile 미설치")
 
-# LLM Rewriter Import (Phase 0.9)
+# LLM Rewriter Import
 try:
     sys.path.insert(0, str(Path(__file__).parent / 'tests'))
     from llm_rewriter import LLMRewriter
@@ -78,142 +71,48 @@ except ImportError as e:
     logger.warning(f"⚠️ LLMRewriter 미설치: {e}")
 
 
-# ============================================
-# Phase 0.7: 룰 기반 띄어쓰기 (미세조정 완료)
-# ============================================
-
 LAW_SPACING_KEYWORDS = [
     "임용", "승진", "보수", "복무", "징계", "퇴직",
     "채용", "인사", "직원", "공사", "수습", "결격사유",
     "규정", "조직", "문화", "역량", "태도", "개선"
 ]
 
+
 def apply_law_spacing(text: str) -> str:
-    """
-    Phase 0.7: 룰 기반 띄어쓰기 (미세조정 완료)
+    """Phase 0.7 룰 기반 띄어쓰기 (미세조정)"""
     
-    ✅ 4대 핵심 조정:
-    1. 조사 앞 공백 제거 (직원에게 ✅)
-    2. 숫자/단위 사이 공백 최적화 (100만원 ✅)
-    3. 조문/표 제목 패턴 보정 (제5조의2 ✅)
-    4. 표 아래 주석 줄바꿈 안정화 (※ 비고 ✅)
+    logger.info("   ✅ 조문/표 제목 패턴 보정 시작")
+    text = re.sub(r"제\s*(\d+)\s*조\s*의\s*(\d+)", r"제\1조의\2", text)
+    text = re.sub(r"제\s*(\d+)\s*조", r"제\1조", text)
+    text = re.sub(r"표\s*(\d+)", r"표\1", text)
+    text = re.sub(r"\[별표\s*(\d+)\]", r"[별표\1]", text)
+    logger.info("   ✅ 조문/표 제목 패턴 보정 완료")
     
-    Args:
-        text: 엔진 텍스트 (띄어쓰기 없는 상태)
+    logger.info("   ✅ 숫자/단위 공백 최적화 시작")
+    text = re.sub(r"(\d+)\s*(만원|억원|천원|원)", r"\1\2", text)
+    text = re.sub(r"(\d+)\s*(명|개|건|회|년|월|일)", r"\1\2", text)
+    text = re.sub(r"(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})", r"\1.\2.\3", text)
+    logger.info("   ✅ 숫자/단위 공백 최적화 완료")
     
-    Returns:
-        띄어쓰기 적용된 텍스트 (리뷰용)
-    """
-    
-    # ==========================================
-    # 1단계: 대표 패턴 치환 (변경 없음)
-    # ==========================================
-    replacements = {
-        "이규정은한국농어촌공사직원": "이 규정은 한국농어촌공사 직원",
-        "이규정은한국농어촌공사": "이 규정은 한국농어촌공사",
-        "한국농어촌공사직원": "한국농어촌공사 직원",
-        "임용승진보수복무징계퇴직": "임용 승진 보수 복무 징계 퇴직",
-        "임용승진보수복무": "임용 승진 보수 복무",
-        "보직승진신분보장상벌인사고과": "보직 승진 신분보장 상벌 인사고과",
-        "인사관리의기준": "인사관리의 기준",
-        "인사관리를": "인사관리를 ",
-        "직원에게적용할": "직원에게 적용할",
-        "적용할인사관리": "적용할 인사관리",
-    }
-    
-    for k, v in replacements.items():
-        text = text.replace(k, v)
-    
-    # ==========================================
-    # 2단계: 조문/표 제목 패턴 보정 (✅ 조정 3)
-    # ==========================================
-    
-    # 조문 번호 패턴 고정 (예: 제5조의2)
-    text = re.sub(r"제\s?(\d+)\s?조\s?의\s?(\d+)", r"제\1조의\2", text)
-    text = re.sub(r"제\s?(\d+)\s?조", r"제\1조", text)
-    
-    # 표 제목 패턴 고정
-    # [표1], <표 3>, 표 2), 표1 등을 "표N" 형태로 통일
-    text = re.sub(r"[\[\<]?\s?표\s?(\d+)\s?[\]\>\)]?", r"표\1", text)
-    
-    # 장 번호 패턴 고정 (예: 제1장)
-    text = re.sub(r"제\s?(\d+)\s?장", r"제\1장", text)
-    
-    logger.info("✅ 조문/표 제목 패턴 보정 완료")
-    
-    # ==========================================
-    # 3단계: 숫자/단위 사이 공백 최적화 (✅ 조정 2)
-    # ==========================================
-    
-    # 숫자 + 단위는 절대 띄우지 않음
-    # 예: 100만원, 50명, 3페이지, 5년, 2급
-    units = ["만원", "원", "명", "건", "페이지", "부서", "년", "개월", "급", "조"]
-    for unit in units:
-        text = re.sub(rf"(\d+)\s+{unit}", rf"\1{unit}", text)
-    
-    # 날짜 패턴 보정 (예: 2024.1.1)
-    text = re.sub(r"(\d{4})\s?\.\s?(\d{1,2})\s?\.\s?(\d{1,2})", r"\1.\2.\3", text)
-    
-    logger.info("✅ 숫자/단위 공백 최적화 완료")
-    
-    # ==========================================
-    # 4단계: 조사 처리 (✅ 조정 1)
-    # ==========================================
-    
-    # 조사 앞 공백 제거 + 조사 뒤 공백 추가
-    # 기존: "직원에 게" (X)
-    # 개선: "직원에게 " (O)
-    
-    # 주요 조사 목록
+    logger.info("   ✅ 조사 앞 공백 제거 시작")
     josa_list = ["은", "는", "이", "가", "을", "를", "과", "와", "에", "에서", "에게", "로", "으로"]
-    
-    # 조사 패턴: (한글+)(조사)(한글)
-    # → 조사는 앞 글자와 붙이고, 뒤 글자는 띄움
     for josa in josa_list:
-        # "글자+조사+글자" → "글자조사 글자"
         text = re.sub(rf"([가-힣]+)\s?{josa}\s?([가-힣])", rf"\1{josa} \2", text)
+    logger.info("   ✅ 조사 앞 공백 제거 완료")
     
-    logger.info("✅ 조사 앞 공백 제거 완료")
-    
-    # ==========================================
-    # 5단계: 표 주석 줄바꿈 안정화 (✅ 조정 4)
-    # ==========================================
-    
-    # 표 주석 시작 문자 보호
-    # ※, 비고:, (, 단, 등은 강제 줄바꿈 유지
-    
-    # 주석 시작 패턴
-    comment_patterns = ["※", "비고:", "주:", "\\(", "단,", "다만,"]
-    
-    for pattern in comment_patterns:
-        # 주석 앞에 줄바꿈 보장
-        text = re.sub(rf"([^\n]){pattern}", rf"\1\n{pattern}", text)
-    
-    logger.info("✅ 표 주석 줄바꿈 안정화 완료")
-    
-    # ==========================================
-    # 6단계: 키워드 앞 공백 (변경 없음)
-    # ==========================================
+    logger.info("   ✅ 표 주석 줄바꿈 안정화 시작")
+    comment_starters = ["※", "비고:", "주:", "단,", "다만,"]
+    for starter in comment_starters:
+        escaped = re.escape(starter)
+        text = re.sub(rf"([^\n]){escaped}", rf"\1\n{starter}", text)
+    logger.info("   ✅ 표 주석 줄바꿈 안정화 완료")
     
     for kw in LAW_SPACING_KEYWORDS:
-        # 앞에 한글/숫자가 있고 키워드가 오면 공백 삽입
         text = re.sub(rf"([가-힣0-9]){kw}", rf"\1 {kw}", text)
     
-    # ==========================================
-    # 7단계: 문장부호 뒤 공백 (변경 없음)
-    # ==========================================
-    
-    # "다.이 규정은" → "다. 이 규정은"
     text = re.sub(r"([\.!?])([가-힣0-9])", r"\1 \2", text)
-    
-    # ==========================================
-    # 8단계: 공백 정리 (변경 없음)
-    # ==========================================
-    
-    # 연속 공백 제거
     text = re.sub(r"[ ]{2,}", " ", text)
     
-    # 줄 단위 좌우 공백 제거
     lines = []
     for line in text.splitlines():
         cleaned = line.strip()
@@ -222,29 +121,45 @@ def apply_law_spacing(text: str) -> str:
     
     text = "\n".join(lines)
     
-    logger.info("✅ Phase 0.7 룰 기반 띄어쓰기 적용 완료 (미세조정)")
+    logger.info("   ✅ Phase 0.7 룰 기반 띄어쓰기 적용 완료")
     
     return text
 
 
-# ============================================
-# 헬퍼 함수
-# ============================================
-
-def to_review_md_basic(chunks: list) -> str:
+def to_review_md_basic(
+    chunks: list,
+    parsed_result: dict = None,
+    base_markdown: str = None
+) -> str:
     """
-    청크 → 리뷰용 Markdown 변환 (룰 기반)
+    청크/파싱 결과 → 리뷰용 Markdown
     
-    **Case 1: LLM Rewriting = OFF**
-    - Phase 0.7 룰 기반 띄어쓰기
-    - 원문 의미 100% 유지
+    ✅ Phase 0.7.5b: LawParser 마크다운 우선
+    
+    Args:
+        chunks: 청크 리스트
+        parsed_result: LawParser 파싱 결과
+        base_markdown: 이미 생성된 마크다운
     """
+    # 1) base_markdown 최우선
+    if base_markdown:
+        logger.info("   📋 base_markdown 사용")
+        return base_markdown
+    
+    # 2) parsed_result로 LawParser 마크다운 생성
+    if parsed_result is not None:
+        logger.info("   📋 LawParser 마크다운 생성")
+        parser = LawParser()
+        return parser.to_markdown(parsed_result)
+    
+    # 3) 백업: chunks 조합
+    logger.info("   📋 chunks 조합 (백업)")
     lines = []
     
     for chunk in chunks:
-        meta = chunk['metadata']
         content = chunk['content']
-        chunk_type = meta.get('type', 'unknown')
+        meta = chunk['metadata']
+        chunk_type = meta.get('type', '')
         
         if chunk_type == 'title':
             lines.append(f"# {content}")
@@ -253,9 +168,7 @@ def to_review_md_basic(chunks: list) -> str:
         elif chunk_type == 'amendment_history':
             lines.append("## 개정 이력")
             lines.append("")
-            amendments = content.split()
-            for amendment in amendments:
-                lines.append(f"- {amendment}")
+            lines.append(f"- {content}")
             lines.append("")
         
         elif chunk_type == 'basic':
@@ -276,21 +189,24 @@ def to_review_md_basic(chunks: list) -> str:
             lines.append(f"### {article_num}({article_title})")
             lines.append("")
             
-            # 본문만 추출 (헤더 제외)
             body = content.split('\n', 1)[-1] if '\n' in content else content
             lines.append(body)
             lines.append("")
+        
+        elif chunk_type == 'annex':
+            annex_title = meta.get('title', '별표/부록')
+            annex_no = meta.get('annex_no')
+            
+            if annex_no:
+                lines.append(f"## [별표 {annex_no}] {annex_title}")
+            else:
+                lines.append(f"## {annex_title}")
+            
+            lines.append("")
+            lines.append(content)
+            lines.append("")
     
     return "\n".join(lines)
-
-
-def to_review_md_llm(rewritten_chunks: list) -> str:
-    """
-    리라이팅된 청크 → 리뷰용 Markdown 변환
-    
-    **Case 2: LLM Rewriting = ON**
-    """
-    return to_review_md_basic(rewritten_chunks)
 
 
 def process_document_vlm_mode(pdf_path: str, pdf_text: str):
@@ -328,8 +244,8 @@ def process_document_vlm_mode(pdf_path: str, pdf_text: str):
         progress_bar.progress(100)
         
         return {
-            'rag_markdown': markdown_text,  # RAG용 Markdown (불변)
-            'chunks': chunks,  # RAG용 JSON (불변)
+            'rag_markdown': markdown_text,
+            'chunks': chunks,
             'qa_result': qa_result,
             'is_qa_pass': qa_result.get('is_pass', False),
             'mode': 'VLM'
@@ -341,7 +257,7 @@ def process_document_vlm_mode(pdf_path: str, pdf_text: str):
 
 
 def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str):
-    """LawMode 파이프라인"""
+    """LawMode 파이프라인 (Phase 0.7.5b)"""
     
     st.info("📜 LawMode: 규정/법령 파싱 중...")
     progress_bar = st.progress(0)
@@ -375,39 +291,33 @@ def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str)
     progress_bar.progress(100)
     
     return {
-        'rag_markdown': rag_markdown,  # RAG용 Markdown (불변)
-        'chunks': chunks,  # RAG용 JSON (불변)
+        'rag_markdown': rag_markdown,
+        'chunks': chunks,
         'qa_result': qa_result,
         'is_qa_pass': qa_result.get('is_pass', False),
         'mode': 'LawMode',
-        'parsed_result': parsed_result
+        'parsed_result': parsed_result,
+        'base_markdown': rag_markdown
     }
 
 
-# ============================================
-# Streamlit UI
-# ============================================
-
 def main():
     st.set_page_config(
-        page_title="PRISM - Phase 0.7 Final",
+        page_title="PRISM - Phase 0.7.5b",
         page_icon="🔷",
         layout="wide"
     )
     
-    st.title("🔷 PRISM - Phase 0.7 미세조정 완료")
-    st.caption("표 테스트 준비 완료 (4대 핵심 조정 적용)")
+    st.title("🔷 PRISM - Phase 0.7.5b Final")
+    st.caption("Annex Fallback + Review MD 완성")
     
-    # 사이드바: 설정
     with st.sidebar:
         st.header("⚙️ 설정")
         
-        # LawMode 토글
         use_law_mode = st.checkbox(
-            "📜 LawMode 사용 (규정/법령 전용)",
+            "📜 LawMode 사용",
             value=LAW_MODE_AVAILABLE,
-            disabled=not LAW_MODE_AVAILABLE,
-            help="PDF 텍스트 기반 정확한 조문 추출"
+            disabled=not LAW_MODE_AVAILABLE
         )
         
         if not LAW_MODE_AVAILABLE:
@@ -415,79 +325,18 @@ def main():
         
         st.divider()
         
-        # LLM Rewriting 설정 (비활성화)
         st.subheader("✨ 리뷰용 MD 모드")
-        
-        # LLM Rewriting 일단 비활성화 (오류 수정 후 재활성화)
-        enable_llm_rewrite = False
-        st.info("⚠️ LLM Rewriting은 현재 비활성화되어 있습니다")
-        st.info("✅ Phase 0.7 룰 기반 띄어쓰기만 사용")
-        
-        st.divider()
-        
-        # 4대 핵심 조정 설명
-        with st.expander("🔧 Phase 0.7 미세조정 (4대 핵심)"):
-            st.markdown("""
-            ### ✅ 1. 조사 앞 공백 제거
-            - Before: "직원에 게"
-            - After: "직원에게"
-            
-            ### ✅ 2. 숫자/단위 공백 최적화
-            - Before: "100 만원", "50 명"
-            - After: "100만원", "50명"
-            
-            ### ✅ 3. 조문/표 제목 패턴 보정
-            - Before: "제 5 조의 2", "표 1"
-            - After: "제5조의2", "표1"
-            
-            ### ✅ 4. 표 주석 줄바꿈 안정화
-            - "※", "비고:", "단," 등 강제 줄바꿈
-            - 표와 주석 분리 보장
-            
-            ---
-            
-            **표 문서 테스트 준비 완료!**
-            """)
+        st.info("✅ Phase 0.7 룰 기반 띄어쓰기")
     
-    # 파일 업로드
     uploaded_file = st.file_uploader(
         "📄 PDF 파일 업로드",
-        type=['pdf'],
-        help="규정/법령 문서 권장 (LawMode)"
+        type=['pdf']
     )
     
     if not uploaded_file:
         st.info("👆 PDF 파일을 업로드하세요")
-        
-        # Before/After 예시
-        st.markdown("---")
-        st.markdown("## 📊 Phase 0.7 미세조정 효과")
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("### Before (조정 전)")
-            st.code("""
-직원에 게 적용할
-100 만원 이상
-제 5 조의 2
-표 1 채용 절차
-            """, language="text")
-            st.error("❌ 과도한 띄어쓰기")
-        
-        with col2:
-            st.markdown("### After (조정 후)")
-            st.code("""
-직원에게 적용할
-100만원 이상
-제5조의2
-표1 채용 절차
-            """, language="text")
-            st.success("✅ 자연스러운 띄어쓰기")
-        
         return
     
-    # 문서 처리
     try:
         pdf_path = safe_temp_path('.pdf')
         with open(pdf_path, 'wb') as f:
@@ -499,10 +348,8 @@ def main():
             st.error("❌ PDF 텍스트 추출 실패")
             return
         
-        # 파일명 준비
         base_filename = uploaded_file.name.rsplit('.', 1)[0]
         
-        # 처리 모드 선택
         if use_law_mode:
             result = process_document_law_mode(
                 pdf_path=pdf_path,
@@ -515,25 +362,25 @@ def main():
                 pdf_text=pdf_text
             )
         
-        # 결과 표시
         st.success(f"✅ {result['mode']} 처리 완료!")
         
-        # QA 결과
         match_rate = result['qa_result']['match_rate']
         is_qa_pass = result['is_qa_pass']
         
         if is_qa_pass:
-            st.success(f"🎯 DualQA 통과: {match_rate:.1%} 매칭")
+            st.success(f"🎯 DualQA 통과: {match_rate:.1%}")
         else:
-            st.warning(f"⚠️ DualQA 검토 필요: {match_rate:.1%} 매칭")
+            st.warning(f"⚠️ DualQA 검토 필요: {match_rate:.1%}")
         
-        # ✅ 리뷰용 Markdown 생성 (Phase 0.7 미세조정)
+        # ✅ Phase 0.7.5b: 리뷰용 Markdown 생성
         logger.info("📝 리뷰용 Markdown 생성 시작...")
         
-        # 기본 리뷰 MD (띄어쓰기 없음)
-        basic_review_md = to_review_md_basic(result['chunks'])
+        basic_review_md = to_review_md_basic(
+            result.get('chunks', []),
+            parsed_result=result.get('parsed_result'),
+            base_markdown=result.get('base_markdown')
+        )
         
-        # ✅ Phase 0.7 룰 기반 띄어쓰기 적용 (미세조정)
         review_md_with_spacing = apply_law_spacing(basic_review_md)
         
         review_markdown = review_md_with_spacing
@@ -541,10 +388,8 @@ def main():
         
         logger.info(f"✅ 리뷰용 Markdown 생성 완료: {len(review_markdown)}자")
         
-        # ✅ 탭 구조
         tab_names = [
             "📊 요약",
-            "📝 원본 PDF",
             "🤖 RAG용 Markdown",
             "🤖 RAG용 JSON",
             "👤 리뷰용 Markdown"
@@ -552,7 +397,6 @@ def main():
         
         tabs = st.tabs(tab_names)
         
-        # Tab 1: 요약
         with tabs[0]:
             st.subheader("📊 처리 요약")
             
@@ -567,117 +411,42 @@ def main():
                 st.metric("총 청크 수", len(result['chunks']))
             
             with col3:
-                if result['mode'] == 'LawMode' and 'parsed_result' in result:
-                    parsed = result['parsed_result']
-                    st.metric("장 수", parsed['total_chapters'])
-                    st.metric("조문 수", parsed['total_articles'])
+                st.metric("엔진 MD 길이", f"{len(result['rag_markdown'])}자")
+                st.metric("리뷰 MD 길이", f"{len(review_markdown)}자")
         
-        # Tab 2: 원본 PDF
         with tabs[1]:
-            st.subheader("📝 원본 PDF 텍스트")
-            st.info("⚠️ 법적 효력을 가지는 기준 텍스트입니다")
+            st.subheader("🤖 RAG용 Markdown (엔진)")
+            st.code(result['rag_markdown'], language="markdown")
             
-            st.text_area(
-                "PDF 추출 원본",
-                value=pdf_text[:3000] + "..." if len(pdf_text) > 3000 else pdf_text,
-                height=400
-            )
-            
-            st.download_button(
-                "💾 원본 텍스트 다운로드",
-                data=pdf_text,
-                file_name=f"{base_filename}_original.txt",
-                mime="text/plain"
-            )
-        
-        # Tab 3: RAG용 Markdown (불변)
-        with tabs[2]:
-            st.subheader("🤖 RAG용 Markdown (엔진 디버깅)")
-            st.info("🔍 엔진이 생성한 원문 보존 텍스트 (❌ 절대 불변)")
-            
-            # Markdown 미리보기
-            preview = result['rag_markdown'][:2000] + "..." if len(result['rag_markdown']) > 2000 else result['rag_markdown']
-            st.markdown(preview)
-            
-            # 다운로드
             st.download_button(
                 "💾 RAG용 Markdown 다운로드",
                 data=result['rag_markdown'],
                 file_name=f"{base_filename}_engine.md",
-                mime="text/markdown",
-                help="엔진 디버깅용 (불변)"
+                mime="text/markdown"
             )
         
-        # Tab 4: RAG용 JSON (불변)
-        with tabs[3]:
-            st.subheader("🤖 RAG용 JSON (인덱싱)")
-            st.info("🔍 RAG 시스템 입력 데이터 (❌ 절대 불변)")
-            
-            # 청크 타입별 통계
-            chunk_types = {}
-            for chunk in result['chunks']:
-                chunk_type = chunk['metadata'].get('type', 'unknown')
-                chunk_types[chunk_type] = chunk_types.get(chunk_type, 0) + 1
-            
-            st.markdown("### 📊 청크 타입별 통계")
-            cols = st.columns(len(chunk_types))
-            for i, (chunk_type, count) in enumerate(chunk_types.items()):
-                cols[i].metric(chunk_type, count)
-            
-            # 샘플 청크
-            st.markdown("### 📄 샘플 청크")
-            if result['chunks']:
-                st.json(result['chunks'][0])
-            
-            # 다운로드
-            chunks_json = json.dumps(result['chunks'], ensure_ascii=False, indent=2)
+        with tabs[2]:
+            st.subheader("🤖 RAG용 JSON (청크)")
+            st.json(result['chunks'])
             
             st.download_button(
-                "💾 RAG용 JSON 다운로드",
-                data=chunks_json,
+                "💾 청크 JSON 다운로드",
+                data=json.dumps(result['chunks'], ensure_ascii=False, indent=2),
                 file_name=f"{base_filename}_chunks.json",
-                mime="application/json",
-                help="RAG 인덱싱용 (불변)"
+                mime="application/json"
             )
         
-        # Tab 5: 리뷰용 Markdown (미세조정 적용)
-        with tabs[4]:
-            st.subheader("👤 리뷰용 Markdown (Phase 0.7 미세조정)")
-            st.success("✅ Phase 0.7 미세조정 (4대 핵심) 적용됨")
+        with tabs[3]:
+            st.subheader("👤 리뷰용 Markdown")
+            st.code(review_markdown, language="markdown")
             
-            # Before/After 비교
-            st.markdown("### 📊 미세조정 적용 비교")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown("**Before (조정 전):**")
-                before_sample = basic_review_md.split('\n\n')[3] if len(basic_review_md.split('\n\n')) > 3 else basic_review_md[:300]
-                st.text_area("", value=before_sample[:300], height=200, key="before", label_visibility="collapsed")
-                st.caption("❌ 과도한 띄어쓰기")
-            
-            with col2:
-                st.markdown("**After (조정 후):**")
-                after_sample = review_markdown.split('\n\n')[3] if len(review_markdown.split('\n\n')) > 3 else review_markdown[:300]
-                st.text_area("", value=after_sample[:300], height=200, key="after", label_visibility="collapsed")
-                st.caption("✅ 자연스러운 띄어쓰기")
-            
-            # Markdown 미리보기
-            st.markdown("---")
-            st.markdown("### 📄 전체 미리보기")
-            preview = review_markdown[:2000] + "..." if len(review_markdown) > 2000 else review_markdown
-            st.markdown(preview)
-            
-            # 다운로드
             st.download_button(
                 "💾 리뷰용 Markdown 다운로드",
                 data=review_markdown,
                 file_name=review_filename,
-                mime="text/markdown",
-                help="사람용 가독성 (Phase 0.7 미세조정)"
+                mime="text/markdown"
             )
         
-        # 정리
         safe_remove(pdf_path)
         
     except Exception as e:

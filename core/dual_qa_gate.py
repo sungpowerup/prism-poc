@@ -1,15 +1,15 @@
 """
 dual_qa_gate.py - PDF ↔ VLM/LawMode 이중 검증
-Phase 0.6 "Elegance & Refinement"
+Phase 0.7.5 Annex Fallback (긴급 핫픽스)
 
-✅ Phase 0.6 개선 (GPT 피드백):
-- source 파라미터 추가 ("vlm" | "lawmode")
-- 로그에 [PDF] vs [LawMode] 명확한 prefix
-- 새벽 2시 디버깅 편의성 극대화
+✅ Phase 0.7.5 핫픽스:
+- 텍스트 커버리지 기반 QA 추가
+- Annex 페이지: 조문 0개 + 텍스트 90%+ → 통과
+- 로그 개선: coverage 표시
 
-Author: 정수아 (QA Lead) + GPT 설계
-Date: 2025-11-14
-Version: Phase 0.6
+Author: 정수아 (QA Lead) + GPT + CEO 피드백
+Date: 2025-11-16
+Version: Phase 0.7.5 Annex Fallback
 """
 
 import re
@@ -18,27 +18,23 @@ from typing import Dict, Any, Set, Literal
 
 logger = logging.getLogger(__name__)
 
-# ✅ Phase 0.6: Source 타입 정의 (GPT 권장)
 SourceType = Literal["vlm", "lawmode"]
 
 
 class DualQAGate:
     """
-    Phase 0.6 DualQA Gate
+    Phase 0.7.5 DualQA Gate
     
-    ✅ Phase 0.6 개선:
-    - source 파라미터: "vlm" | "lawmode"
-    - 로그 prefix: [PDF] vs [VLM] or [LawMode]
-    - 디버깅 편의성 극대화
+    ✅ Phase 0.7.5: Annex Fallback 지원
+    - 텍스트 커버리지 기반 QA 추가
+    - 조문 0개 + 텍스트 90%+ → 통과
     """
     
-    # 조문 헤더 패턴 (Strict)
     ARTICLE_STRICT = re.compile(
         r'제\s*(\d+)\s*조(?:의\s*(\d+))?\s*\(',
         re.MULTILINE
     )
     
-    # 조문 헤더 패턴 (Loose)
     ARTICLE_LOOSE = re.compile(
         r'제\s*(\d+)\s*조(?:의\s*(\d+))?(?=\s|$)',
         re.MULTILINE
@@ -46,42 +42,45 @@ class DualQAGate:
     
     def __init__(self):
         """초기화"""
-        logger.info("✅ DualQA Gate 초기화 (Phase 0.6)")
+        logger.info("✅ DualQA Gate 초기화 (Phase 0.7.5 Annex Fallback)")
     
     def validate(
         self,
         pdf_text: str,
         processed_text: str,
-        source: SourceType = "vlm",  # ✅ Phase 0.6: 소스 명시 (GPT 권장)
-        min_match_rate: float = 0.95
+        source: SourceType = "vlm",
+        min_match_rate: float = 0.95,
+        min_coverage: float = 0.90  # ✅ Phase 0.7.5: 텍스트 커버리지 임계값
     ) -> Dict[str, Any]:
         """
-        ✅ Phase 0.6: PDF ↔ 처리된 텍스트 이중 검증
+        ✅ Phase 0.7.5: PDF ↔ 처리된 텍스트 이중 검증 (Annex Fallback 지원)
         
         Args:
             pdf_text: PDF 원본 텍스트
             processed_text: VLM 또는 LawMode로 처리된 텍스트
-            source: "vlm" 또는 "lawmode" (GPT 권장 - 로그 명확화)
+            source: "vlm" 또는 "lawmode"
             min_match_rate: 최소 매칭률 (기본: 0.95)
+            min_coverage: 최소 텍스트 커버리지 (기본: 0.90) - ✅ Phase 0.7.5
         
         Returns:
             {
                 'pdf_articles': Set[str],
                 'processed_articles': Set[str],
                 'matched': Set[str],
-                'missing_in_processed': Set[str],  # ✅ Phase 0.6: 명확화
-                'extra_in_processed': Set[str],  # ✅ Phase 0.6: 명확화
+                'missing_in_processed': Set[str],
+                'extra_in_processed': Set[str],
                 'match_rate': float,
+                'text_coverage': float,  # ✅ Phase 0.7.5
                 'qa_flags': List[str],
                 'is_pass': bool
             }
         """
-        # ✅ Phase 0.6: 소스 레이블 (GPT 권장 - 새벽 2시 디버깅용)
         source_label = "VLM" if source == "vlm" else "LawMode"
         
-        logger.info("🔬 DualQA 검증 시작 (Phase 0.6)")
+        logger.info("🔬 DualQA 검증 시작 (Phase 0.7.5 Annex Fallback)")
         logger.info(f"   📊 소스: {source_label}")
         logger.info(f"   📏 최소 매칭률: {min_match_rate*100:.1f}%")
+        logger.info(f"   📏 최소 커버리지: {min_coverage*100:.1f}%")  # ✅ Phase 0.7.5
         
         # 1. PDF 조문 헤더 추출
         pdf_articles = self._extract_article_headers(pdf_text, source="PDF")
@@ -89,7 +88,7 @@ class DualQAGate:
         # 2. 처리된 텍스트 조문 헤더 추출
         processed_articles = self._extract_article_headers(
             processed_text, 
-            source=source_label  # ✅ Phase 0.6: 로그에 실제 소스명 표시
+            source=source_label
         )
         
         # 3. 매칭
@@ -103,23 +102,54 @@ class DualQAGate:
         else:
             match_rate = 0.0
         
+        # ✅ Phase 0.7.5: 텍스트 커버리지 계산
+        pdf_len = len(pdf_text.strip())
+        processed_len = len(processed_text.strip())
+        
+        if pdf_len > 0:
+            text_coverage = processed_len / pdf_len
+        else:
+            text_coverage = 0.0
+        
+        logger.info(f"   📊 텍스트 커버리지: {text_coverage:.1%} ({processed_len} / {pdf_len}자)")
+        
         # 5. QA 플래그
         qa_flags = []
         
-        if match_rate < min_match_rate:
-            qa_flags.append('low_match_rate')
+        # ✅ Phase 0.7.5: Annex 모드 판단
+        is_annex_mode = (len(pdf_articles) == 0 and pdf_len > 500)
         
-        if missing_in_processed:
-            qa_flags.append('processed_missing_articles')  # ✅ Phase 0.6: 명확한 이름
+        if is_annex_mode:
+            logger.info(f"   🔄 Annex 모드 감지 (조문 0개 + 텍스트 {pdf_len}자)")
+            
+            # Annex 모드: 텍스트 커버리지 기반 QA
+            if text_coverage < min_coverage:
+                qa_flags.append('low_coverage')
+                logger.error(f"      ❌ 텍스트 커버리지 부족: {text_coverage:.1%} < {min_coverage:.1%}")
+            else:
+                logger.info(f"      ✅ Annex 모드 QA 통과 (커버리지: {text_coverage:.1%})")
         
-        if extra_in_processed:
-            qa_flags.append('processed_extra_articles')  # ✅ Phase 0.6: 명확한 이름
+        else:
+            # 법조문 모드: 기존 로직
+            if match_rate < min_match_rate:
+                qa_flags.append('low_match_rate')
+            
+            if missing_in_processed:
+                qa_flags.append('processed_missing_articles')
+            
+            if extra_in_processed:
+                qa_flags.append('processed_extra_articles')
         
         # 6. 통과 여부
-        is_pass = (match_rate >= min_match_rate and len(qa_flags) == 0)
+        if is_annex_mode:
+            # Annex 모드: 텍스트 커버리지만 체크
+            is_pass = (text_coverage >= min_coverage)
+        else:
+            # 법조문 모드: 기존 로직
+            is_pass = (match_rate >= min_match_rate and len(qa_flags) == 0)
         
-        # ✅ Phase 0.6: 로그 출력 (GPT 권장 - [PDF] vs [소스] 명확화)
-        logger.info("✅ DualQA 검증 완료 (Phase 0.6):")
+        # 로그 출력
+        logger.info("✅ DualQA 검증 완료 (Phase 0.7.5):")
         logger.info(f"   📊 [PDF] 조문: {len(pdf_articles)}개")
         logger.info(f"   📊 [{source_label}] 조문: {len(processed_articles)}개")
         logger.info(f"   📊 일치: {len(matched)}개")
@@ -127,89 +157,66 @@ class DualQAGate:
         
         if missing_in_processed:
             logger.error(f"   ❌ [{source_label}] 누락: {sorted(missing_in_processed)}")
-            logger.error(f"      → PDF에는 있지만 {source_label}이 추출하지 못한 조문입니다!")
         
         if extra_in_processed:
             logger.warning(f"   ⚠️ [{source_label}] 추가: {sorted(extra_in_processed)}")
-            logger.warning(f"      → {source_label}이 만들어낸 조문입니다 (PDF 원본에 없음)")
         
         if qa_flags:
             logger.error(f"   🚨 QA 플래그: {qa_flags}")
             logger.error(f"      → 원문 불일치! 수동 검수 필요합니다!")
         else:
-            logger.info("   ✅ 원문 일치 (QA 통과)")
+            if is_annex_mode:
+                logger.info(f"   ✅ Annex 모드 QA 통과 (커버리지: {text_coverage:.1%})")
+            else:
+                logger.info("   ✅ 원문 일치 (QA 통과)")
         
         result = {
             'pdf_articles': pdf_articles,
             'processed_articles': processed_articles,
             'matched': matched,
-            'missing_in_processed': missing_in_processed,  # ✅ Phase 0.6
-            'extra_in_processed': extra_in_processed,  # ✅ Phase 0.6
+            'missing_in_processed': missing_in_processed,
+            'extra_in_processed': extra_in_processed,
             'match_rate': match_rate,
+            'text_coverage': text_coverage,  # ✅ Phase 0.7.5
             'qa_flags': qa_flags,
             'is_pass': is_pass,
-            'source': source_label  # ✅ Phase 0.6: 결과에도 소스 명시
+            'is_annex_mode': is_annex_mode,  # ✅ Phase 0.7.5
+            'source': source_label
         }
         
         return result
     
     def _extract_article_headers(self, text: str, source: str = "") -> Set[str]:
-        """
-        조문 헤더 추출
-        
-        Args:
-            text: 텍스트
-            source: 소스명 (로깅용) - ✅ Phase 0.6: "PDF", "VLM", "LawMode"
-        
-        Returns:
-            조문 헤더 집합 (예: {'제1조', '제2조', ...})
-        """
+        """조문 헤더 추출"""
         headers = set()
         
-        # 1. Strict 패턴 (제N조( 형식)
+        # 1. Strict 패턴
         for m in self.ARTICLE_STRICT.finditer(text):
-            matched = m.group(0).split('(')[0].strip()  # "제1조(" → "제1조"
-            # 공백 정규화
+            matched = m.group(0).split('(')[0].strip()
             matched = re.sub(r'\s+', '', matched)
             headers.add(matched)
         
-        # 2. Loose 패턴 (제N조 단독)
+        # 2. Loose 패턴
         for m in self.ARTICLE_LOOSE.finditer(text):
             matched = m.group(0).strip()
             matched = re.sub(r'\s+', '', matched)
             headers.add(matched)
         
-        # ✅ Phase 0.6: 로그에 소스 명시 (GPT 권장)
         if source:
             logger.info(f"   📖 [{source}] 조문 헤더: {len(headers)}개")
-            if headers and len(headers) <= 10:
-                sample = sorted(headers)[:5]
-                logger.info(f"       샘플: {sample}")
         
         return headers
 
 
-# ============================================
-# 유틸리티 함수
-# ============================================
-
 def extract_pdf_text_layer(pdf_path: str) -> str:
-    """
-    PDF 텍스트 레이어 추출 (pypdf 기반)
-    
-    Args:
-        pdf_path: PDF 파일 경로
-    
-    Returns:
-        추출된 텍스트
-    """
+    """PDF 텍스트 레이어 추출"""
     try:
         from pypdf import PdfReader
         
         reader = PdfReader(pdf_path)
         text_parts = []
         
-        for page_num, page in enumerate(reader.pages, start=1):
+        for page in reader.pages:
             page_text = page.extract_text()
             if page_text:
                 text_parts.append(page_text)
@@ -225,59 +232,3 @@ def extract_pdf_text_layer(pdf_path: str) -> str:
     except Exception as e:
         logger.error(f"❌ PDF 텍스트 추출 실패: {e}")
         return ""
-
-
-# ============================================
-# 테스트
-# ============================================
-
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
-    
-    # 테스트 1: VLM 모드
-    pdf_text = """
-    제1조(목적) 이 규정은 ...
-    제2조(적용범위) 이 규정은 ...
-    제3조(정의) 다음 각 호의 ...
-    """
-    
-    vlm_text = """
-    ### 제1조(목적)
-    이 규정은 ...
-    
-    ### 제2조(적용범위)
-    이 규정은 ...
-    """
-    
-    gate = DualQAGate()
-    
-    print("\n" + "="*60)
-    print("테스트 1: VLM 모드")
-    print("="*60)
-    result = gate.validate(
-        pdf_text=pdf_text,
-        processed_text=vlm_text,
-        source="vlm"  # ✅ Phase 0.6
-    )
-    print(f"\n매칭률: {result['match_rate']:.1%}")
-    print(f"통과 여부: {result['is_pass']}")
-    print(f"QA 플래그: {result['qa_flags']}")
-    
-    # 테스트 2: LawMode
-    lawmode_text = """
-    제1조(목적) 이 규정은 ...
-    제2조(적용범위) 이 규정은 ...
-    제3조(정의) 다음 각 호의 ...
-    """
-    
-    print("\n" + "="*60)
-    print("테스트 2: LawMode")
-    print("="*60)
-    result = gate.validate(
-        pdf_text=pdf_text,
-        processed_text=lawmode_text,
-        source="lawmode"  # ✅ Phase 0.6
-    )
-    print(f"\n매칭률: {result['match_rate']:.1%}")
-    print(f"통과 여부: {result['is_pass']}")
-    print(f"소스: {result['source']}")
