@@ -1,10 +1,10 @@
 """
-app.py - PRISM Phase 0.8
-Annex 서브청킹 UI 통합
+app.py - PRISM Phase 0.9
+Annex 서브청킹 + Promotion Lookup 계산기 통합
 
 Author: 마창수산팀
-Date: 2025-11-17
-Version: Phase 0.8 - 긴급 수정
+Date: 2025-11-18
+Version: Phase 0.9.0
 """
 
 import streamlit as st
@@ -60,15 +60,15 @@ except ImportError:
     PROFILE_AVAILABLE = False
     logger.warning("⚠️ DocumentProfile 미설치")
 
-# LLM Rewriter Import
+# ✅ Phase 0.9: Promotion Lookup Import
 try:
-    sys.path.insert(0, str(Path(__file__).parent / 'tests'))
-    from llm_rewriter import LLMRewriter
-    LLM_REWRITER_AVAILABLE = True
-    logger.info("✅ LLMRewriter 로드 성공")
+    sys.path.insert(0, str(Path(__file__).parent / 'research'))
+    from promotion_lookup import PromotionRangeLookup
+    PROMOTION_LOOKUP_AVAILABLE = True
+    logger.info("✅ PromotionLookup 로드 성공")
 except ImportError as e:
-    LLM_REWRITER_AVAILABLE = False
-    logger.warning(f"⚠️ LLMRewriter 미설치: {e}")
+    PROMOTION_LOOKUP_AVAILABLE = False
+    logger.warning(f"⚠️ PromotionLookup 미설치: {e}")
 
 
 LAW_SPACING_KEYWORDS = [
@@ -234,7 +234,7 @@ def process_document_vlm_mode(pdf_path: str, pdf_text: str):
             'chunks': chunks,
             'qa_result': qa_result,
             'is_qa_pass': qa_result.get('is_pass', False),
-            'mode': 'VLM'
+            'mode': 'VLM Mode'
         }
     
     except Exception as e:
@@ -243,7 +243,7 @@ def process_document_vlm_mode(pdf_path: str, pdf_text: str):
 
 
 def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str):
-    """LawMode 파이프라인 (Phase 0.8) - 긴급 수정"""
+    """LawMode 파이프라인 (Phase 0.8)"""
     
     st.info("📜 LawMode: 규정/법령 파싱 중...")
     progress_bar = st.progress(0)
@@ -290,17 +290,103 @@ def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str)
     }
 
 
+# ============================================
+# ✅ Phase 0.9: Promotion Lookup 계산기
+# ============================================
+
+def render_promotion_calculator():
+    """승진후보자 범위 계산기 UI"""
+    
+    st.sidebar.header("🧮 승진후보자 범위 계산기")
+    st.sidebar.markdown("**Phase 0.9 - Golden Set 기반**")
+    
+    if not PROMOTION_LOOKUP_AVAILABLE:
+        st.sidebar.error("❌ Promotion Lookup 모듈 없음")
+        st.sidebar.info("research/promotion_lookup.py 확인 필요")
+        return
+    
+    try:
+        # Lookup 서비스 초기화
+        lookup = PromotionRangeLookup()
+        
+        # 메타데이터 표시
+        metadata = lookup.get_metadata()
+        
+        with st.sidebar.expander("📊 Golden Set 정보", expanded=False):
+            st.write(f"**표 ID:** {metadata['table_id']}")
+            st.write(f"**등급:** {metadata['grade_type']}")
+            st.write(f"**관련 조문:** {metadata['related_article']}")
+            st.write(f"**전체 행:** {metadata['total_rows']}개")
+            st.write(f"**출처:** {metadata['source']}")
+        
+        # 입력
+        st.sidebar.subheader("📥 입력")
+        people = st.sidebar.number_input(
+            "임용하고자 하는 인원수",
+            min_value=1,
+            max_value=100,
+            value=47,
+            step=1,
+            help="1~75명 범위에서 입력"
+        )
+        
+        # 조회 버튼
+        if st.sidebar.button("🔍 조회", type="primary"):
+            result = lookup.query(people)
+            
+            if result:
+                st.sidebar.success("✅ 조회 성공!")
+                st.sidebar.markdown("---")
+                st.sidebar.subheader("📋 결과")
+                st.sidebar.metric("임용 인원", f"{result['people']}명")
+                st.sidebar.metric("승진후보자 범위", f"서열 {result['rank_max']}번까지")
+                st.sidebar.info(f"**출처:** {result['source']}")
+                st.sidebar.info(f"**신뢰도:** {result['confidence']*100:.0f}%")
+                
+                # JSON 다운로드
+                result_json = json.dumps(result, ensure_ascii=False, indent=2)
+                st.sidebar.download_button(
+                    label="📥 결과 JSON 다운로드",
+                    data=result_json,
+                    file_name=f"promotion_result_{people}명.json",
+                    mime="application/json"
+                )
+            else:
+                st.sidebar.error(f"❌ 조회 실패: {people}명은 Golden Set 범위(1-75) 밖입니다.")
+        
+        # 빠른 테스트
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("⚡ 빠른 테스트")
+        test_cases = [1, 5, 10, 20, 47, 50, 75]
+        
+        for test_people in test_cases:
+            result = lookup.query(test_people)
+            if result:
+                st.sidebar.write(f"• {test_people}명 → {result['rank_max']}번까지")
+    
+    except Exception as e:
+        st.sidebar.error(f"❌ 계산기 오류: {e}")
+        logger.error(f"Promotion Calculator 오류: {e}", exc_info=True)
+
+
 def main():
     """메인 함수"""
     
     st.set_page_config(
-        page_title="PRISM Phase 0.8",
+        page_title="PRISM Phase 0.9",
         page_icon="🔷",
         layout="wide"
     )
     
-    st.title("🔷 PRISM Phase 0.8 - Annex 서브청킹")
+    st.title("🔷 PRISM Phase 0.9")
     st.markdown("**Progressive Reasoning & Intelligence for Structured Materials**")
+    st.markdown("**Annex 서브청킹 + Promotion Lookup 계산기**")
+    
+    # ✅ Phase 0.9: 사이드바 계산기
+    render_promotion_calculator()
+    
+    # 메인 영역: 문서 처리
+    st.header("📄 문서 처리")
     
     # 파일 업로드
     uploaded_file = st.file_uploader(
@@ -311,6 +397,18 @@ def main():
     
     if not uploaded_file:
         st.info("👆 PDF 파일을 업로드하면 처리가 시작됩니다.")
+        
+        # Phase 0.9 안내
+        st.markdown("---")
+        st.subheader("🆕 Phase 0.9 신기능")
+        st.success("**✅ 승진후보자 범위 계산기** (왼쪽 사이드바)")
+        st.info("""
+        **Golden Set 기반 100% 정확도 보장**
+        - 임용 인원수 입력 → 승진후보자 범위 즉시 조회
+        - 별표1 (3급 승진 제외) 기준
+        - JSON 결과 다운로드 지원
+        """)
+        
         return
     
     # 처리 모드 선택
@@ -351,9 +449,9 @@ def main():
             # DualQA 결과
             qa_result = result['qa_result']
             if result['is_qa_pass']:
-                st.success(f"✅ DualQA 통과 (커버리지: {qa_result.get('coverage_pct', 0):.1f}%)")
+                st.success(f"✅ DualQA 통과 (커버리지: {qa_result.get('text_coverage', 0)*100:.1f}%)")
             else:
-                st.warning(f"⚠️ DualQA 경고 (커버리지: {qa_result.get('coverage_pct', 0):.1f}%)")
+                st.warning(f"⚠️ DualQA 경고 (커버리지: {qa_result.get('text_coverage', 0)*100:.1f}%)")
             
             # 청크 통계
             st.subheader("📊 청크 통계")
