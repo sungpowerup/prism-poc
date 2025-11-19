@@ -1,15 +1,14 @@
 """
-app.py - PRISM Phase 0.8 제품 버전
-문서 전처리 파이프라인 (Stable)
+app.py - PRISM Phase 0.8.6 Hotfix
+문서 전처리 파이프라인 (다운로드 새로고침 문제 해결)
 
-Phase 0.8 특징:
-- Annex Fallback + AnnexSubChunker + DualQA
-- 안정적인 텍스트 청킹
-- 표 자동 구조화는 research/ 브랜치에서 실험 중
+Phase 0.8.6 핵심 수정:
+- ✅ 다운로드 시 새로고침 문제 해결 (st.session_state 활용)
+- ✅ 처리 결과를 세션에 저장하여 유지
 
 Author: 마창수산팀
-Date: 2025-11-18
-Version: Phase 0.8.1 Stable
+Date: 2025-11-19
+Version: Phase 0.8.6 Hotfix
 """
 
 import streamlit as st
@@ -139,7 +138,7 @@ def to_review_md_basic(
         elif chunk_type == 'amendment_history':
             lines.append("## 개정 이력")
             lines.append("")
-            lines.append(f"- {content}")
+            lines.append(content)
             lines.append("")
         
         elif chunk_type == 'basic':
@@ -273,14 +272,20 @@ def main():
     """메인 함수"""
     
     st.set_page_config(
-        page_title="PRISM Phase 0.8",
+        page_title="PRISM Phase 0.8.6",
         page_icon="🔷",
         layout="wide"
     )
     
-    st.title("🔷 PRISM Phase 0.8")
+    st.title("🔷 PRISM Phase 0.8.6")
     st.markdown("**Progressive Reasoning & Intelligence for Structured Materials**")
-    st.markdown("**문서 전처리 파이프라인 (Stable)**")
+    st.markdown("**문서 전처리 파이프라인 (Hotfix)**")
+    
+    # ✅ Phase 0.8.6: 세션 상태 초기화
+    if 'processing_result' not in st.session_state:
+        st.session_state.processing_result = None
+    if 'processed_file_name' not in st.session_state:
+        st.session_state.processed_file_name = None
     
     # 메인 영역: 문서 처리
     st.header("📄 문서 처리")
@@ -295,32 +300,25 @@ def main():
     if not uploaded_file:
         st.info("👆 PDF 파일을 업로드하면 처리가 시작됩니다.")
         
-        # Phase 0.8 안내
+        # Phase 0.8.6 안내
         st.markdown("---")
-        st.subheader("✅ Phase 0.8 제품 기능")
+        st.subheader("✅ Phase 0.8.6 Hotfix 기능")
         st.success("""
-        **안정적인 문서 전처리 파이프라인**
+        **개선된 문서 전처리 파이프라인**
         
-        - ✅ Annex-only 문서 감지 및 Fallback
-        - ✅ Annex 서브청킹 (header/table_rows/note)
+        - ✅ 페이지 아티팩트 완전 제거 (인사규정 402-2 등)
+        - ✅ 개정이력 청크 추가
+        - ✅ 장(Chapter) 청크 자동 생성
+        - ✅ 다운로드 시 새로고침 문제 해결
         - ✅ DualQA 100% 커버리지 검증
-        - ✅ 법령 구조 파싱 (장/조문)
-        """)
-        
-        # 개발 상태
-        st.markdown("---")
-        st.subheader("🔬 연구 브랜치 (Phase 0.9)")
-        st.info("""
-        **표 자동 구조화** - 연구 중
-        
-        - 🚧 행 단위 구조화 알고리즘
-        - 🚧 Golden Set 100% 정확도 목표
-        - 🚧 달성 시 제품에 편입 예정
-        
-        ※ 연구 코드는 `research/` 폴더에서 실험 중
         """)
         
         return
+    
+    # ✅ Phase 0.8.6: 파일이 바뀌면 결과 초기화
+    if st.session_state.processed_file_name != uploaded_file.name:
+        st.session_state.processing_result = None
+        st.session_state.processed_file_name = uploaded_file.name
     
     # 처리 모드 선택
     mode = st.radio(
@@ -331,6 +329,7 @@ def main():
     
     process_mode = "law" if "LawMode" in mode else "vlm"
     
+    # 처리 버튼
     if st.button("🚀 처리 시작", type="primary"):
         try:
             # 임시 파일 저장
@@ -354,76 +353,120 @@ def main():
                     pdf_text
                 )
             
-            # 결과 표시
+            # ✅ Phase 0.8.6: 결과를 세션에 저장
+            st.session_state.processing_result = result
+            
             st.success(f"✅ 처리 완료 ({result['mode']})")
             
-            # DualQA 결과
-            qa_result = result['qa_result']
-            if result['is_qa_pass']:
-                st.success(f"✅ DualQA 통과 (커버리지: {qa_result.get('text_coverage', 0)*100:.1f}%)")
-            else:
-                st.warning(f"⚠️ DualQA 경고 (커버리지: {qa_result.get('text_coverage', 0)*100:.1f}%)")
-            
-            # 청크 통계
-            st.subheader("📊 청크 통계")
-            chunks = result['chunks']
-            st.write(f"- 총 청크: {len(chunks)}개")
-            
-            # 타입별 통계
-            type_counts = {}
-            for chunk in chunks:
-                ctype = chunk.get('metadata', {}).get('type', 'unknown')
-                type_counts[ctype] = type_counts.get(ctype, 0) + 1
-            
-            for ctype, count in sorted(type_counts.items()):
-                st.write(f"  - {ctype}: {count}개")
-            
-            # 다운로드 버튼
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                st.download_button(
-                    label="📥 engine.md",
-                    data=result['rag_markdown'],
-                    file_name="engine.md",
-                    mime="text/markdown"
-                )
-            
-            with col2:
-                st.download_button(
-                    label="📥 chunks.json",
-                    data=json.dumps(chunks, ensure_ascii=False, indent=2),
-                    file_name="chunks.json",
-                    mime="application/json"
-                )
-            
-            with col3:
-                review_md = to_review_md_basic(
-                    chunks,
-                    result.get('parsed_result'),
-                    result['rag_markdown']
-                )
-                st.download_button(
-                    label="📥 review.md",
-                    data=review_md,
-                    file_name="review.md",
-                    mime="text/markdown"
-                )
-            
-            # 미리보기
-            with st.expander("📄 engine.md 미리보기"):
-                st.markdown(result['rag_markdown'][:2000] + "..." if len(result['rag_markdown']) > 2000 else result['rag_markdown'])
-            
-            with st.expander("🔍 chunks.json 미리보기"):
-                st.json(chunks[:3])
-            
-            # 임시 파일 삭제
-            safe_remove(temp_pdf)
-        
         except Exception as e:
-            logger.error(f"❌ 처리 실패: {e}", exc_info=True)
             st.error(f"❌ 처리 실패: {e}")
+            logger.error(f"❌ 처리 실패: {e}")
+            return
+    
+    # ✅ Phase 0.8.6: 세션에 저장된 결과가 있으면 표시
+    if st.session_state.processing_result:
+        result = st.session_state.processing_result
+        
+        # DualQA 결과
+        qa_result = result['qa_result']
+        if result['is_qa_pass']:
+            st.success(f"✅ DualQA 통과 (커버리지: {qa_result.get('text_coverage', 0)*100:.1f}%)")
+        else:
+            st.warning(f"⚠️ DualQA 경고 (커버리지: {qa_result.get('text_coverage', 0)*100:.1f}%)")
+        
+        # 청크 통계
+        st.subheader("📊 청크 통계")
+        chunks = result['chunks']
+        st.write(f"- 총 청크: {len(chunks)}개")
+        
+        # 타입별 통계
+        type_counts = {}
+        for chunk in chunks:
+            ctype = chunk.get('metadata', {}).get('type', 'unknown')
+            type_counts[ctype] = type_counts.get(ctype, 0) + 1
+        
+        for ctype, count in sorted(type_counts.items()):
+            st.write(f"  - {ctype}: {count}개")
+        
+        # ✅ Phase 0.8.6: 다운로드 버튼 (세션 상태 활용으로 새로고침 방지)
+        st.markdown("---")
+        st.subheader("📥 결과 다운로드")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.download_button(
+                label="📥 engine.md",
+                data=result['rag_markdown'],
+                file_name="engine.md",
+                mime="text/markdown",
+                key="download_engine"  # ✅ 고유 키 지정
+            )
+        
+        with col2:
+            chunks_json = json.dumps(result['chunks'], ensure_ascii=False, indent=2)
+            st.download_button(
+                label="📥 chunks.json",
+                data=chunks_json,
+                file_name="chunks.json",
+                mime="application/json",
+                key="download_chunks"  # ✅ 고유 키 지정
+            )
+        
+        with col3:
+            # 리뷰용 Markdown 생성
+            if 'parsed_result' in result:
+                review_md = to_review_md_basic(
+                    result['chunks'],
+                    parsed_result=result['parsed_result']
+                )
+            else:
+                review_md = to_review_md_basic(
+                    result['chunks'],
+                    base_markdown=result['rag_markdown']
+                )
+            
+            st.download_button(
+                label="📥 review.md",
+                data=review_md,
+                file_name="review.md",
+                mime="text/markdown",
+                key="download_review"  # ✅ 고유 키 지정
+            )
+        
+        # 미리보기
+        st.markdown("---")
+        st.subheader("👀 결과 미리보기")
+        
+        tab1, tab2, tab3 = st.tabs(["engine.md", "chunks.json", "review.md"])
+        
+        with tab1:
+            st.text_area(
+                "engine.md (RAG용)",
+                result['rag_markdown'][:3000] + ("..." if len(result['rag_markdown']) > 3000 else ""),
+                height=400
+            )
+        
+        with tab2:
+            st.json(result['chunks'][:5])  # 처음 5개만 미리보기
+            if len(result['chunks']) > 5:
+                st.info(f"... 외 {len(result['chunks']) - 5}개 청크")
+        
+        with tab3:
+            if 'parsed_result' in result:
+                review_preview = to_review_md_basic(
+                    result['chunks'],
+                    parsed_result=result['parsed_result']
+                )
+            else:
+                review_preview = result['rag_markdown']
+            
+            st.text_area(
+                "review.md (검토용)",
+                review_preview[:3000] + ("..." if len(review_preview) > 3000 else ""),
+                height=400
+            )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

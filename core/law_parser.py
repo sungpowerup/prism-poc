@@ -1,15 +1,16 @@
 """
-core/law_parser.py - PRISM Phase 0.8.4 Final Fix
-본문 조문 손실 버그 완전 수정
+core/law_parser.py - PRISM Phase 0.8.6 Hotfix
+페이지 아티팩트 제거 + 개정이력/장 청크 추가
 
-Phase 0.8.4 핵심 수정:
-- ✅ 버그 FIX: TreeBuilder는 'level'을 사용, LawParser는 'type'을 찾는 불일치 해결
-- ✅ node.get('level') 또는 node.get('type') 모두 인식
-- ✅ 'article_no' vs 'article_number' 필드명 호환
+Phase 0.8.6 핵심 수정:
+- ✅ 페이지 아티팩트 완전 제거 (인사규정 402-2 등)
+- ✅ 개정이력 청크 추가 (amendment_history 타입)
+- ✅ 장(Chapter) 청크 synthesize (chapter_number 기반)
+- ✅ to_chunks(), to_markdown()에서 PageCleaner 적용
 
 Author: 마창수산팀
 Date: 2025-11-19
-Version: Phase 0.8.4 Final Fix
+Version: Phase 0.8.6 Hotfix
 """
 
 import re
@@ -56,12 +57,26 @@ class Article:
 
 class LawParser:
     """
-    Phase 0.8.4 LawParser Final Fix
+    Phase 0.8.6 LawParser Hotfix
     
     핵심 수정:
-    - TreeBuilder 노드의 'level' 필드와 'type' 필드 모두 인식
-    - 다양한 필드명 호환 (article_no/article_number 등)
+    - 페이지 아티팩트 완전 제거
+    - 개정이력 청크 추가
+    - 장(Chapter) 청크 synthesize
     """
+    
+    # ✅ Phase 0.8.6: 페이지 아티팩트 패턴
+    PAGE_ARTIFACT_PATTERNS = [
+        re.compile(r'\n인사규정\n\d{3}-\d{1,2}', re.MULTILINE),  # 줄바꿈 포함
+        re.compile(r'인사규정\s*\d{3}-\d{1,2}', re.IGNORECASE),  # 일반
+        re.compile(r'\b\d{3}-\d{1,2}\b'),  # 페이지 번호만
+    ]
+    
+    # 개정이력 패턴
+    AMENDMENT_PATTERN = re.compile(
+        r'(제\d+차\s*개정\s*\d{4}\.\d{1,2}\.\d{1,2})',
+        re.MULTILINE
+    )
     
     def __init__(self):
         """초기화"""
@@ -69,7 +84,52 @@ class LawParser:
             raise ImportError("TreeBuilder is required but not available")
         
         self.tree_builder = TreeBuilder()
-        logger.info("✅ LawParser 초기화 완료 (Phase 0.8.4 Final Fix)")
+        logger.info("✅ LawParser 초기화 완료 (Phase 0.8.6 Hotfix)")
+    
+    def _clean_page_artifacts(self, text: str) -> str:
+        """
+        ✅ Phase 0.8.6: 페이지 아티팩트 완전 제거
+        
+        "인사규정 402-2", "402-3" 등의 페이지 찌꺼기 제거
+        """
+        if not text:
+            return text
+        
+        result = text
+        removed_count = 0
+        
+        for pattern in self.PAGE_ARTIFACT_PATTERNS:
+            matches = pattern.findall(result)
+            if matches:
+                removed_count += len(matches)
+                result = pattern.sub('', result)
+        
+        # 연속 공백/줄바꿈 정리
+        result = re.sub(r' {2,}', ' ', result)
+        result = re.sub(r'\n{3,}', '\n\n', result)
+        
+        if removed_count > 0:
+            logger.debug(f"   🧹 페이지 아티팩트 {removed_count}개 제거")
+        
+        return result.strip()
+    
+    def _extract_amendment_history(self, text: str) -> List[str]:
+        """
+        ✅ Phase 0.8.6: 개정이력 추출
+        
+        "제37차 개정 2019.05.27" 형태의 개정이력 추출
+        """
+        amendments = []
+        
+        # 문서 앞부분에서 개정이력 찾기
+        header_text = text[:2000] if len(text) > 2000 else text
+        
+        matches = self.AMENDMENT_PATTERN.findall(header_text)
+        if matches:
+            amendments = list(set(matches))  # 중복 제거
+            amendments.sort(reverse=True)  # 최신순 정렬
+        
+        return amendments
     
     def parse(
         self,
@@ -88,6 +148,9 @@ class LawParser:
         if normalize_linebreaks:
             cleaned_text = cleaned_text.replace('\r\n', '\n')
         
+        # ✅ Phase 0.8.6: 개정이력 추출 (페이지 아티팩트 제거 전)
+        amendment_history = self._extract_amendment_history(cleaned_text)
+        
         # TreeBuilder로 파싱
         tree_result = self.tree_builder.build(
             markdown=cleaned_text,
@@ -97,6 +160,11 @@ class LawParser:
         
         # TreeBuilder 결과 → LawParser 포맷 변환
         parsed_result = self._convert_tree_to_result(tree_result, document_title)
+        
+        # ✅ Phase 0.8.6: 추출된 개정이력 추가
+        if amendment_history:
+            parsed_result['amendment_history'] = amendment_history
+            logger.info(f"   📋 개정이력: {len(amendment_history)}건 추출")
         
         # 본문 + Annex 처리
         has_articles = parsed_result.get('total_articles', 0) > 0
@@ -118,6 +186,8 @@ class LawParser:
         logger.info(f"✅ LawParser.parse() 완료:")
         logger.info(f"   - 장: {parsed_result['total_chapters']}개")
         logger.info(f"   - 조문: {parsed_result['total_articles']}개")
+        if parsed_result.get('amendment_history'):
+            logger.info(f"   - 개정이력: {len(parsed_result['amendment_history'])}건")
         if parsed_result.get('annex_content'):
             logger.info(f"   - Annex: {len(parsed_result['annex_content'])}자")
         
@@ -130,10 +200,6 @@ class LawParser:
     ) -> Dict[str, Any]:
         """
         TreeBuilder 결과 → LawParser 표준 포맷 변환
-        
-        ✅ Phase 0.8.4 핵심 수정:
-        - node.get('level') 또는 node.get('type') 모두 인식
-        - 다양한 필드명 호환
         """
         
         # Tree 추출
@@ -151,7 +217,7 @@ class LawParser:
         section_order = 0
         
         for node in tree:
-            # ✅ Phase 0.8.4: 'level' 또는 'type' 모두 인식
+            # 'level' 또는 'type' 모두 인식
             node_type = node.get('level', node.get('type', ''))
             
             if node_type == 'chapter':
@@ -161,15 +227,19 @@ class LawParser:
                     section_order=section_order
                 )
                 chapters.append(chapter)
-                current_chapter = chapter.number
+                current_chapter = f"{chapter.number} {chapter.title}".strip()
                 section_order += 1
                 logger.debug(f"      장 변환: {chapter.number} {chapter.title}")
             
             elif node_type == 'article':
-                # ✅ Phase 0.8.4: 다양한 필드명 지원
                 article_no = node.get('article_no', node.get('article_number', node.get('number', '')))
                 article_title = node.get('article_title', node.get('title', ''))
                 article_body = node.get('content', node.get('body', ''))
+                
+                # 장 정보가 없으면 현재 장 사용
+                chapter_info = node.get('chapter', current_chapter)
+                if not chapter_info and current_chapter:
+                    chapter_info = current_chapter
                 
                 # 자식 노드(항·호)의 내용도 포함
                 if 'children' in node:
@@ -183,7 +253,7 @@ class LawParser:
                     number=article_no,
                     title=article_title,
                     body=article_body.strip(),
-                    chapter_number=node.get('chapter', current_chapter),
+                    chapter_number=chapter_info,
                     section_order=section_order
                 )
                 articles.append(article)
@@ -257,7 +327,14 @@ class LawParser:
                 parsed_result['related_article'] = rel_match.group(1).strip()
     
     def to_chunks(self, parsed_result: dict) -> list:
-        """파싱 결과 → RAG 청크 변환"""
+        """
+        파싱 결과 → RAG 청크 변환
+        
+        ✅ Phase 0.8.6 수정:
+        - 페이지 아티팩트 제거
+        - 개정이력 청크 추가
+        - 장(Chapter) 청크 synthesize
+        """
         
         chunks = []
         
@@ -274,6 +351,20 @@ class LawParser:
                 }
             })
         
+        # ✅ Phase 0.8.6: 개정이력 청크 추가
+        if parsed_result.get('amendment_history'):
+            history_content = "\n".join(parsed_result['amendment_history'])
+            chunks.append({
+                'content': history_content,
+                'metadata': {
+                    'type': 'amendment_history',
+                    'boundary': 'amendment_history',
+                    'char_count': len(history_content),
+                    'amendment_count': len(parsed_result['amendment_history']),
+                    'section_order': -2
+                }
+            })
+        
         # 기본정신
         if parsed_result.get('basic_spirit'):
             chunks.append({
@@ -286,24 +377,45 @@ class LawParser:
                 }
             })
         
-        # 장
-        for chapter in parsed_result.get('chapters', []):
-            content = f"{chapter.number} {chapter.title}"
-            chunks.append({
-                'content': content,
-                'metadata': {
-                    'type': 'chapter',
-                    'boundary': 'chapter',
-                    'chapter_number': chapter.number,
-                    'chapter_title': chapter.title,
-                    'char_count': len(content),
-                    'section_order': chapter.section_order
-                }
-            })
+        # ✅ Phase 0.8.6: 장(Chapter) 청크 synthesize
+        # article의 chapter_number에서 장 정보를 추출하여 청크 생성
+        seen_chapters = set()
+        chapter_order = 0
         
-        # ✅ 조문 (핵심!)
         for article in parsed_result.get('articles', []):
-            content = f"{article.number}({article.title})\n{article.body}"
+            chapter_info = article.chapter_number
+            if chapter_info and chapter_info not in seen_chapters:
+                seen_chapters.add(chapter_info)
+                
+                # 장 번호와 제목 분리
+                chapter_match = re.match(r'(제\d+장)\s*(.+)?', chapter_info)
+                if chapter_match:
+                    chapter_num = chapter_match.group(1)
+                    chapter_title = chapter_match.group(2) or ""
+                else:
+                    chapter_num = chapter_info
+                    chapter_title = ""
+                
+                content = f"{chapter_num} {chapter_title}".strip()
+                chunks.append({
+                    'content': content,
+                    'metadata': {
+                        'type': 'chapter',
+                        'boundary': 'chapter',
+                        'chapter_number': chapter_num,
+                        'chapter_title': chapter_title,
+                        'char_count': len(content),
+                        'section_order': chapter_order
+                    }
+                })
+                chapter_order += 1
+        
+        # 조문 (페이지 아티팩트 제거 적용)
+        for article in parsed_result.get('articles', []):
+            # ✅ Phase 0.8.6: 본문에서 페이지 아티팩트 제거
+            cleaned_body = self._clean_page_artifacts(article.body)
+            
+            content = f"{article.number}({article.title})\n{cleaned_body}"
             chunks.append({
                 'content': content,
                 'metadata': {
@@ -322,7 +434,8 @@ class LawParser:
             logger.info("✅ Phase 0.8: Annex 서브청킹 시작")
             
             subchunker = AnnexSubChunker()
-            annex_text = parsed_result['annex_content']
+            # ✅ Phase 0.8.6: Annex에서도 페이지 아티팩트 제거
+            annex_text = self._clean_page_artifacts(parsed_result['annex_content'])
             
             try:
                 sub_chunks = subchunker.chunk(annex_text)
@@ -360,12 +473,14 @@ class LawParser:
                 })
         
         elif parsed_result.get('annex_content'):
+            # ✅ Phase 0.8.6: 페이지 아티팩트 제거
+            cleaned_annex = self._clean_page_artifacts(parsed_result['annex_content'])
             chunks.append({
-                'content': parsed_result['annex_content'],
+                'content': cleaned_annex,
                 'metadata': {
                     'type': 'annex',
                     'boundary': 'annex',
-                    'char_count': len(parsed_result['annex_content']),
+                    'char_count': len(cleaned_annex),
                     'section_order': 1000
                 }
             })
@@ -384,7 +499,11 @@ class LawParser:
         return chunks
     
     def to_markdown(self, parsed_result: dict) -> str:
-        """파싱 결과 → Markdown 변환"""
+        """
+        파싱 결과 → Markdown 변환
+        
+        ✅ Phase 0.8.6: 페이지 아티팩트 제거 적용
+        """
         
         lines = []
         
@@ -393,7 +512,7 @@ class LawParser:
             lines.append(f"# {parsed_result['document_title']}")
             lines.append("")
         
-        # 개정이력
+        # ✅ Phase 0.8.6: 개정이력
         if parsed_result.get('amendment_history'):
             lines.append("## 개정 이력")
             lines.append("")
@@ -408,23 +527,29 @@ class LawParser:
             lines.append(parsed_result['basic_spirit'])
             lines.append("")
         
-        # 장과 조문
+        # ✅ Phase 0.8.6: 장과 조문 (장 헤더 추가)
         current_chapter = None
+        seen_chapters = set()
+        
         for article in parsed_result.get('articles', []):
-            if article.chapter_number != current_chapter:
+            # 장이 바뀌면 장 헤더 추가
+            if article.chapter_number and article.chapter_number != current_chapter:
                 current_chapter = article.chapter_number
-                for chapter in parsed_result.get('chapters', []):
-                    if chapter.number == current_chapter:
-                        lines.append(f"## {chapter.number} {chapter.title}")
-                        lines.append("")
-                        break
+                
+                if current_chapter not in seen_chapters:
+                    seen_chapters.add(current_chapter)
+                    lines.append(f"## {current_chapter}")
+                    lines.append("")
+            
+            # 조문 (페이지 아티팩트 제거)
+            cleaned_body = self._clean_page_artifacts(article.body)
             
             lines.append(f"### {article.number}({article.title})")
             lines.append("")
-            lines.append(article.body)
+            lines.append(cleaned_body)
             lines.append("")
         
-        # Annex
+        # Annex (페이지 아티팩트 제거)
         if parsed_result.get('annex_content'):
             annex_no = parsed_result.get('annex_no', '')
             annex_title = parsed_result.get('annex_title', '')
@@ -435,7 +560,10 @@ class LawParser:
                 lines.append("## 별표")
             lines.append("")
             lines.append("---")
-            lines.append(parsed_result['annex_content'])
+            
+            # ✅ Phase 0.8.6: Annex 페이지 아티팩트 제거
+            cleaned_annex = self._clean_page_artifacts(parsed_result['annex_content'])
+            lines.append(cleaned_annex)
             lines.append("---")
         
         return "\n".join(lines)
