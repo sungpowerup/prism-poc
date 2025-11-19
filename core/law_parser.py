@@ -1,15 +1,15 @@
 """
-core/law_parser.py - PRISM Phase 0.8.2 Hotfix
-LawParser 안정판 (본문+Annex 동시 처리 버그 수정)
+core/law_parser.py - PRISM Phase 0.8.4 Final Fix
+본문 조문 손실 버그 완전 수정
 
-Phase 0.8.2 핵심 수정:
-- ✅ Annex-only 감지 조건 수정: TreeBuilder 결과 반영 후 체크
-- ✅ 본문 조문 + Annex 동시 보존
-- ✅ DualQA 매칭률 100% 복구
+Phase 0.8.4 핵심 수정:
+- ✅ 버그 FIX: TreeBuilder는 'level'을 사용, LawParser는 'type'을 찾는 불일치 해결
+- ✅ node.get('level') 또는 node.get('type') 모두 인식
+- ✅ 'article_no' vs 'article_number' 필드명 호환
 
 Author: 마창수산팀
 Date: 2025-11-19
-Version: Phase 0.8.2 Hotfix
+Version: Phase 0.8.4 Final Fix
 """
 
 import re
@@ -56,11 +56,11 @@ class Article:
 
 class LawParser:
     """
-    Phase 0.8.2 LawParser Hotfix
+    Phase 0.8.4 LawParser Final Fix
     
     핵심 수정:
-    - Annex-only 감지 조건을 TreeBuilder 결과 변환 후로 이동
-    - 본문 조문이 있으면 Annex-only 모드 비활성화
+    - TreeBuilder 노드의 'level' 필드와 'type' 필드 모두 인식
+    - 다양한 필드명 호환 (article_no/article_number 등)
     """
     
     def __init__(self):
@@ -69,7 +69,7 @@ class LawParser:
             raise ImportError("TreeBuilder is required but not available")
         
         self.tree_builder = TreeBuilder()
-        logger.info("✅ LawParser 초기화 완료 (Phase 0.8.2 Hotfix)")
+        logger.info("✅ LawParser 초기화 완료 (Phase 0.8.4 Final Fix)")
     
     def parse(
         self,
@@ -80,10 +80,6 @@ class LawParser:
     ) -> Dict[str, Any]:
         """
         PDF 텍스트 파싱 (메인 메서드)
-        
-        ✅ Phase 0.8.2 Hotfix:
-        - TreeBuilder 결과를 먼저 변환
-        - 그 다음 Annex-only 체크
         """
         logger.info(f"📜 LawParser.parse() 시작: {document_title}")
         
@@ -99,31 +95,25 @@ class LawParser:
             enacted_date=None
         )
         
-        # ✅ Phase 0.8.2: TreeBuilder 결과를 먼저 변환
+        # TreeBuilder 결과 → LawParser 포맷 변환
         parsed_result = self._convert_tree_to_result(tree_result, document_title)
         
-        # ✅ Phase 0.8.2: Annex-only 체크를 변환 후로 이동
-        # 이제 total_articles가 정확하게 반영됨
-        is_annex_only = (
-            parsed_result.get('total_chapters', 0) == 0 and
-            parsed_result.get('total_articles', 0) == 0 and
-            not parsed_result.get('annex_content') and
-            len(cleaned_text) > 500
-        )
+        # 본문 + Annex 처리
+        has_articles = parsed_result.get('total_articles', 0) > 0
+        has_annex_pattern = '[별표' in cleaned_text
         
-        if is_annex_only:
-            logger.warning("🔄 Annex-only 문서 감지 - Fallback Annex 파서 가동")
-            self._apply_annex_fallback(cleaned_text, parsed_result)
-        
-        # ✅ Phase 0.8.2 추가: 본문+Annex 혼합 문서 처리
-        # 조문이 있는데 Annex도 있는 경우, 별도로 Annex 추출
-        elif (
-            parsed_result.get('total_articles', 0) > 0 and
-            not parsed_result.get('annex_content') and
-            '[별표' in cleaned_text
-        ):
-            logger.info("📋 혼합 문서 감지 - 본문 + Annex 동시 처리")
-            self._apply_annex_extraction(cleaned_text, parsed_result)
+        if has_articles:
+            logger.info(f"   📋 본문 조문: {parsed_result['total_articles']}개")
+            
+            # Annex도 있으면 추출
+            if has_annex_pattern and not parsed_result.get('annex_content'):
+                logger.info("   📋 혼합 문서 - 본문 + Annex 동시 처리")
+                self._apply_annex_extraction(cleaned_text, parsed_result)
+        else:
+            # 조문이 없으면 Annex-only
+            if len(cleaned_text) > 500:
+                logger.warning("🔄 Annex-only 문서 감지 - Fallback Annex 파서 가동")
+                self._apply_annex_fallback(cleaned_text, parsed_result)
         
         logger.info(f"✅ LawParser.parse() 완료:")
         logger.info(f"   - 장: {parsed_result['total_chapters']}개")
@@ -138,10 +128,18 @@ class LawParser:
         tree_result: Dict[str, Any],
         document_title: str
     ) -> Dict[str, Any]:
-        """TreeBuilder 결과 → LawParser 표준 포맷 변환"""
+        """
+        TreeBuilder 결과 → LawParser 표준 포맷 변환
+        
+        ✅ Phase 0.8.4 핵심 수정:
+        - node.get('level') 또는 node.get('type') 모두 인식
+        - 다양한 필드명 호환
+        """
         
         # Tree 추출
         tree = tree_result.get('document', {}).get('tree', [])
+        
+        logger.info(f"   🌲 TreeBuilder 노드 수: {len(tree)}개")
         
         chapters = []
         articles = []
@@ -153,28 +151,44 @@ class LawParser:
         section_order = 0
         
         for node in tree:
-            node_type = node.get('type', '')
+            # ✅ Phase 0.8.4: 'level' 또는 'type' 모두 인식
+            node_type = node.get('level', node.get('type', ''))
             
             if node_type == 'chapter':
                 chapter = Chapter(
-                    number=node.get('chapter_number', ''),
-                    title=node.get('chapter_title', ''),
+                    number=node.get('chapter_number', node.get('chapter', node.get('number', ''))),
+                    title=node.get('chapter_title', node.get('title', '')),
                     section_order=section_order
                 )
                 chapters.append(chapter)
                 current_chapter = chapter.number
                 section_order += 1
+                logger.debug(f"      장 변환: {chapter.number} {chapter.title}")
             
             elif node_type == 'article':
+                # ✅ Phase 0.8.4: 다양한 필드명 지원
+                article_no = node.get('article_no', node.get('article_number', node.get('number', '')))
+                article_title = node.get('article_title', node.get('title', ''))
+                article_body = node.get('content', node.get('body', ''))
+                
+                # 자식 노드(항·호)의 내용도 포함
+                if 'children' in node:
+                    for child in node.get('children', []):
+                        child_content = child.get('content', '')
+                        child_no = child.get('clause_no', child.get('item_no', ''))
+                        if child_content:
+                            article_body += f"\n{child_no} {child_content}"
+                
                 article = Article(
-                    number=node.get('article_number', ''),
-                    title=node.get('article_title', ''),
-                    body=node.get('content', ''),
-                    chapter_number=current_chapter,
+                    number=article_no,
+                    title=article_title,
+                    body=article_body.strip(),
+                    chapter_number=node.get('chapter', current_chapter),
                     section_order=section_order
                 )
                 articles.append(article)
                 section_order += 1
+                logger.debug(f"      조문 변환: {article_no}({article_title})")
             
             elif node_type == 'amendment_history':
                 amendment_history.append(node.get('content', ''))
@@ -184,6 +198,8 @@ class LawParser:
             
             elif node_type == 'annex':
                 annex_content = node.get('content', '')
+        
+        logger.info(f"   📊 변환 결과: 장 {len(chapters)}개, 조문 {len(articles)}개")
         
         return {
             'document_title': document_title,
@@ -195,18 +211,13 @@ class LawParser:
             'annex_title': '',
             'annex_no': None,
             'related_article': None,
-            'annex_tables': [],  # Phase 0.9용
+            'annex_tables': [],
             'total_chapters': len(chapters),
             'total_articles': len(articles)
         }
     
     def _apply_annex_fallback(self, cleaned_text: str, parsed_result: dict):
-        """
-        🔥 Phase 0.8 Hotfix: Annex-only 문서 Fallback
-        
-        TreeBuilder가 못 잡은 Annex를 수동으로 추출
-        """
-        # [별표 N] 패턴 찾기
+        """Annex-only 문서 Fallback"""
         pattern = r'(\[별표\s*\d+\][\s\S]+)'
         match = re.search(pattern, cleaned_text)
         
@@ -216,28 +227,17 @@ class LawParser:
             
             logger.info(f"   ✅ Fallback Annex 추출: {len(annex_text)}자")
             
-            # 헤더 파싱
             header_match = re.search(r'\[별표\s*(\d+)\]\s*([^\n<]+)', annex_text)
             if header_match:
                 parsed_result['annex_no'] = header_match.group(1)
                 parsed_result['annex_title'] = header_match.group(2).strip()
-                logger.info(f"   📋 Annex 제목: [별표{parsed_result['annex_no']}] {parsed_result['annex_title']}")
             
-            # 관련 조문 파싱
             rel_match = re.search(r'<(제\d+조[^>]*)관련>', annex_text)
             if rel_match:
                 parsed_result['related_article'] = rel_match.group(1).strip()
-                logger.info(f"   🔗 관련 조문: {parsed_result['related_article']}")
-        else:
-            logger.warning("   ⚠️ Fallback: [별표] 패턴을 찾을 수 없음")
     
     def _apply_annex_extraction(self, cleaned_text: str, parsed_result: dict):
-        """
-        ✅ Phase 0.8.2 신규: 본문+Annex 혼합 문서에서 Annex 추출
-        
-        조문은 이미 파싱됨, Annex만 추가로 추출
-        """
-        # [별표 N] 패턴 찾기
+        """본문+Annex 혼합 문서에서 Annex 추출"""
         pattern = r'(\[별표\s*\d+\][\s\S]+)'
         match = re.search(pattern, cleaned_text)
         
@@ -247,28 +247,21 @@ class LawParser:
             
             logger.info(f"   ✅ 혼합 문서 Annex 추출: {len(annex_text)}자")
             
-            # 헤더 파싱
             header_match = re.search(r'\[별표\s*(\d+)\]\s*([^\n<]+)', annex_text)
             if header_match:
                 parsed_result['annex_no'] = header_match.group(1)
                 parsed_result['annex_title'] = header_match.group(2).strip()
-                logger.info(f"   📋 Annex 제목: [별표{parsed_result['annex_no']}] {parsed_result['annex_title']}")
             
-            # 관련 조문 파싱
             rel_match = re.search(r'<(제\d+조[^>]*)관련>', annex_text)
             if rel_match:
                 parsed_result['related_article'] = rel_match.group(1).strip()
-                logger.info(f"   🔗 관련 조문: {parsed_result['related_article']}")
     
     def to_chunks(self, parsed_result: dict) -> list:
-        """
-        파싱 결과 → RAG 청크 변환
+        """파싱 결과 → RAG 청크 변환"""
         
-        ✅ Phase 0.8.2: 본문 조문 + Annex 동시 청크 생성
-        """
         chunks = []
         
-        # Title
+        # 문서 제목
         if parsed_result.get('document_title'):
             chunks.append({
                 'content': parsed_result['document_title'],
@@ -281,28 +274,13 @@ class LawParser:
                 }
             })
         
-        # 개정이력
-        if parsed_result.get('amendment_history'):
-            for i, amendment in enumerate(parsed_result['amendment_history']):
-                chunks.append({
-                    'content': amendment,
-                    'metadata': {
-                        'type': 'amendment_history',
-                        'boundary': 'header',
-                        'title': '개정 이력',
-                        'char_count': len(amendment),
-                        'section_order': -2 - i
-                    }
-                })
-        
         # 기본정신
         if parsed_result.get('basic_spirit'):
             chunks.append({
                 'content': parsed_result['basic_spirit'],
                 'metadata': {
                     'type': 'basic_spirit',
-                    'boundary': 'header',
-                    'title': '기본정신',
+                    'boundary': 'basic_spirit',
                     'char_count': len(parsed_result['basic_spirit']),
                     'section_order': -1
                 }
@@ -310,19 +288,20 @@ class LawParser:
         
         # 장
         for chapter in parsed_result.get('chapters', []):
+            content = f"{chapter.number} {chapter.title}"
             chunks.append({
-                'content': f"{chapter.number} {chapter.title}",
+                'content': content,
                 'metadata': {
                     'type': 'chapter',
                     'boundary': 'chapter',
                     'chapter_number': chapter.number,
                     'chapter_title': chapter.title,
-                    'char_count': len(chapter.number) + len(chapter.title),
+                    'char_count': len(content),
                     'section_order': chapter.section_order
                 }
             })
         
-        # ✅ Phase 0.8.2: 조문 청크 생성 (핵심!)
+        # ✅ 조문 (핵심!)
         for article in parsed_result.get('articles', []):
             content = f"{article.number}({article.title})\n{article.body}"
             chunks.append({
@@ -338,7 +317,7 @@ class LawParser:
                 }
             })
         
-        # ✅ Phase 0.8: Annex 서브청킹
+        # Annex 서브청킹
         if parsed_result.get('annex_content') and ANNEX_SUBCHUNKING_AVAILABLE:
             logger.info("✅ Phase 0.8: Annex 서브청킹 시작")
             
@@ -346,18 +325,12 @@ class LawParser:
             annex_text = parsed_result['annex_content']
             
             try:
-                # 서브청크 생성
                 sub_chunks = subchunker.chunk(annex_text)
-                
-                # 검증
                 validation = validate_subchunks(sub_chunks, len(annex_text))
                 
                 if validation['is_valid']:
                     logger.info(f"✅ Annex 서브청킹 성공: {validation['chunk_count']}개")
-                    logger.info(f"   📊 손실률: {validation['loss_rate']:.2%}")
-                    logger.info(f"   📊 타입: {validation['type_counts']}")
                     
-                    # 서브청크 → 표준 청크 포맷 변환
                     for sub in sub_chunks:
                         chunks.append({
                             'content': sub.content,
@@ -372,36 +345,32 @@ class LawParser:
                             }
                         })
                 else:
-                    raise ValueError("Annex 서브청킹 검증 실패")
+                    raise ValueError("검증 실패")
                     
             except Exception as e:
-                logger.warning(f"⚠️ Annex 서브청킹 실패: {e} - Fallback")
-                # Fallback: 기존 단일 청크
+                logger.warning(f"⚠️ Annex 서브청킹 실패: {e}")
                 chunks.append({
                     'content': annex_text,
                     'metadata': {
                         'type': 'annex',
                         'boundary': 'annex',
-                        'title': parsed_result.get('annex_title', ''),
                         'char_count': len(annex_text),
-                        'section_order': 0
+                        'section_order': 1000
                     }
                 })
         
         elif parsed_result.get('annex_content'):
-            # Annex 서브청킹 비활성화 - 기존 방식
             chunks.append({
                 'content': parsed_result['annex_content'],
                 'metadata': {
                     'type': 'annex',
                     'boundary': 'annex',
-                    'title': parsed_result.get('annex_title', ''),
                     'char_count': len(parsed_result['annex_content']),
-                    'section_order': 0
+                    'section_order': 1000
                 }
             })
         
-        logger.info(f"✅ 청크 변환 완료 (Phase 0.8.2): {len(chunks)}개")
+        logger.info(f"✅ 청크 변환 완료: {len(chunks)}개")
         
         # 타입별 통계
         type_counts = {}
@@ -415,11 +384,7 @@ class LawParser:
         return chunks
     
     def to_markdown(self, parsed_result: dict) -> str:
-        """
-        파싱 결과 → Markdown 변환
-        
-        ✅ Phase 0.8.2: 본문 조문 + Annex 모두 포함
-        """
+        """파싱 결과 → Markdown 변환"""
         
         lines = []
         
@@ -446,7 +411,6 @@ class LawParser:
         # 장과 조문
         current_chapter = None
         for article in parsed_result.get('articles', []):
-            # 새 장이면 추가
             if article.chapter_number != current_chapter:
                 current_chapter = article.chapter_number
                 for chapter in parsed_result.get('chapters', []):
@@ -455,44 +419,27 @@ class LawParser:
                         lines.append("")
                         break
             
-            # 조문
             lines.append(f"### {article.number}({article.title})")
             lines.append("")
             lines.append(article.body)
             lines.append("")
         
-        # ✅ Phase 0.8: Annex 섹션
+        # Annex
         if parsed_result.get('annex_content'):
             annex_no = parsed_result.get('annex_no', '')
             annex_title = parsed_result.get('annex_title', '')
-            related = parsed_result.get('related_article', '')
             
-            # 명확한 섹션 헤더
             if annex_no and annex_title:
                 lines.append(f"## [별표{annex_no}] {annex_title}")
             else:
                 lines.append("## 별표")
             lines.append("")
-            
-            # 관련 조문
-            if related:
-                lines.append(f"**관련 조문**: {related}")
-                lines.append("")
-            
-            # 표 영역 시작 표시
             lines.append("---")
-            lines.append("")
-            
-            # Annex 본문
             lines.append(parsed_result['annex_content'])
-            lines.append("")
-            
-            # 표 영역 종료 표시
             lines.append("---")
-            lines.append("")
         
         return "\n".join(lines)
 
 
-# 하위 호환성을 위한 Alias
+# 하위 호환성
 parse_pdf_text = LawParser.parse

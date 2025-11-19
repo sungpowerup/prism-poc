@@ -1,25 +1,15 @@
 """
-core/tree_builder.py
-PRISM Phase 5.7.2 Hotfix - TreeBuilder v1.2.1 (긴급 패치)
+core/tree_builder.py - PRISM Phase 0.8.5 Pattern Fix
+TreeBuilder 조문 패턴 수정
 
-목표: Markdown → 법령 트리 (JSON) 변환
+Phase 0.8.5 핵심 수정:
+- ✅ ARTICLE_PATTERN에서 ^ (줄 시작) 앵커 제거
+- ✅ 모든 위치에서 조문 감지 가능
+- ✅ 제4조 누락 및 제28조 유령 조문 문제 해결
 
-플로우:
-1. Markdown 전처리 (빈 페이지 필터링)
-2. 조문 경계 감지
-3. 항·호 중첩 구조 파싱
-4. Tree 구조 생성
-5. 메타데이터 추출
-
-✨ Phase 5.7.2.1 긴급 수정 (GPT 의견 100% 반영):
-1. SyntaxWarning 제거 (docstring raw string 변환)
-2. 페이지 구분자 패턴 강화 (# Page N, ----, ===)
-3. OCR 오탈자 처리 ("임용훈" → "임용권", "공금관리" → "상급인사")
-4. 빈 페이지 판정 강화 (가시문자 < 10자)
-
-Author: 박준호 (AI/ML Lead) + GPT(미송) 의견 반영
-Date: 2025-10-30
-Version: 5.7.2.1 Hotfix
+Author: 마창수산팀
+Date: 2025-11-19
+Version: Phase 0.8.5 Pattern Fix
 """
 
 import re
@@ -31,46 +21,32 @@ logger = logging.getLogger(__name__)
 
 
 class TreeBuilder:
-    r"""
-    Phase 5.7.2 TreeBuilder (긴급 패치)
+    """
+    Phase 0.8.5 TreeBuilder - 패턴 수정판
     
-    역할:
-    - Markdown을 법령 트리로 변환
-    - 조문·항·호 3단 계층 구조 생성
-    - 개정 메타데이터 추출
-    
-    ✅ Phase 5.6.3 Final+ 지표 대응:
-    - hierarchy_preservation_rate 검증
-    - boundary_cross_bleed_rate 검증
-    - empty_article_rate 검증
-    
-    ✨ Phase 5.7.2.1 최종 개선:
-    - 빈 페이지 자동 필터링 (# Page \d+, ---)
-    - 페이지 번호 정확 추적
-    - Chapter(장) 구조 지원
-    - OCR 오탈자 자동 교정
+    핵심 수정:
+    - ARTICLE_PATTERN 유연화 (줄 시작 앵커 제거)
+    - PDF 추출 텍스트의 다양한 포맷 지원
     """
     
-    # ✅ Phase 5.7.3.1: 패턴 정의 (Markdown 헤더 + 항/호 확장)
-    # Markdown 헤더(#)를 포함한 조문 인식
-    ARTICLE_PATTERN = re.compile(r'^\s{0,3}#{0,6}\s*(제\s?\d+조(?:의\s?\d+)?)(?:\s*\(([^)]+)\))?', re.MULTILINE)
-    
-    # ✨ Phase 5.7.3.1: CLAUSE_PATTERN 확장 (①, (1), 제1항, 1. 모두 지원)
-    CLAUSE_PATTERN = re.compile(
-        r'^\s{0,3}#{0,6}\s*(?:'
-        r'\(?([①-⑳]|제\s?\d+항)\)?|'  # ①, (①), 제1항
-        r'(\d+)\.\s+'                  # 1., 2., 3.
-        r')',
+    # ✅ Phase 0.8.5: 수정된 패턴 (줄 시작 앵커 제거)
+    # 원래: r'^\s{0,3}#{0,6}\s*(제\s?\d+조(?:의\s?\d+)?)(?:\s*\(([^)]+)\))?'
+    # 수정: 줄 어디서든 매칭 가능
+    ARTICLE_PATTERN = re.compile(
+        r'(제\d+조(?:의\d+)?)\s*[\(\[]([^\)\]]+)[\)\]]',
         re.MULTILINE
     )
     
-    # ✨ Phase 5.7.3.1: ITEM_PATTERN 확장 (호, 모든 형식 지원)
-    ITEM_PATTERN = re.compile(r'^\s{0,3}[-*]?\s*(\d{1,2}[.)]|[가-힣][.)])', re.MULTILINE)
+    # 항·호 패턴
+    CLAUSE_PATTERN = re.compile(
+        r'(?:^|\n)\s*(?:([①-⑳])|제?\s*(\d+)\s*항)',
+        re.MULTILINE
+    )
     
-    SUBITEM_PATTERN = re.compile(r'^\s{0,3}([가-힣]\)|[\d]+\))', re.MULTILINE)
+    ITEM_PATTERN = re.compile(r'(?:^|\n)\s*(\d{1,2})[.)]', re.MULTILINE)
     
-    # ✨ Phase 5.7.3: Chapter 패턴 (헤더 지원)
-    CHAPTER_PATTERN = re.compile(r'^\s{0,3}#{0,6}\s*(제\s?\d+장)(?:\s+(.+))?', re.MULTILINE)
+    # Chapter 패턴
+    CHAPTER_PATTERN = re.compile(r'(제\s*\d+\s*장)\s*(.+)?')
     
     # 삭제 조문 패턴
     DELETED_PATTERN = re.compile(r'<삭제\s*(\d{4}\.\d{2}\.\d{2})>')
@@ -78,30 +54,18 @@ class TreeBuilder:
     # 개정일 패턴
     AMENDED_PATTERN = re.compile(r'\[.*?(\d{4}\.\d{2}\.\d{2}).*?\]')
     
-    # ✨ Phase 5.7.2.1: 페이지 구분자 패턴 강화
+    # 페이지 구분자 패턴
     PAGE_DIVIDER_PATTERNS = [
-        re.compile(r'^#{1,3}\s*Page\s+\d+\s*$', re.IGNORECASE),  # # Page 1
-        re.compile(r'^Page\s+\d+\s*$', re.IGNORECASE),           # Page 1
-        re.compile(r'^[-—–_]{3,}\s*$'),                          # ---
-        re.compile(r'^[*]{3,}\s*$'),                             # ***
-        re.compile(r'^[=]{3,}\s*$'),                             # ===
+        re.compile(r'^#{1,3}\s*Page\s+\d+\s*$', re.IGNORECASE),
+        re.compile(r'^Page\s+\d+\s*$', re.IGNORECASE),
+        re.compile(r'^[-—–_]{3,}\s*$'),
+        re.compile(r'^[*]{3,}\s*$'),
+        re.compile(r'^[=]{3,}\s*$'),
     ]
-    
-    # ✨ Phase 5.7.2.1: OCR 오탈자 사전
-    OCR_TYPO_DICT = {
-        '임용훈': '임용권',
-        '공금관리위원회': '상급인사위원회',
-        '공금인사위원회': '상급인사위원회',
-        '성과계재단상자': '성과개선대상자',
-        '성과계재선발자': '성과개선대상자',
-        '채용소재시험지': '채용신체검사',
-        '임용·용훈': '임용권한',
-        '직원에 임용': '직원의 임용',
-    }
     
     def __init__(self):
         """초기화"""
-        logger.info("✅ TreeBuilder v5.7.2.1 초기화 완료 (Hotfix)")
+        logger.info("✅ TreeBuilder v0.8.5 초기화 완료 (Pattern Fix)")
     
     def build(
         self,
@@ -111,21 +75,10 @@ class TreeBuilder:
     ) -> Dict[str, Any]:
         """
         Markdown을 Tree로 변환
-        
-        Args:
-            markdown: Markdown 텍스트
-            document_title: 문서 제목
-            enacted_date: 제정일 (YYYY.MM.DD)
-        
-        Returns:
-            Document 스키마 (Phase 5.7.2)
         """
         logger.info(f"🌲 TreeBuilder 시작: {document_title}")
         
-        # ✨ Phase 5.7.2.1: OCR 오탈자 교정
-        markdown = self._fix_ocr_typos(markdown)
-        
-        # ✨ Phase 5.7.2.1: 빈 페이지 필터링 강화
+        # 페이지 구분자 제거
         markdown, removed_count = self._clean_page_dividers(markdown)
         logger.info(f"   🗑️ 페이지 구분자 제거: {removed_count}개 라인")
         
@@ -133,12 +86,12 @@ class TreeBuilder:
         articles = self._parse_articles(markdown)
         logger.info(f"   📄 조문 파싱 완료: {len(articles)}개")
         
-        # 메타데이터 생성
+        # 메타데이터
         metadata = {
             'title': document_title,
             'enacted_date': enacted_date or '',
             'extracted_at': datetime.now().isoformat(),
-            'version': '5.7.2.1'
+            'version': '0.8.5'
         }
         
         # Document 스키마
@@ -152,45 +105,8 @@ class TreeBuilder:
         logger.info(f"✅ TreeBuilder 완료")
         return document
     
-    def _fix_ocr_typos(self, markdown: str) -> str:
-        """
-        ✨ Phase 5.7.2.1: OCR 오탈자 교정
-        
-        Args:
-            markdown: 원본 Markdown
-        
-        Returns:
-            교정된 Markdown
-        """
-        corrected = markdown
-        corrections = 0
-        
-        for wrong, correct in self.OCR_TYPO_DICT.items():
-            if wrong in corrected:
-                count = corrected.count(wrong)
-                corrected = corrected.replace(wrong, correct)
-                corrections += count
-                logger.debug(f"      OCR 교정: '{wrong}' → '{correct}' ({count}회)")
-        
-        if corrections > 0:
-            logger.info(f"   ✏️ OCR 오탈자 교정: {corrections}개")
-        
-        return corrected
-    
     def _clean_page_dividers(self, markdown: str) -> Tuple[str, int]:
-        """
-        ✨ Phase 5.7.2.1: 페이지 구분자 제거 (강화)
-        
-        목적:
-        - "# Page 1", "Page 2", "---" 등 제거
-        - 빈 라인 정리
-        
-        Args:
-            markdown: 원본 Markdown
-        
-        Returns:
-            (정리된 Markdown, 제거된 라인 수)
-        """
+        """페이지 구분자 제거"""
         lines = markdown.split('\n')
         cleaned_lines = []
         removed_count = 0
@@ -198,236 +114,108 @@ class TreeBuilder:
         for line in lines:
             line_stripped = line.strip()
             
-            # 빈 라인은 유지 (중요한 구분자)
             if not line_stripped:
                 cleaned_lines.append(line)
                 continue
             
-            # 페이지 구분자 패턴 매칭
             is_divider = False
             for pattern in self.PAGE_DIVIDER_PATTERNS:
                 if pattern.match(line_stripped):
                     is_divider = True
                     removed_count += 1
-                    logger.debug(f"      제거: '{line_stripped[:50]}'")
                     break
             
             if not is_divider:
                 cleaned_lines.append(line)
         
-        cleaned = '\n'.join(cleaned_lines)
-        
-        return cleaned, removed_count
+        return '\n'.join(cleaned_lines), removed_count
     
     def _parse_articles(self, markdown: str) -> List[Dict[str, Any]]:
         """
-        조문 파싱 (경계 누수 0% 보장)
+        조문 파싱 (Phase 0.8.5 수정판)
         
         전략:
-        1. 조문 헤더 감지 즉시 이전 조문 flush
-        2. 항·호 중첩 구조 파싱
-        3. 빈 조문 자동 제거
-        
-        Args:
-            markdown: 전처리된 Markdown
-        
-        Returns:
-            Article 리스트
+        1. 먼저 모든 조문 위치를 찾기
+        2. 위치 기반으로 텍스트 분할
+        3. 각 조문 내용 추출
         """
         articles = []
-        current_article = None
-        current_chapter = None
-        page_num = 1
-        sequence = 0
         
-        lines = markdown.split('\n')
+        # 1. 모든 조문 위치 찾기
+        matches = list(self.ARTICLE_PATTERN.finditer(markdown))
         
-        for i, line in enumerate(lines):
-            line_stripped = line.strip()
+        if not matches:
+            logger.warning("   ⚠️ 조문을 찾을 수 없음")
+            return articles
+        
+        # 2. 첫 등장만 사용 (중복 제거)
+        seen = set()
+        unique_matches = []
+        for m in matches:
+            article_no = m.group(1)
+            if article_no not in seen:
+                seen.add(article_no)
+                unique_matches.append(m)
+        
+        # 3. 장(Chapter) 추출
+        chapter_matches = list(self.CHAPTER_PATTERN.finditer(markdown))
+        chapter_map = {}  # position -> chapter_name
+        for cm in chapter_matches:
+            chapter_map[cm.start()] = cm.group(1) + (' ' + cm.group(2).strip() if cm.group(2) else '')
+        
+        # 4. 각 조문 파싱
+        current_chapter = ""
+        
+        for i, m in enumerate(unique_matches):
+            article_no = m.group(1)
+            article_title = m.group(2) or ''
+            start_pos = m.end()
             
-            if not line_stripped:
-                if current_article:
-                    current_article['content'] += '\n'
-                continue
-            
-            # ✨ Phase 5.7.2: Chapter 감지
-            chapter_match = self.CHAPTER_PATTERN.match(line_stripped)
-            if chapter_match:
-                current_chapter = chapter_match.group(1)
-                if chapter_match.group(2):
-                    current_chapter += ' ' + chapter_match.group(2).strip()
-                logger.debug(f"      장 감지: {current_chapter}")
-                continue
-            
-            # 🚨 조문 헤더 감지 → 즉시 flush
-            article_match = self.ARTICLE_PATTERN.match(line_stripped)
-            if article_match:
-                # 이전 조문 저장 (빈 조문 필터링)
-                if current_article:
-                    if self._is_valid_article(current_article):
-                        articles.append(current_article)
-                    else:
-                        logger.debug(f"      빈 조문 제거: {current_article['article_no']}")
-                
-                # 새 조문 시작
-                sequence += 1
-                article_no = article_match.group(1)
-                article_title = article_match.group(2)
-                
-                current_article = {
-                    'level': 'article',
-                    'article_no': article_no,
-                    'article_title': article_title or '',
-                    'content': '',
-                    'children': [],
-                    'metadata': {
-                        'amended_dates': [],
-                        'is_deleted': False,
-                        'is_newly_established': False,
-                        'change_log': [],
-                        'has_empty_content': False,
-                        'has_cross_bleed': False
-                    },
-                    'position': {
-                        'page_number': page_num,
-                        'sequence': sequence
-                    }
-                }
-                
-                if current_chapter:
-                    current_article['chapter'] = current_chapter
-                
-                logger.debug(f"      조문 감지: {article_no} {article_title or ''}")
-                continue
-            
-            # 조문 내용 추가
-            if current_article:
-                # 삭제 조문 감지
-                deleted_match = self.DELETED_PATTERN.search(line_stripped)
-                if deleted_match:
-                    current_article['metadata']['is_deleted'] = True
-                    current_article['metadata']['change_log'].append({
-                        'type': 'deleted',
-                        'date': deleted_match.group(1)
-                    })
-                    logger.debug(f"      삭제 조문: {current_article['article_no']}")
-                    continue
-                
-                # 개정일 추출
-                amended_matches = self.AMENDED_PATTERN.findall(line_stripped)
-                for date in amended_matches:
-                    if date not in current_article['metadata']['amended_dates']:
-                        current_article['metadata']['amended_dates'].append(date)
-                        current_article['metadata']['change_log'].append({
-                            'type': 'amended',
-                            'date': date
-                        })
-                
-                # ✨ Phase 5.7.1: 항·호 파싱
-                clause_match = self.CLAUSE_PATTERN.match(line_stripped)
-                item_match = self.ITEM_PATTERN.match(line_stripped)
-                
-                if clause_match:
-                    # 항 추가
-                    clause_no = clause_match.group(1)
-                    content = line_stripped[clause_match.end():].strip()
-                    
-                    current_article['children'].append({
-                        'level': 'clause',
-                        'clause_no': clause_no,
-                        'content': content,
-                        'parent_article_no': current_article['article_no'],
-                        'children': [],
-                        'metadata': {
-                            'amended_dates': current_article['metadata']['amended_dates'].copy(),
-                            'is_deleted': False
-                        },
-                        'position': {
-                            'page_number': page_num,
-                            'sequence': sequence
-                        }
-                    })
-                    logger.debug(f"        항 감지: {clause_no}")
-                
-                elif item_match:
-                    # 호 추가 (마지막 항의 자식으로)
-                    item_no = item_match.group(1)
-                    content = line_stripped[item_match.end():].strip()
-                    
-                    if current_article['children'] and current_article['children'][-1]['level'] == 'clause':
-                        last_clause = current_article['children'][-1]
-                        last_clause['children'].append({
-                            'level': 'item',
-                            'item_no': item_no,
-                            'content': content,
-                            'parent_article_no': current_article['article_no'],
-                            'parent_clause_no': last_clause['clause_no'],
-                            'metadata': {
-                                'amended_dates': current_article['metadata']['amended_dates'].copy(),
-                                'is_deleted': False
-                            },
-                            'position': {
-                                'page_number': page_num,
-                                'sequence': sequence
-                            }
-                        })
-                        logger.debug(f"          호 감지: {item_no}")
-                    else:
-                        # 항 없이 호만 있는 경우 → 조문 직속
-                        current_article['children'].append({
-                            'level': 'item',
-                            'item_no': item_no,
-                            'content': content,
-                            'parent_article_no': current_article['article_no'],
-                            'metadata': {
-                                'amended_dates': current_article['metadata']['amended_dates'].copy(),
-                                'is_deleted': False
-                            },
-                            'position': {
-                                'page_number': page_num,
-                                'sequence': sequence
-                            }
-                        })
-                
+            # 다음 조문까지 또는 끝까지
+            if i + 1 < len(unique_matches):
+                end_pos = unique_matches[i + 1].start()
+            else:
+                # 마지막 조문: [별표] 전까지
+                annex_match = re.search(r'\[별표', markdown[start_pos:])
+                if annex_match:
+                    end_pos = start_pos + annex_match.start()
                 else:
-                    # 일반 텍스트
-                    current_article['content'] += line_stripped + ' '
-        
-        # 마지막 조문 저장
-        if current_article and self._is_valid_article(current_article):
-            articles.append(current_article)
+                    end_pos = len(markdown)
+            
+            # 조문 내용 추출
+            content = markdown[start_pos:end_pos].strip()
+            
+            # 장 결정 (이 조문 이전의 가장 가까운 장)
+            for ch_pos in sorted(chapter_map.keys()):
+                if ch_pos < m.start():
+                    current_chapter = chapter_map[ch_pos]
+            
+            # 개정일 추출
+            amended_dates = self.AMENDED_PATTERN.findall(content)
+            
+            # Article 노드 생성
+            article = {
+                'level': 'article',
+                'article_no': article_no,
+                'article_title': article_title,
+                'content': content,
+                'chapter': current_chapter,
+                'children': [],
+                'metadata': {
+                    'amended_dates': list(set(amended_dates)),
+                    'is_deleted': bool(self.DELETED_PATTERN.search(content)),
+                },
+                'position': {
+                    'start': m.start(),
+                    'end': end_pos
+                }
+            }
+            
+            articles.append(article)
+            logger.debug(f"      조문: {article_no}({article_title}) @ {m.start()}")
         
         return articles
-    
-    def _is_valid_article(self, article: Dict[str, Any]) -> bool:
-        """
-        ✨ Phase 5.7.2.1: 빈 조문 판정 강화
-        
-        조건:
-        1. 가시문자 10자 이상 OR
-        2. 자식(항·호) 1개 이상
-        
-        Args:
-            article: Article 노드
-        
-        Returns:
-            유효 여부
-        """
-        # 삭제 조문은 허용
-        if article['metadata']['is_deleted']:
-            return True
-        
-        # 가시문자 카운트
-        visible_chars = len(article['content'].replace(' ', '').replace('\n', ''))
-        
-        # 자식 카운트
-        has_children = len(article['children']) > 0
-        
-        # 판정
-        is_valid = visible_chars >= 10 or has_children
-        
-        if not is_valid:
-            article['metadata']['has_empty_content'] = True
-            logger.debug(f"      빈 조문 판정: {article['article_no']} (글자: {visible_chars}, 자식: {len(article['children'])})")
-        
-        return is_valid
+
+
+# 하위 호환성
+parse_markdown = TreeBuilder.build
