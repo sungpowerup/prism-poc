@@ -1,10 +1,15 @@
 """
-app.py - PRISM Phase 0.9
-Annex 서브청킹 + Promotion Lookup 계산기 통합
+app.py - PRISM Phase 0.8 제품 버전
+문서 전처리 파이프라인 (Stable)
+
+Phase 0.8 특징:
+- Annex Fallback + AnnexSubChunker + DualQA
+- 안정적인 텍스트 청킹
+- 표 자동 구조화는 research/ 브랜치에서 실험 중
 
 Author: 마창수산팀
 Date: 2025-11-18
-Version: Phase 0.9.0
+Version: Phase 0.8.1 Stable
 """
 
 import streamlit as st
@@ -60,16 +65,6 @@ except ImportError:
     PROFILE_AVAILABLE = False
     logger.warning("⚠️ DocumentProfile 미설치")
 
-# ✅ Phase 0.9: Promotion Lookup Import
-try:
-    sys.path.insert(0, str(Path(__file__).parent / 'research'))
-    from promotion_lookup import PromotionRangeLookup
-    PROMOTION_LOOKUP_AVAILABLE = True
-    logger.info("✅ PromotionLookup 로드 성공")
-except ImportError as e:
-    PROMOTION_LOOKUP_AVAILABLE = False
-    logger.warning(f"⚠️ PromotionLookup 미설치: {e}")
-
 
 LAW_SPACING_KEYWORDS = [
     "임용", "승진", "보수", "복무", "징계", "퇴직",
@@ -81,31 +76,23 @@ LAW_SPACING_KEYWORDS = [
 def apply_law_spacing(text: str) -> str:
     """Phase 0.7 룰 기반 띄어쓰기 (미세조정)"""
     
-    logger.info("   ✅ 조문/표 제목 패턴 보정 시작")
     text = re.sub(r"제\s*(\d+)\s*조\s*의\s*(\d+)", r"제\1조의\2", text)
     text = re.sub(r"제\s*(\d+)\s*조", r"제\1조", text)
     text = re.sub(r"표\s*(\d+)", r"표\1", text)
     text = re.sub(r"\[별표\s*(\d+)\]", r"[별표\1]", text)
-    logger.info("   ✅ 조문/표 제목 패턴 보정 완료")
     
-    logger.info("   ✅ 숫자/단위 공백 최적화 시작")
     text = re.sub(r"(\d+)\s*(만원|억원|천원|원)", r"\1\2", text)
     text = re.sub(r"(\d+)\s*(명|개|건|회|년|월|일)", r"\1\2", text)
     text = re.sub(r"(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})", r"\1.\2.\3", text)
-    logger.info("   ✅ 숫자/단위 공백 최적화 완료")
     
-    logger.info("   ✅ 조사 앞 공백 제거 시작")
     josa_list = ["은", "는", "이", "가", "을", "를", "과", "와", "에", "에서", "에게", "로", "으로"]
     for josa in josa_list:
         text = re.sub(rf"([가-힣]+)\s?{josa}\s?([가-힣])", rf"\1{josa} \2", text)
-    logger.info("   ✅ 조사 앞 공백 제거 완료")
     
-    logger.info("   ✅ 표 주석 줄바꿈 안정화 시작")
     comment_starters = ["※", "비고:", "주:", "단,", "다만,"]
     for starter in comment_starters:
         escaped = re.escape(starter)
         text = re.sub(rf"([^\n]){escaped}", rf"\1\n{starter}", text)
-    logger.info("   ✅ 표 주석 줄바꿈 안정화 완료")
     
     for kw in LAW_SPACING_KEYWORDS:
         text = re.sub(rf"([가-힣0-9]){kw}", rf"\1 {kw}", text)
@@ -121,8 +108,6 @@ def apply_law_spacing(text: str) -> str:
     
     text = "\n".join(lines)
     
-    logger.info("   ✅ Phase 0.7 룰 기반 띄어쓰기 적용 완료")
-    
     return text
 
 
@@ -134,15 +119,12 @@ def to_review_md_basic(
     """청크/파싱 결과 → 리뷰용 Markdown"""
     
     if base_markdown:
-        logger.info("   📋 base_markdown 사용")
         return base_markdown
     
     if parsed_result is not None:
-        logger.info("   📋 LawParser 마크다운 생성")
         parser = LawParser()
         return parser.to_markdown(parsed_result)
     
-    logger.info("   📋 chunks 조합 (백업)")
     lines = []
     
     for chunk in chunks:
@@ -183,7 +165,6 @@ def to_review_md_basic(
             lines.append("")
         
         elif chunk_type.startswith('annex'):
-            # Phase 0.8: 서브청크 타입 처리
             if 'header' in chunk_type:
                 lines.append(f"## {content.split(chr(10))[0]}")
             elif 'note' in chunk_type:
@@ -243,7 +224,7 @@ def process_document_vlm_mode(pdf_path: str, pdf_text: str):
 
 
 def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str):
-    """LawMode 파이프라인 (Phase 0.8)"""
+    """LawMode 파이프라인 (Phase 0.8 Stable)"""
     
     st.info("📜 LawMode: 규정/법령 파싱 중...")
     progress_bar = st.progress(0)
@@ -254,7 +235,6 @@ def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str)
     
     parser = LawParser()
     
-    # ✅ Phase 0.8: parser.parse() 직접 호출
     parsed_result = parser.parse(
         pdf_text=pdf_text,
         document_title=document_title,
@@ -264,7 +244,6 @@ def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str)
     
     progress_bar.progress(50)
     
-    # ✅ Phase 0.8: 서브청킹 적용된 chunks
     chunks = parser.to_chunks(parsed_result)
     progress_bar.progress(75)
     
@@ -290,100 +269,18 @@ def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str)
     }
 
 
-# ============================================
-# ✅ Phase 0.9: Promotion Lookup 계산기
-# ============================================
-
-def render_promotion_calculator():
-    """승진후보자 범위 계산기 UI"""
-    
-    st.sidebar.header("🧮 승진후보자 범위 계산기")
-    st.sidebar.markdown("**Phase 0.9 - Golden Set 기반**")
-    
-    if not PROMOTION_LOOKUP_AVAILABLE:
-        st.sidebar.error("❌ Promotion Lookup 모듈 없음")
-        st.sidebar.info("research/promotion_lookup.py 확인 필요")
-        return
-    
-    try:
-        # Lookup 서비스 초기화
-        lookup = PromotionRangeLookup()
-        
-        # 메타데이터 표시
-        metadata = lookup.get_metadata()
-        
-        with st.sidebar.expander("📊 Golden Set 정보", expanded=False):
-            st.write(f"**표 ID:** {metadata['table_id']}")
-            st.write(f"**등급:** {metadata['grade_type']}")
-            st.write(f"**관련 조문:** {metadata['related_article']}")
-            st.write(f"**전체 행:** {metadata['total_rows']}개")
-            st.write(f"**출처:** {metadata['source']}")
-        
-        # 입력
-        st.sidebar.subheader("📥 입력")
-        people = st.sidebar.number_input(
-            "임용하고자 하는 인원수",
-            min_value=1,
-            max_value=100,
-            value=47,
-            step=1,
-            help="1~75명 범위에서 입력"
-        )
-        
-        # 조회 버튼
-        if st.sidebar.button("🔍 조회", type="primary"):
-            result = lookup.query(people)
-            
-            if result:
-                st.sidebar.success("✅ 조회 성공!")
-                st.sidebar.markdown("---")
-                st.sidebar.subheader("📋 결과")
-                st.sidebar.metric("임용 인원", f"{result['people']}명")
-                st.sidebar.metric("승진후보자 범위", f"서열 {result['rank_max']}번까지")
-                st.sidebar.info(f"**출처:** {result['source']}")
-                st.sidebar.info(f"**신뢰도:** {result['confidence']*100:.0f}%")
-                
-                # JSON 다운로드
-                result_json = json.dumps(result, ensure_ascii=False, indent=2)
-                st.sidebar.download_button(
-                    label="📥 결과 JSON 다운로드",
-                    data=result_json,
-                    file_name=f"promotion_result_{people}명.json",
-                    mime="application/json"
-                )
-            else:
-                st.sidebar.error(f"❌ 조회 실패: {people}명은 Golden Set 범위(1-75) 밖입니다.")
-        
-        # 빠른 테스트
-        st.sidebar.markdown("---")
-        st.sidebar.subheader("⚡ 빠른 테스트")
-        test_cases = [1, 5, 10, 20, 47, 50, 75]
-        
-        for test_people in test_cases:
-            result = lookup.query(test_people)
-            if result:
-                st.sidebar.write(f"• {test_people}명 → {result['rank_max']}번까지")
-    
-    except Exception as e:
-        st.sidebar.error(f"❌ 계산기 오류: {e}")
-        logger.error(f"Promotion Calculator 오류: {e}", exc_info=True)
-
-
 def main():
     """메인 함수"""
     
     st.set_page_config(
-        page_title="PRISM Phase 0.9",
+        page_title="PRISM Phase 0.8",
         page_icon="🔷",
         layout="wide"
     )
     
-    st.title("🔷 PRISM Phase 0.9")
+    st.title("🔷 PRISM Phase 0.8")
     st.markdown("**Progressive Reasoning & Intelligence for Structured Materials**")
-    st.markdown("**Annex 서브청킹 + Promotion Lookup 계산기**")
-    
-    # ✅ Phase 0.9: 사이드바 계산기
-    render_promotion_calculator()
+    st.markdown("**문서 전처리 파이프라인 (Stable)**")
     
     # 메인 영역: 문서 처리
     st.header("📄 문서 처리")
@@ -398,15 +295,29 @@ def main():
     if not uploaded_file:
         st.info("👆 PDF 파일을 업로드하면 처리가 시작됩니다.")
         
-        # Phase 0.9 안내
+        # Phase 0.8 안내
         st.markdown("---")
-        st.subheader("🆕 Phase 0.9 신기능")
-        st.success("**✅ 승진후보자 범위 계산기** (왼쪽 사이드바)")
+        st.subheader("✅ Phase 0.8 제품 기능")
+        st.success("""
+        **안정적인 문서 전처리 파이프라인**
+        
+        - ✅ Annex-only 문서 감지 및 Fallback
+        - ✅ Annex 서브청킹 (header/table_rows/note)
+        - ✅ DualQA 100% 커버리지 검증
+        - ✅ 법령 구조 파싱 (장/조문)
+        """)
+        
+        # 개발 상태
+        st.markdown("---")
+        st.subheader("🔬 연구 브랜치 (Phase 0.9)")
         st.info("""
-        **Golden Set 기반 100% 정확도 보장**
-        - 임용 인원수 입력 → 승진후보자 범위 즉시 조회
-        - 별표1 (3급 승진 제외) 기준
-        - JSON 결과 다운로드 지원
+        **표 자동 구조화** - 연구 중
+        
+        - 🚧 행 단위 구조화 알고리즘
+        - 🚧 Golden Set 100% 정확도 목표
+        - 🚧 달성 시 제품에 편입 예정
+        
+        ※ 연구 코드는 `research/` 폴더에서 실험 중
         """)
         
         return
@@ -458,10 +369,14 @@ def main():
             chunks = result['chunks']
             st.write(f"- 총 청크: {len(chunks)}개")
             
-            # Phase 0.8: Annex 서브청크 강조
-            annex_chunks = [c for c in chunks if 'annex' in c.get('metadata', {}).get('type', '')]
-            if annex_chunks:
-                st.success(f"✅ Annex 서브청크: {len(annex_chunks)}개")
+            # 타입별 통계
+            type_counts = {}
+            for chunk in chunks:
+                ctype = chunk.get('metadata', {}).get('type', 'unknown')
+                type_counts[ctype] = type_counts.get(ctype, 0) + 1
+            
+            for ctype, count in sorted(type_counts.items()):
+                st.write(f"  - {ctype}: {count}개")
             
             # 다운로드 버튼
             col1, col2, col3 = st.columns(3)

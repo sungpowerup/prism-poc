@@ -1,12 +1,18 @@
 """
-core/law_parser.py - PRISM Phase 0.8 완전판
-LawParser 전체 구현 + Annex 서브청킹 통합
+core/law_parser.py - PRISM Phase 0.8 제품 버전
+LawParser 안정판 (TableParser 연동 없음)
+
+Phase 0.8 특징:
+- Annex Fallback + AnnexSubChunker + DualQA
+- 표 자동 구조화 없음 (연구 브랜치에서 실험 중)
+- 안정적인 텍스트 청킹만 제공
 
 Author: 마창수산팀
-Date: 2025-11-17
-Version: Phase 0.8 Complete
+Date: 2025-11-18
+Version: Phase 0.8.1 Stable
 """
 
+import re
 import logging
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
@@ -50,12 +56,14 @@ class Article:
 
 class LawParser:
     """
-    Phase 0.8 LawParser 완전판
+    Phase 0.8 LawParser 제품 버전
     
     역할:
     - PDF 텍스트 → 법령 구조 파싱
     - TreeBuilder 통합
     - Annex 서브청킹 통합
+    
+    ⚠️ Phase 0.9 표 자동 구조화는 research/ 브랜치에서 실험 중
     """
     
     def __init__(self):
@@ -64,7 +72,7 @@ class LawParser:
             raise ImportError("TreeBuilder is required but not available")
         
         self.tree_builder = TreeBuilder()
-        logger.info("✅ LawParser 초기화 완료")
+        logger.info("✅ LawParser 초기화 완료 (Phase 0.8 Stable)")
     
     def parse(
         self,
@@ -107,7 +115,7 @@ class LawParser:
             parsed_result.get('total_chapters', 0) == 0 and
             parsed_result.get('total_articles', 0) == 0 and
             not parsed_result.get('annex_content') and
-            len(cleaned_text) > 500  # 최소 텍스트 길이
+            len(cleaned_text) > 500
         )
         
         if is_annex_only:
@@ -194,8 +202,6 @@ class LawParser:
         
         TreeBuilder가 못 잡은 Annex를 수동으로 추출
         """
-        import re
-        
         # [별표 N] 패턴 찾기
         pattern = r'(\[별표\s*\d+\][\s\S]+)'
         match = re.search(pattern, cleaned_text)
@@ -376,7 +382,11 @@ class LawParser:
         return chunks
     
     def to_markdown(self, parsed_result: dict) -> str:
-        """파싱 결과 → Markdown 변환"""
+        """
+        파싱 결과 → Markdown 변환
+        
+        ✅ Phase 0.8: Annex 섹션을 명확하게 구분
+        """
         
         lines = []
         
@@ -418,11 +428,34 @@ class LawParser:
             lines.append(article.body)
             lines.append("")
         
-        # Annex
+        # ✅ Phase 0.8: Annex 섹션 명확하게 구분
         if parsed_result.get('annex_content'):
-            lines.append("## 별표")
+            annex_no = parsed_result.get('annex_no', '')
+            annex_title = parsed_result.get('annex_title', '')
+            related = parsed_result.get('related_article', '')
+            
+            # 명확한 섹션 헤더
+            if annex_no and annex_title:
+                lines.append(f"## [별표{annex_no}] {annex_title}")
+            else:
+                lines.append("## 별표")
             lines.append("")
+            
+            # 관련 조문
+            if related:
+                lines.append(f"**관련 조문**: {related}")
+                lines.append("")
+            
+            # 표 영역 시작 표시
+            lines.append("---")
+            lines.append("")
+            
+            # Annex 본문
             lines.append(parsed_result['annex_content'])
+            lines.append("")
+            
+            # 표 영역 종료 표시
+            lines.append("---")
             lines.append("")
         
         return "\n".join(lines)
