@@ -1,340 +1,242 @@
 """
-test_phase09.py - PRISM Phase 0.9 통합 테스트
-3단 계층 + LLM 리라이팅 + Sanity Check 검증
+tests/test_phase09.py - PRISM Phase 0.9 통합 테스트
+TableParser + Golden Set 정확도 평가
 
-Usage:
-    python tests/test_phase09.py
+실행: python tests/test_phase09.py
 
-Author: 마창수산팀 (정수아 QA Lead)
-Date: 2025-11-14
-Version: Phase 0.9
+Author: 마창수산팀
+Date: 2025-11-20
+Version: Phase 0.9.0
 """
 
 import sys
+import json
 import logging
 from pathlib import Path
 
-# PRISM 모듈 import
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# 프로젝트 루트 추가
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
-from core.law_parser import LawParser
-from core.dual_qa_gate import extract_pdf_text_layer
-from tests.llm_rewriter import LLMRewriter
+from research.table_parser import TableParser
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 
-def test_llm_rewriter_basic():
-    """기본 리라이팅 테스트"""
-    
+def test_table_parser_basic():
+    """기본 파싱 테스트"""
     print("\n" + "="*60)
-    print("🧪 Test 1: 기본 리라이팅")
+    print("📋 테스트 1: TableParser 기본 동작")
     print("="*60)
     
-    rewriter = LLMRewriter(
-        provider="azure_openai",
-        cache_enabled=True,
-        sanity_check_enabled=True
-    )
+    parser = TableParser()
     
-    # 테스트 조문
-    article_number = "제1조"
-    article_title = "목적"
-    article_body = "이규정은한국농어촌공사직원에게적용할인사관리의기준을정하여합리적이고적정한인사관리를기하게하는것을목적으로한다."
-    
-    try:
-        rewritten, validation = rewriter.rewrite_article(
-            article_number=article_number,
-            article_title=article_title,
-            article_body=article_body,
-            document_id="test_doc",
-            parser_version="0.9.0"
-        )
-        
-        print(f"✅ 리라이팅 성공")
-        print(f"   - 원본 길이: {len(article_body)}자")
-        print(f"   - 리라이팅 길이: {len(rewritten)}자")
-        print(f"   - Sanity Check: {'✅ PASS' if validation.is_valid else '❌ FAIL'}")
-        
-        if validation.warnings:
-            print(f"   - 경고: {validation.warnings}")
-        
-        print(f"\n원본:")
-        print(f"  {article_body[:100]}...")
-        
-        print(f"\n리라이팅:")
-        print(f"  {rewritten[:100]}...")
-        
-        return validation.is_valid
-    
-    except Exception as e:
-        logger.error(f"❌ 테스트 실패: {e}")
-        return False
-
-
-def test_llm_rewriter_cache():
-    """캐시 동작 테스트"""
-    
-    print("\n" + "="*60)
-    print("🧪 Test 2: 캐시 동작")
-    print("="*60)
-    
-    rewriter = LLMRewriter(
-        provider="azure_openai",
-        cache_enabled=True,
-        sanity_check_enabled=True
-    )
-    
-    article_number = "제2조"
-    article_title = "적용범위"
-    article_body = "직원의인사관리는법령및정관에정한것을제외하고는이규정에따른다."
-    
-    try:
-        # 첫 호출
-        import time
-        start = time.time()
-        rewritten1, _ = rewriter.rewrite_article(
-            article_number=article_number,
-            article_title=article_title,
-            article_body=article_body,
-            document_id="test_cache",
-            parser_version="0.9.0"
-        )
-        time1 = time.time() - start
-        
-        # 두 번째 호출 (캐시)
-        start = time.time()
-        rewritten2, _ = rewriter.rewrite_article(
-            article_number=article_number,
-            article_title=article_title,
-            article_body=article_body,
-            document_id="test_cache",
-            parser_version="0.9.0"
-        )
-        time2 = time.time() - start
-        
-        print(f"✅ 캐시 테스트 성공")
-        print(f"   - 첫 호출: {time1:.2f}초")
-        print(f"   - 캐시 호출: {time2:.2f}초")
-        print(f"   - 속도 향상: {time1/time2:.1f}배")
-        
-        # 결과 동일 확인
-        assert rewritten1 == rewritten2, "캐시 결과 불일치!"
-        print(f"   - 결과 일치: ✅")
-        
-        # 캐시 통계
-        stats = rewriter.get_cache_stats()
-        print(f"   - 캐시 항목: {stats['total_cached']}개")
-        
-        return True
-    
-    except Exception as e:
-        logger.error(f"❌ 테스트 실패: {e}")
-        return False
-
-
-def test_sanity_check_validation():
-    """Sanity Check 검증 테스트"""
-    
-    print("\n" + "="*60)
-    print("🧪 Test 3: Sanity Check 검증")
-    print("="*60)
-    
-    rewriter = LLMRewriter(
-        provider="azure_openai",
-        cache_enabled=False,
-        sanity_check_enabled=True
-    )
-    
-    # 테스트 케이스들
-    test_cases = [
-        {
-            'name': '정상 케이스',
-            'article_number': '제3조',
-            'article_title': '정의',
-            'article_body': '이규정에서사용하는용어의뜻은다음과같다.1.직위란직무와책임을말한다.2.임용이란신규채용을말한다.'
-        },
-        {
-            'name': '숫자 포함 케이스',
-            'article_number': '제4조',
-            'article_title': '기간',
-            'article_body': '수습기간은3개월로한다.다만특별한사유가있는경우5일이내에서연장할수있다.'
+    # 3급승진제외 테스트
+    test_chunk = {
+        'content': """1 2 3 4 5 6 7 8 9 10
+5번까지 10번까지 15번까지 20번까지 25번까지 28번까지 31번까지 34번까지 37번까지 40번까지""",
+        'metadata': {
+            'type': 'annex_table_rows',
+            'table_title': '3급승진제외'
         }
+    }
+    
+    chunks = parser.parse_annex_chunk(test_chunk)
+    
+    print(f"✅ 청크 생성: {len(chunks)}개")
+    
+    # 질의 테스트
+    test_queries = [
+        ("1명이면 서열 몇 번까지?", "5번까지"),
+        ("5명이면 서열 몇 번까지?", "25번까지"),
+        ("10명이면 서열 몇 번까지?", "40번까지"),
     ]
     
-    results = []
+    passed = 0
+    for query, expected in test_queries:
+        answer = parser.query(query, chunks)
+        status = "✅" if answer == expected else "❌"
+        print(f"  {status} Q: {query} → A: {answer} (기대: {expected})")
+        if answer == expected:
+            passed += 1
     
-    for test_case in test_cases:
-        try:
-            _, validation = rewriter.rewrite_article(
-                article_number=test_case['article_number'],
-                article_title=test_case['article_title'],
-                article_body=test_case['article_body'],
-                document_id="test_sanity",
-                parser_version="0.9.0"
-            )
-            
-            result = {
-                'name': test_case['name'],
-                'is_valid': validation.is_valid,
-                'header_preserved': validation.header_preserved,
-                'numbers_intact': validation.numbers_intact,
-                'legal_terms_intact': validation.legal_terms_intact,
-                'structure_preserved': validation.structure_preserved
-            }
-            
-            results.append(result)
-            
-            status = "✅ PASS" if validation.is_valid else "❌ FAIL"
-            print(f"{status} - {test_case['name']}")
-            print(f"   - 헤더 보존: {'✅' if validation.header_preserved else '❌'}")
-            print(f"   - 숫자 보존: {'✅' if validation.numbers_intact else '❌'}")
-            print(f"   - 용어 보존: {'✅' if validation.legal_terms_intact else '❌'}")
-            print(f"   - 구조 보존: {'✅' if validation.structure_preserved else '❌'}")
-            
-            if validation.warnings:
-                print(f"   - 경고: {', '.join(validation.warnings)}")
-        
-        except Exception as e:
-            logger.error(f"❌ {test_case['name']} 실패: {e}")
-            results.append({'name': test_case['name'], 'is_valid': False})
+    print(f"\n질의 테스트: {passed}/{len(test_queries)} 통과")
     
-    # 전체 통과율
-    total = len(results)
-    passed = sum(1 for r in results if r.get('is_valid', False))
-    pass_rate = passed / total if total > 0 else 0.0
-    
-    print(f"\n📊 Sanity Check 통과율: {pass_rate:.0%} ({passed}/{total})")
-    
-    return pass_rate >= 0.95
+    return passed == len(test_queries)
 
 
-def test_full_document_pipeline():
-    """전체 문서 파이프라인 테스트"""
-    
+def test_golden_set_accuracy():
+    """Golden Set 정확도 테스트"""
     print("\n" + "="*60)
-    print("🧪 Test 4: 전체 문서 파이프라인")
+    print("📋 테스트 2: Golden Set 정확도 평가")
     print("="*60)
     
-    # 테스트 문서 경로
-    pdf_path = "인사규정_일부개정전문-1-3_원본.pdf"
+    parser = TableParser()
+    golden_path = project_root / "tests" / "golden" / "annex_table_golden.json"
     
-    if not Path(pdf_path).exists():
-        print(f"⚠️ 테스트 문서 없음: {pdf_path}")
+    if not golden_path.exists():
+        print(f"⚠️ Golden Set 없음: {golden_path}")
         return False
     
-    try:
-        # 1. PDF 파싱
-        print("1️⃣ PDF 파싱...")
-        pdf_text = extract_pdf_text_layer(pdf_path)
-        parser = LawParser()
-        parsed_result = parser.parse(
-            pdf_text=pdf_text,
-            document_title="인사규정",
-            clean_artifacts=True,
-            normalize_linebreaks=True
-        )
-        
-        total_articles = parsed_result['total_articles']
-        print(f"   ✅ {total_articles}개 조문 파싱 완료")
-        
-        # 2. LLM 리라이팅
-        print("2️⃣ LLM 리라이팅...")
-        rewriter = LLMRewriter(
-            provider="azure_openai",
-            cache_enabled=True,
-            sanity_check_enabled=True
-        )
-        
-        validation_results = []
-        
-        for article in parsed_result['articles'][:3]:  # 처음 3개만 테스트
-            _, validation = rewriter.rewrite_article(
-                article_number=article.number,
-                article_title=article.title,
-                article_body=article.body,
-                document_id="인사규정",
-                parser_version="0.9.0"
-            )
-            validation_results.append(validation.is_valid)
-        
-        passed = sum(validation_results)
-        total = len(validation_results)
-        pass_rate = passed / total if total > 0 else 0.0
-        
-        print(f"   ✅ {total}개 조문 리라이팅 완료")
-        print(f"   📊 Sanity Check: {pass_rate:.0%} ({passed}/{total})")
-        
-        # 3. 캐시 통계
-        stats = rewriter.get_cache_stats()
-        print(f"   💾 캐시: {stats['total_cached']}개 항목")
-        
-        return pass_rate >= 0.95
+    # Golden Set 로드
+    with open(golden_path, 'r', encoding='utf-8') as f:
+        golden = json.load(f)
     
-    except Exception as e:
-        logger.error(f"❌ 테스트 실패: {e}")
+    print(f"✅ Golden Set 로드: {len(golden.get('tables', []))}개 테이블")
+    
+    # 테스트 청크 생성 - 두 테이블 모두
+    all_chunks = []
+    
+    # 1. 3급승진제외 (5배수 → 3배수)
+    test_chunk_1 = {
+        'content': ' '.join([str(i) for i in range(1, 76)]),
+        'metadata': {
+            'type': 'annex_table_rows',
+            'table_title': '3급승진제외'
+        }
+    }
+    chunks_1 = parser.parse_annex_chunk(test_chunk_1)
+    all_chunks.extend(chunks_1)
+    print(f"  - 3급승진제외: {len(chunks_1)}개 행")
+    
+    # 2. 3급승진 (2배수)
+    test_chunk_2 = {
+        'content': ' '.join([str(i) for i in range(1, 76)]),
+        'metadata': {
+            'type': 'annex_table_rows',
+            'table_title': '3급승진'
+        }
+    }
+    chunks_2 = parser.parse_annex_chunk(test_chunk_2)
+    all_chunks.extend(chunks_2)
+    print(f"  - 3급승진: {len(chunks_2)}개 행")
+    
+    # 정확도 평가
+    results = parser.evaluate_accuracy(all_chunks, str(golden_path))
+    
+    print(f"\n📊 정확도 결과:")
+    print(f"  - 테이블 매칭: {results['matched_tables']}/{results['total_tables']}")
+    print(f"  - 행 매칭: {results['matched_rows']}/{results['total_rows']}")
+    print(f"  - 정확도: {results['accuracy']*100:.1f}%")
+    
+    # 95% 기준 통과 여부
+    target_accuracy = 0.95
+    passed = results['accuracy'] >= target_accuracy
+    
+    if passed:
+        print(f"✅ DoD 통과: {results['accuracy']*100:.1f}% >= {target_accuracy*100:.0f}%")
+    else:
+        print(f"❌ DoD 실패: {results['accuracy']*100:.1f}% < {target_accuracy*100:.0f}%")
+    
+    return passed
+
+
+def test_query_accuracy():
+    """질의 정확도 테스트"""
+    print("\n" + "="*60)
+    print("📋 테스트 3: 질의 정확도")
+    print("="*60)
+    
+    parser = TableParser()
+    golden_path = project_root / "tests" / "golden" / "annex_table_golden.json"
+    
+    if not golden_path.exists():
+        print(f"⚠️ Golden Set 없음")
         return False
+    
+    with open(golden_path, 'r', encoding='utf-8') as f:
+        golden = json.load(f)
+    
+    # 테스트 청크 생성 - 두 테이블 모두
+    all_chunks = []
+    
+    # 3급승진제외
+    test_chunk_1 = {
+        'content': ' '.join([str(i) for i in range(1, 76)]),
+        'metadata': {
+            'type': 'annex_table_rows',
+            'table_title': '3급승진제외'
+        }
+    }
+    all_chunks.extend(parser.parse_annex_chunk(test_chunk_1))
+    
+    # 3급승진
+    test_chunk_2 = {
+        'content': ' '.join([str(i) for i in range(1, 76)]),
+        'metadata': {
+            'type': 'annex_table_rows',
+            'table_title': '3급승진'
+        }
+    }
+    all_chunks.extend(parser.parse_annex_chunk(test_chunk_2))
+    
+    # 테스트 질의 실행
+    test_queries = golden.get('test_queries', [])
+    passed = 0
+    
+    for tq in test_queries:
+        query = tq['query']
+        expected = tq['expected_answer']
+        table_id = tq.get('table_id', '')
+        
+        # 해당 테이블의 청크만 필터링
+        if '3급승진제외' in table_id:
+            target_chunks = [c for c in all_chunks if '3급승진제외' in c.get('table_id', '')]
+        elif '3급승진' in table_id and '제외' not in table_id:
+            # 3급승진이지만 제외가 아닌 경우
+            target_chunks = [c for c in all_chunks 
+                           if '3급승진' in c.get('table_id', '') 
+                           and '제외' not in c.get('table_id', '')]
+        else:
+            target_chunks = all_chunks
+        
+        answer = parser.query(query, target_chunks)
+        status = "✅" if answer == expected else "❌"
+        print(f"  {status} {query}")
+        print(f"      → 응답: {answer} (기대: {expected})")
+        
+        if answer == expected:
+            passed += 1
+    
+    print(f"\n질의 테스트: {passed}/{len(test_queries)} 통과")
+    
+    return passed == len(test_queries)
 
 
 def main():
-    """통합 테스트 실행"""
+    """메인 테스트 실행"""
+    print("\n" + "#"*60)
+    print("#  PRISM Phase 0.9 TableParser 통합 테스트")
+    print("#"*60)
+    
+    results = {
+        'basic': test_table_parser_basic(),
+        'golden': test_golden_set_accuracy(),
+        'query': test_query_accuracy()
+    }
     
     print("\n" + "="*60)
-    print("🚀 PRISM Phase 0.9 통합 테스트")
-    print("="*60)
-    print()
-    
-    # 환경 확인
-    import os
-    if not os.getenv("AZURE_OPENAI_API_KEY"):
-        print("❌ AZURE_OPENAI_API_KEY 환경변수 미설정")
-        print("   export AZURE_OPENAI_API_KEY=your-key-here")
-        return False
-    
-    print("✅ 환경변수 확인 완료")
-    
-    # 테스트 실행
-    tests = [
-        ("기본 리라이팅", test_llm_rewriter_basic),
-        ("캐시 동작", test_llm_rewriter_cache),
-        ("Sanity Check", test_sanity_check_validation),
-        ("전체 파이프라인", test_full_document_pipeline)
-    ]
-    
-    results = []
-    
-    for test_name, test_func in tests:
-        try:
-            result = test_func()
-            results.append((test_name, result))
-        except Exception as e:
-            logger.error(f"❌ {test_name} 실패: {e}")
-            results.append((test_name, False))
-    
-    # 최종 결과
-    print("\n" + "="*60)
-    print("📊 테스트 결과")
+    print("📊 최종 결과")
     print("="*60)
     
-    for test_name, result in results:
-        status = "✅ PASS" if result else "❌ FAIL"
-        print(f"{status} - {test_name}")
+    all_passed = all(results.values())
     
-    passed = sum(1 for _, r in results if r)
-    total = len(results)
+    for name, passed in results.items():
+        status = "✅" if passed else "❌"
+        print(f"  {status} {name}")
     
-    print()
-    print(f"전체: {passed}/{total} 통과 ({passed/total*100:.0f}%)")
-    
-    if passed == total:
-        print("\n🎉 Phase 0.9 통합 테스트 완전 통과!")
-        return True
+    if all_passed:
+        print("\n🎉 Phase 0.9 TableParser 테스트 전체 통과!")
     else:
-        print("\n⚠️ 일부 테스트 실패")
-        return False
+        print("\n⚠️ 일부 테스트 실패 - 수정 필요")
+    
+    return all_passed
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     success = main()
     sys.exit(0 if success else 1)
