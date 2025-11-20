@@ -1,16 +1,15 @@
 """
-core/law_parser.py - PRISM Phase 0.8.6 Hotfix
-페이지 아티팩트 제거 + 개정이력/장 청크 추가
+core/law_parser.py - PRISM Phase 0.8.7 Polishing
+출력물 읽기 품질 개선 (파싱 로직 유지)
 
-Phase 0.8.6 핵심 수정:
-- ✅ 페이지 아티팩트 완전 제거 (인사규정 402-2 등)
-- ✅ 개정이력 청크 추가 (amendment_history 타입)
-- ✅ 장(Chapter) 청크 synthesize (chapter_number 기반)
-- ✅ to_chunks(), to_markdown()에서 PageCleaner 적용
+Phase 0.8.7 핵심 수정:
+- ✅ Article 본문 끝의 장 헤더 제거 (제2장채용 중복 제거)
+- ✅ Annex 텍스트 노이즈 문자 제거 (□■ 등)
+- ✅ QA Summary 포맷 개선 (사람 가독성)
 
 Author: 마창수산팀
-Date: 2025-11-19
-Version: Phase 0.8.6 Hotfix
+Date: 2025-11-20
+Version: Phase 0.8.7 Polishing
 """
 
 import re
@@ -57,20 +56,32 @@ class Article:
 
 class LawParser:
     """
-    Phase 0.8.6 LawParser Hotfix
+    Phase 0.8.7 LawParser Polishing
     
     핵심 수정:
-    - 페이지 아티팩트 완전 제거
-    - 개정이력 청크 추가
-    - 장(Chapter) 청크 synthesize
+    - 파싱 로직 유지
+    - 출력물 읽기 품질 개선
     """
     
     # ✅ Phase 0.8.6: 페이지 아티팩트 패턴
     PAGE_ARTIFACT_PATTERNS = [
-        re.compile(r'\n인사규정\n\d{3}-\d{1,2}', re.MULTILINE),  # 줄바꿈 포함
-        re.compile(r'인사규정\s*\d{3}-\d{1,2}', re.IGNORECASE),  # 일반
-        re.compile(r'\b\d{3}-\d{1,2}\b'),  # 페이지 번호만
+        re.compile(r'\n인사규정\n\d{3}-\d{1,2}', re.MULTILINE),
+        re.compile(r'인사규정\s*\d{3}-\d{1,2}', re.IGNORECASE),
+        re.compile(r'\b\d{3}-\d{1,2}\b'),
     ]
+    
+    # ✅ Phase 0.8.7: Article 본문 끝의 장 헤더 패턴
+    CHAPTER_TAIL_PATTERN = re.compile(
+        r'\n제(?P<num>\d+)장\s*(?P<title>[^\n]*)\s*$'
+    )
+    
+    # ✅ Phase 0.8.7: Annex 노이즈 문자 (PDF에서 온 박스/라인 아티팩트)
+    ANNEX_NOISE_CHARS = ''.join([
+        '□', '■', '○', '●', '◇', '◆',  # 박스/도형
+        '━', '─', '═', '┃', '│',  # 라인
+        '', '', '',  # Private Use Area
+    ])
+    ANNEX_NOISE_PATTERN = re.compile(f'[{re.escape(ANNEX_NOISE_CHARS)}]')
     
     # 개정이력 패턴
     AMENDMENT_PATTERN = re.compile(
@@ -84,13 +95,11 @@ class LawParser:
             raise ImportError("TreeBuilder is required but not available")
         
         self.tree_builder = TreeBuilder()
-        logger.info("✅ LawParser 초기화 완료 (Phase 0.8.6 Hotfix)")
+        logger.info("✅ LawParser 초기화 완료 (Phase 0.8.7 Polishing)")
     
     def _clean_page_artifacts(self, text: str) -> str:
         """
-        ✅ Phase 0.8.6: 페이지 아티팩트 완전 제거
-        
-        "인사규정 402-2", "402-3" 등의 페이지 찌꺼기 제거
+        페이지 아티팩트 완전 제거
         """
         if not text:
             return text
@@ -104,7 +113,6 @@ class LawParser:
                 removed_count += len(matches)
                 result = pattern.sub('', result)
         
-        # 연속 공백/줄바꿈 정리
         result = re.sub(r' {2,}', ' ', result)
         result = re.sub(r'\n{3,}', '\n\n', result)
         
@@ -113,21 +121,58 @@ class LawParser:
         
         return result.strip()
     
+    def _clean_article_body(self, body: str) -> str:
+        """
+        ✅ Phase 0.8.7: Article 본문 정리
+        
+        1. 본문 끝에 붙은 장 헤더 제거 (제2장채용 등)
+        2. 페이지 아티팩트 제거
+        """
+        if not body:
+            return body
+        
+        # 1. 본문 끝의 장 헤더 제거
+        body = self.CHAPTER_TAIL_PATTERN.sub('', body)
+        
+        # 2. 페이지 아티팩트 제거
+        body = self._clean_page_artifacts(body)
+        
+        return body.strip()
+    
+    def _clean_annex_text(self, text: str) -> str:
+        """
+        ✅ Phase 0.8.7: Annex 텍스트 노이즈 제거
+        
+        1. 박스/라인 문자 제거 (□■━─ 등)
+        2. 연속 줄바꿈 정리
+        3. 페이지 아티팩트 제거
+        """
+        if not text:
+            return text
+        
+        # 1. 노이즈 문자 제거
+        result = self.ANNEX_NOISE_PATTERN.sub('', text)
+        
+        # 2. 연속 줄바꿈 정리
+        result = re.sub(r'\n{3,}', '\n\n', result)
+        
+        # 3. 연속 공백 정리
+        result = re.sub(r' {2,}', ' ', result)
+        
+        # 4. 페이지 아티팩트 제거
+        result = self._clean_page_artifacts(result)
+        
+        return result.strip()
+    
     def _extract_amendment_history(self, text: str) -> List[str]:
-        """
-        ✅ Phase 0.8.6: 개정이력 추출
-        
-        "제37차 개정 2019.05.27" 형태의 개정이력 추출
-        """
+        """개정이력 추출"""
         amendments = []
-        
-        # 문서 앞부분에서 개정이력 찾기
         header_text = text[:2000] if len(text) > 2000 else text
         
         matches = self.AMENDMENT_PATTERN.findall(header_text)
         if matches:
-            amendments = list(set(matches))  # 중복 제거
-            amendments.sort(reverse=True)  # 최신순 정렬
+            amendments = list(set(matches))
+            amendments.sort(reverse=True)
         
         return amendments
     
@@ -138,47 +183,37 @@ class LawParser:
         clean_artifacts: bool = True,
         normalize_linebreaks: bool = True
     ) -> Dict[str, Any]:
-        """
-        PDF 텍스트 파싱 (메인 메서드)
-        """
+        """PDF 텍스트 파싱 (메인 메서드)"""
         logger.info(f"📜 LawParser.parse() 시작: {document_title}")
         
-        # 전처리
         cleaned_text = pdf_text
         if normalize_linebreaks:
             cleaned_text = cleaned_text.replace('\r\n', '\n')
         
-        # ✅ Phase 0.8.6: 개정이력 추출 (페이지 아티팩트 제거 전)
         amendment_history = self._extract_amendment_history(cleaned_text)
         
-        # TreeBuilder로 파싱
         tree_result = self.tree_builder.build(
             markdown=cleaned_text,
             document_title=document_title,
             enacted_date=None
         )
         
-        # TreeBuilder 결과 → LawParser 포맷 변환
         parsed_result = self._convert_tree_to_result(tree_result, document_title)
         
-        # ✅ Phase 0.8.6: 추출된 개정이력 추가
         if amendment_history:
             parsed_result['amendment_history'] = amendment_history
             logger.info(f"   📋 개정이력: {len(amendment_history)}건 추출")
         
-        # 본문 + Annex 처리
         has_articles = parsed_result.get('total_articles', 0) > 0
         has_annex_pattern = '[별표' in cleaned_text
         
         if has_articles:
             logger.info(f"   📋 본문 조문: {parsed_result['total_articles']}개")
             
-            # Annex도 있으면 추출
             if has_annex_pattern and not parsed_result.get('annex_content'):
                 logger.info("   📋 혼합 문서 - 본문 + Annex 동시 처리")
                 self._apply_annex_extraction(cleaned_text, parsed_result)
         else:
-            # 조문이 없으면 Annex-only
             if len(cleaned_text) > 500:
                 logger.warning("🔄 Annex-only 문서 감지 - Fallback Annex 파서 가동")
                 self._apply_annex_fallback(cleaned_text, parsed_result)
@@ -198,11 +233,8 @@ class LawParser:
         tree_result: Dict[str, Any],
         document_title: str
     ) -> Dict[str, Any]:
-        """
-        TreeBuilder 결과 → LawParser 표준 포맷 변환
-        """
+        """TreeBuilder 결과 → LawParser 표준 포맷 변환"""
         
-        # Tree 추출
         tree = tree_result.get('document', {}).get('tree', [])
         
         logger.info(f"   🌲 TreeBuilder 노드 수: {len(tree)}개")
@@ -217,7 +249,6 @@ class LawParser:
         section_order = 0
         
         for node in tree:
-            # 'level' 또는 'type' 모두 인식
             node_type = node.get('level', node.get('type', ''))
             
             if node_type == 'chapter':
@@ -236,12 +267,10 @@ class LawParser:
                 article_title = node.get('article_title', node.get('title', ''))
                 article_body = node.get('content', node.get('body', ''))
                 
-                # 장 정보가 없으면 현재 장 사용
                 chapter_info = node.get('chapter', current_chapter)
                 if not chapter_info and current_chapter:
                     chapter_info = current_chapter
                 
-                # 자식 노드(항·호)의 내용도 포함
                 if 'children' in node:
                     for child in node.get('children', []):
                         child_content = child.get('content', '')
@@ -330,10 +359,7 @@ class LawParser:
         """
         파싱 결과 → RAG 청크 변환
         
-        ✅ Phase 0.8.6 수정:
-        - 페이지 아티팩트 제거
-        - 개정이력 청크 추가
-        - 장(Chapter) 청크 synthesize
+        ✅ Phase 0.8.7: Article 본문 정리 적용
         """
         
         chunks = []
@@ -351,7 +377,7 @@ class LawParser:
                 }
             })
         
-        # ✅ Phase 0.8.6: 개정이력 청크 추가
+        # 개정이력 청크
         if parsed_result.get('amendment_history'):
             history_content = "\n".join(parsed_result['amendment_history'])
             chunks.append({
@@ -377,8 +403,7 @@ class LawParser:
                 }
             })
         
-        # ✅ Phase 0.8.6: 장(Chapter) 청크 synthesize
-        # article의 chapter_number에서 장 정보를 추출하여 청크 생성
+        # 장(Chapter) 청크 synthesize
         seen_chapters = set()
         chapter_order = 0
         
@@ -387,7 +412,6 @@ class LawParser:
             if chapter_info and chapter_info not in seen_chapters:
                 seen_chapters.add(chapter_info)
                 
-                # 장 번호와 제목 분리
                 chapter_match = re.match(r'(제\d+장)\s*(.+)?', chapter_info)
                 if chapter_match:
                     chapter_num = chapter_match.group(1)
@@ -410,10 +434,10 @@ class LawParser:
                 })
                 chapter_order += 1
         
-        # 조문 (페이지 아티팩트 제거 적용)
+        # 조문 (Phase 0.8.7: 본문 정리 적용)
         for article in parsed_result.get('articles', []):
-            # ✅ Phase 0.8.6: 본문에서 페이지 아티팩트 제거
-            cleaned_body = self._clean_page_artifacts(article.body)
+            # ✅ Phase 0.8.7: 본문 정리 (장 꼬리 + 페이지 아티팩트)
+            cleaned_body = self._clean_article_body(article.body)
             
             content = f"{article.number}({article.title})\n{cleaned_body}"
             chunks.append({
@@ -434,8 +458,8 @@ class LawParser:
             logger.info("✅ Phase 0.8: Annex 서브청킹 시작")
             
             subchunker = AnnexSubChunker()
-            # ✅ Phase 0.8.6: Annex에서도 페이지 아티팩트 제거
-            annex_text = self._clean_page_artifacts(parsed_result['annex_content'])
+            # ✅ Phase 0.8.7: Annex 노이즈 제거
+            annex_text = self._clean_annex_text(parsed_result['annex_content'])
             
             try:
                 sub_chunks = subchunker.chunk(annex_text)
@@ -473,8 +497,8 @@ class LawParser:
                 })
         
         elif parsed_result.get('annex_content'):
-            # ✅ Phase 0.8.6: 페이지 아티팩트 제거
-            cleaned_annex = self._clean_page_artifacts(parsed_result['annex_content'])
+            # ✅ Phase 0.8.7: Annex 노이즈 제거
+            cleaned_annex = self._clean_annex_text(parsed_result['annex_content'])
             chunks.append({
                 'content': cleaned_annex,
                 'metadata': {
@@ -502,7 +526,7 @@ class LawParser:
         """
         파싱 결과 → Markdown 변환
         
-        ✅ Phase 0.8.6: 페이지 아티팩트 제거 적용
+        ✅ Phase 0.8.7: 본문/Annex 정리 적용
         """
         
         lines = []
@@ -512,7 +536,7 @@ class LawParser:
             lines.append(f"# {parsed_result['document_title']}")
             lines.append("")
         
-        # ✅ Phase 0.8.6: 개정이력
+        # 개정이력
         if parsed_result.get('amendment_history'):
             lines.append("## 개정 이력")
             lines.append("")
@@ -527,7 +551,7 @@ class LawParser:
             lines.append(parsed_result['basic_spirit'])
             lines.append("")
         
-        # ✅ Phase 0.8.6: 장과 조문 (장 헤더 추가)
+        # 장과 조문
         current_chapter = None
         seen_chapters = set()
         
@@ -541,15 +565,15 @@ class LawParser:
                     lines.append(f"## {current_chapter}")
                     lines.append("")
             
-            # 조문 (페이지 아티팩트 제거)
-            cleaned_body = self._clean_page_artifacts(article.body)
+            # ✅ Phase 0.8.7: 조문 본문 정리
+            cleaned_body = self._clean_article_body(article.body)
             
             lines.append(f"### {article.number}({article.title})")
             lines.append("")
             lines.append(cleaned_body)
             lines.append("")
         
-        # Annex (페이지 아티팩트 제거)
+        # Annex
         if parsed_result.get('annex_content'):
             annex_no = parsed_result.get('annex_no', '')
             annex_title = parsed_result.get('annex_title', '')
@@ -561,8 +585,8 @@ class LawParser:
             lines.append("")
             lines.append("---")
             
-            # ✅ Phase 0.8.6: Annex 페이지 아티팩트 제거
-            cleaned_annex = self._clean_page_artifacts(parsed_result['annex_content'])
+            # ✅ Phase 0.8.7: Annex 노이즈 제거
+            cleaned_annex = self._clean_annex_text(parsed_result['annex_content'])
             lines.append(cleaned_annex)
             lines.append("---")
         

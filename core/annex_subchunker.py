@@ -1,10 +1,14 @@
 """
-core/annex_subchunker.py - PRISM Phase 0.8
-Annex 서브청킹 엔진
+core/annex_subchunker.py - PRISM Phase 0.8.7 Polishing
+Annex 서브청킹 엔진 (노이즈 제거 강화)
+
+Phase 0.8.7 핵심 수정:
+- ✅ 입력 텍스트 노이즈 제거 (□■ 등)
+- ✅ table_rows에서 쓰레기 문자 완전 제거
 
 Author: 박준호 (AI/ML Lead) + 이서영 (Backend Lead)
-Date: 2025-11-17
-Version: Phase 0.8
+Date: 2025-11-20
+Version: Phase 0.8.7 Polishing
 """
 
 import re
@@ -23,19 +27,26 @@ class SubChunk:
     content: str
     metadata: Dict
     char_count: int
-    order: int  # GPT 피드백: 순서 메타데이터
+    order: int
 
 
 class AnnexSubChunker:
     """
     Annex 서브청킹 엔진
     
-    GPT 핵심 피드백 반영:
-    1. Row 완벽 파싱 목표 제거 (→ Phase 0.9)
-    2. 의미 단위 분리에 집중
-    3. section_type 명확화
-    4. order 메타데이터 추가
+    Phase 0.8.7 수정:
+    - 입력 텍스트 노이즈 제거 강화
+    - 의미 단위 분리
     """
+    
+    # ✅ Phase 0.8.7: 노이즈 문자 패턴
+    NOISE_CHARS = ''.join([
+        '□', '■', '○', '●', '◇', '◆',  # 박스/도형
+        '━', '─', '═', '┃', '│', '┌', '┐', '└', '┘', '├', '┤', '┬', '┴', '┼',  # 라인/테이블
+        '', '', '',  # Private Use Area
+        '▪', '▫', '◦', '•',  # 불릿
+    ])
+    NOISE_PATTERN = re.compile(f'[{re.escape(NOISE_CHARS)}]')
     
     def __init__(self):
         self.patterns = {
@@ -45,7 +56,33 @@ class AnnexSubChunker:
             'note_marker': r'^\*',
             'table_separator': r'^임용하고자하는인원수에대한승진후보자범위\((\d+급.*?)\)'
         }
-        logger.info("✅ AnnexSubChunker 초기화 (Phase 0.8)")
+        logger.info("✅ AnnexSubChunker 초기화 (Phase 0.8.7 Polishing)")
+    
+    def _clean_annex_text(self, text: str) -> str:
+        """
+        ✅ Phase 0.8.7: Annex 텍스트 노이즈 제거
+        
+        1. 박스/라인 문자 제거
+        2. 연속 줄바꿈 정리
+        3. 연속 공백 정리
+        """
+        if not text:
+            return text
+        
+        # 1. 노이즈 문자 제거
+        result = self.NOISE_PATTERN.sub('', text)
+        
+        # 2. 연속 줄바꿈 정리 (3개 이상 → 2개)
+        result = re.sub(r'\n{3,}', '\n\n', result)
+        
+        # 3. 연속 공백 정리
+        result = re.sub(r' {2,}', ' ', result)
+        
+        # 4. 각 줄의 앞뒤 공백 정리
+        lines = [line.strip() for line in result.split('\n')]
+        result = '\n'.join(lines)
+        
+        return result.strip()
     
     def chunk(self, annex_content: str, annex_no: str = "1") -> List[SubChunk]:
         """
@@ -62,31 +99,34 @@ class AnnexSubChunker:
             logger.warning("⚠️ Annex 내용이 너무 짧음 - 서브청킹 스킵")
             return []
         
-        logger.info(f"📋 Annex 서브청킹 시작: {len(annex_content)}자")
+        # ✅ Phase 0.8.7: 입력 텍스트 노이즈 제거
+        cleaned_content = self._clean_annex_text(annex_content)
+        
+        logger.info(f"📋 Annex 서브청킹 시작: {len(annex_content)}자 → {len(cleaned_content)}자 (노이즈 제거)")
         
         chunks = []
         order = 0
         
         # 1. Header 청크
-        header_chunk = self._extract_header(annex_content, annex_no, order)
+        header_chunk = self._extract_header(cleaned_content, annex_no, order)
         if header_chunk:
             chunks.append(header_chunk)
             order += 1
         
         # 2. Table 영역 분리 (3급제외 / 3급승진 등)
-        table_chunks = self._extract_table_sections(annex_content, annex_no, order)
+        table_chunks = self._extract_table_sections(cleaned_content, annex_no, order)
         chunks.extend(table_chunks)
         order += len(table_chunks)
         
         # 3. Note 청크
-        note_chunks = self._extract_notes(annex_content, annex_no, order)
+        note_chunks = self._extract_notes(cleaned_content, annex_no, order)
         chunks.extend(note_chunks)
         
-        # 4. 텍스트 손실 검증 (GPT 필수 요구사항)
+        # 4. 텍스트 손실 검증
         total_chars = sum(c.char_count for c in chunks)
-        loss_rate = abs(total_chars - len(annex_content)) / len(annex_content)
+        loss_rate = abs(total_chars - len(cleaned_content)) / len(cleaned_content) if len(cleaned_content) > 0 else 0
         
-        if loss_rate > 0.05:  # 5% 초과 손실
+        if loss_rate > 0.05:
             logger.error(f"❌ 텍스트 손실 {loss_rate:.1%} - 기준 초과!")
         else:
             logger.info(f"✅ 텍스트 손실 {loss_rate:.1%} (허용 범위)")
@@ -104,7 +144,6 @@ class AnnexSubChunker:
     ) -> Optional[SubChunk]:
         """헤더 청크 추출"""
         
-        # [별표N] 패턴 찾기
         match = re.search(self.patterns['header'], text)
         if not match:
             return None
@@ -123,7 +162,7 @@ class AnnexSubChunker:
         for m in re.finditer(self.patterns['amendment'], text):
             amendments.append(m.group(1).strip())
         
-        # 헤더 영역 텍스트 (첫 100자 정도)
+        # 헤더 영역 텍스트 (첫 200자 정도)
         header_text = text[:min(200, len(text))]
         header_text = re.sub(r'\n+', '\n', header_text)
         
@@ -147,12 +186,7 @@ class AnnexSubChunker:
         annex_no: str, 
         start_order: int
     ) -> List[SubChunk]:
-        """
-        Table 섹션 분리
-        
-        GPT 피드백: Row별 파싱이 아닌 "섹션 분리"
-        예: 3급제외, 3급승진
-        """
+        """Table 섹션 분리"""
         chunks = []
         order = start_order
         
@@ -167,6 +201,9 @@ class AnnexSubChunker:
             # 구분자 없으면 전체를 하나의 테이블로
             table_text = self._extract_table_body(text)
             if table_text:
+                # ✅ Phase 0.8.7: table_text도 노이즈 제거
+                table_text = self._clean_annex_text(table_text)
+                
                 chunks.append(SubChunk(
                     section_id=f"annex_{annex_no}_table_main",
                     section_type="table_rows",
@@ -201,15 +238,18 @@ class AnnexSubChunker:
             )
             
             if len(section_text_no_notes.strip()) > 20:
+                # ✅ Phase 0.8.7: 섹션 텍스트 노이즈 제거
+                cleaned_section = self._clean_annex_text(section_text_no_notes.strip())
+                
                 chunks.append(SubChunk(
                     section_id=f"annex_{annex_no}_table_{i+1}",
                     section_type="table_rows",
-                    content=section_text_no_notes.strip(),
+                    content=cleaned_section,
                     metadata={
                         "table_title": section_title,
-                        "row_count_estimate": self._estimate_row_count(section_text_no_notes)
+                        "row_count_estimate": self._estimate_row_count(cleaned_section)
                     },
-                    char_count=len(section_text_no_notes.strip()),
+                    char_count=len(cleaned_section),
                     order=order
                 ))
                 order += 1
@@ -219,7 +259,6 @@ class AnnexSubChunker:
     def _extract_table_body(self, text: str) -> str:
         """표 본문 영역 추출 (헤더 제외)"""
         
-        # 첫 번째 숫자 행이 시작되는 지점부터
         lines = text.split('\n')
         table_start = 0
         
@@ -260,7 +299,7 @@ class AnnexSubChunker:
         
         # 각 Note를 개별 청크로
         for i, note in enumerate(note_lines):
-            # 노이즈 제거 (GPT 요구사항)
+            # ✅ Phase 0.8.7: 노이즈 제거 강화
             note_clean = self._clean_note(note)
             
             chunks.append(SubChunk(
@@ -278,13 +317,12 @@ class AnnexSubChunker:
         return chunks
     
     def _clean_note(self, note: str) -> str:
-        """
-        Note 노이즈 제거
-        
-        GPT 요구사항: 꾸밈선, 장식 문자 제거
-        """
+        """Note 노이즈 제거"""
         # 연속된 특수문자 제거 (─, ═, ━ 등)
         note = re.sub(r'[─═━]{2,}', '', note)
+        
+        # ✅ Phase 0.8.7: 노이즈 문자 제거
+        note = self.NOISE_PATTERN.sub('', note)
         
         # 연속 공백 정리
         note = re.sub(r'\s{2,}', ' ', note)
@@ -303,8 +341,7 @@ class AnnexSubChunker:
             return "general"
     
     def _estimate_row_count(self, text: str) -> int:
-        """Row 개수 추정 (완벽한 파싱 아님)"""
-        # 숫자로 시작하는 줄 개수
+        """Row 개수 추정"""
         lines = text.split('\n')
         count = sum(1 for line in lines if re.match(r'^\d+\s', line))
         return count
@@ -325,27 +362,21 @@ class AnnexSubChunker:
 # ============================================
 
 def validate_subchunks(chunks: List[SubChunk], original_length: int) -> Dict:
-    """
-    서브청크 검증 (GPT 필수 요구사항)
-    
-    Returns:
-        검증 결과 딕셔너리
-    """
+    """서브청크 검증"""
     total_chars = sum(c.char_count for c in chunks)
-    loss_rate = abs(total_chars - original_length) / original_length
+    loss_rate = abs(total_chars - original_length) / original_length if original_length > 0 else 0
     
     type_counts = {}
     for chunk in chunks:
         type_counts[chunk.section_type] = type_counts.get(chunk.section_type, 0) + 1
     
-    # GPT 요구: 의미 단위 검증
     has_header = 'header' in type_counts
     has_table = 'table_rows' in type_counts
     has_note = 'note' in type_counts
     has_multiple_types = len(type_counts) >= 2
     
     is_valid = (
-        loss_rate < 0.05 and
+        loss_rate < 0.10 and  # Phase 0.8.7: 노이즈 제거로 인해 10%까지 허용
         has_multiple_types and
         len(chunks) >= 3
     )
@@ -368,7 +399,8 @@ if __name__ == '__main__':
     sample = """
 [별표 1] 승진후보자범위(3급승진제외)
 <제20조제2항관련>(개정2003.3.29)
-
+□□□□□□□□□□
+임용하고자하는인원수에대한승진후보자범위(3급승진제외)
 1 5번까지
 2 10번까지
 *임용하고자하는인원수가5명까지는서열명부순위의5배수

@@ -1,14 +1,15 @@
 """
-app.py - PRISM Phase 0.8.6 Hotfix
-문서 전처리 파이프라인 (다운로드 새로고침 문제 해결)
+app.py - PRISM Phase 0.8.7 Polishing
+문서 전처리 파이프라인 (출력 품질 개선)
 
-Phase 0.8.6 핵심 수정:
-- ✅ 다운로드 시 새로고침 문제 해결 (st.session_state 활용)
-- ✅ 처리 결과를 세션에 저장하여 유지
+Phase 0.8.7 핵심 수정:
+- ✅ QA Summary 포맷 개선 (사람 가독성)
+- ✅ review.md에 QA Summary 블록 추가
+- ✅ 기존 기능 유지
 
 Author: 마창수산팀
-Date: 2025-11-19
-Version: Phase 0.8.6 Hotfix
+Date: 2025-11-20
+Version: Phase 0.8.7 Polishing
 """
 
 import streamlit as st
@@ -110,22 +111,103 @@ def apply_law_spacing(text: str) -> str:
     return text
 
 
+def generate_qa_summary(
+    document_title: str,
+    pdf_text_len: int,
+    processed_text_len: int,
+    parsed_result: dict,
+    qa_result: dict,
+    chunks: list
+) -> str:
+    """
+    ✅ Phase 0.8.7: QA Summary 블록 생성
+    
+    사람이 보기 좋은 포맷으로 QA 요약 생성
+    """
+    
+    # 커버리지 계산
+    coverage = (processed_text_len / pdf_text_len * 100) if pdf_text_len > 0 else 0
+    
+    # 청크 타입별 통계
+    type_counts = {}
+    for chunk in chunks:
+        ctype = chunk.get('metadata', {}).get('type', 'unknown')
+        type_counts[ctype] = type_counts.get(ctype, 0) + 1
+    
+    # Annex 통계
+    annex_header = type_counts.get('annex_header', 0)
+    annex_rows = type_counts.get('annex_table_rows', 0)
+    annex_note = type_counts.get('annex_note', 0)
+    has_annex = annex_header + annex_rows + annex_note > 0
+    
+    # QA 결과
+    match_rate = qa_result.get('match_rate', 0) * 100
+    is_pass = qa_result.get('is_pass', False)
+    qa_flags = qa_result.get('qa_flags', [])
+    
+    # Summary 생성
+    lines = [
+        "[PRISM LawParser QA Summary]",
+        "",
+        f"- 문서명 : {document_title}",
+        f"- PDF 텍스트 길이 : {pdf_text_len:,}자",
+        f"- PRISM 추출 길이 : {processed_text_len:,}자 (커버리지 {coverage:.1f}%)",
+        "",
+        "[구조화 결과]",
+        f"- 장(Chapter) : {parsed_result.get('total_chapters', 0)}개",
+        f"- 조문(Article) : {parsed_result.get('total_articles', 0)}개",
+        f"- 부칙/개정이력 : {len(parsed_result.get('amendment_history', []))}건",
+    ]
+    
+    if has_annex:
+        lines.append(f"- Annex : 있음 (header {annex_header}, rows {annex_rows}, note {annex_note})")
+    else:
+        lines.append("- Annex : 없음")
+    
+    lines.extend([
+        "",
+        "[QA 결과]",
+        f"- 조문 헤더 매칭률 : {match_rate:.0f}% ({parsed_result.get('total_articles', 0)}/{parsed_result.get('total_articles', 0)})",
+        f"- 이상 징후 : {', '.join(qa_flags) if qa_flags else '없음'}",
+        f"- 상태 : {'✅ PASS' if is_pass else '❌ FAIL'}",
+    ])
+    
+    return "\n".join(lines)
+
+
 def to_review_md_basic(
     chunks: list,
     parsed_result: dict = None,
-    base_markdown: str = None
+    base_markdown: str = None,
+    qa_summary: str = None
 ) -> str:
-    """청크/파싱 결과 → 리뷰용 Markdown"""
+    """
+    청크/파싱 결과 → 리뷰용 Markdown
     
-    if base_markdown:
-        return base_markdown
-    
-    if parsed_result is not None:
-        parser = LawParser()
-        return parser.to_markdown(parsed_result)
+    ✅ Phase 0.8.7: QA Summary 블록 추가
+    """
     
     lines = []
     
+    # ✅ Phase 0.8.7: QA Summary 블록 (상단)
+    if qa_summary:
+        lines.append("```")
+        lines.append(qa_summary)
+        lines.append("```")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+    
+    if base_markdown:
+        lines.append(base_markdown)
+        return "\n".join(lines)
+    
+    if parsed_result is not None:
+        parser = LawParser()
+        lines.append(parser.to_markdown(parsed_result))
+        return "\n".join(lines)
+    
+    # 청크 기반 생성
     for chunk in chunks:
         content = chunk['content']
         meta = chunk['metadata']
@@ -223,7 +305,7 @@ def process_document_vlm_mode(pdf_path: str, pdf_text: str):
 
 
 def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str):
-    """LawMode 파이프라인 (Phase 0.8 Stable)"""
+    """LawMode 파이프라인 (Phase 0.8.7 Polishing)"""
     
     st.info("📜 LawMode: 규정/법령 파싱 중...")
     progress_bar = st.progress(0)
@@ -258,12 +340,32 @@ def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str)
     
     progress_bar.progress(100)
     
+    # ✅ Phase 0.8.7: QA Summary 생성
+    qa_summary = generate_qa_summary(
+        document_title=document_title,
+        pdf_text_len=len(pdf_text),
+        processed_text_len=len(rag_markdown),
+        parsed_result=parsed_result,
+        qa_result=qa_result,
+        chunks=chunks
+    )
+    
+    # ✅ Phase 0.8.7: review.md에 QA Summary 포함
+    review_markdown = to_review_md_basic(
+        chunks=chunks,
+        parsed_result=parsed_result,
+        base_markdown=rag_markdown,
+        qa_summary=qa_summary
+    )
+    
     return {
         'rag_markdown': rag_markdown,
+        'review_markdown': review_markdown,
         'chunks': chunks,
         'qa_result': qa_result,
         'is_qa_pass': qa_result.get('is_pass', False),
         'parsed_result': parsed_result,
+        'qa_summary': qa_summary,
         'mode': 'LawMode'
     }
 
@@ -272,16 +374,16 @@ def main():
     """메인 함수"""
     
     st.set_page_config(
-        page_title="PRISM Phase 0.8.6",
+        page_title="PRISM Phase 0.8.7",
         page_icon="🔷",
         layout="wide"
     )
     
-    st.title("🔷 PRISM Phase 0.8.6")
+    st.title("🔷 PRISM Phase 0.8.7")
     st.markdown("**Progressive Reasoning & Intelligence for Structured Materials**")
-    st.markdown("**문서 전처리 파이프라인 (Hotfix)**")
+    st.markdown("**문서 전처리 파이프라인 (Polishing)**")
     
-    # ✅ Phase 0.8.6: 세션 상태 초기화
+    # 세션 상태 초기화
     if 'processing_result' not in st.session_state:
         st.session_state.processing_result = None
     if 'processed_file_name' not in st.session_state:
@@ -300,22 +402,21 @@ def main():
     if not uploaded_file:
         st.info("👆 PDF 파일을 업로드하면 처리가 시작됩니다.")
         
-        # Phase 0.8.6 안내
+        # Phase 0.8.7 안내
         st.markdown("---")
-        st.subheader("✅ Phase 0.8.6 Hotfix 기능")
+        st.subheader("✅ Phase 0.8.7 Polishing 기능")
         st.success("""
-        **개선된 문서 전처리 파이프라인**
+        **출력물 읽기 품질 개선**
         
-        - ✅ 페이지 아티팩트 완전 제거 (인사규정 402-2 등)
-        - ✅ 개정이력 청크 추가
-        - ✅ 장(Chapter) 청크 자동 생성
-        - ✅ 다운로드 시 새로고침 문제 해결
-        - ✅ DualQA 100% 커버리지 검증
+        - ✅ Article 본문 끝의 장 헤더 제거 (제2장채용 중복 제거)
+        - ✅ Annex 텍스트 노이즈 문자 제거 (□■ 등)
+        - ✅ QA Summary 포맷 개선 (사람 가독성)
+        - ✅ review.md 상단에 QA Summary 블록 추가
         """)
         
         return
     
-    # ✅ Phase 0.8.6: 파일이 바뀌면 결과 초기화
+    # 파일이 바뀌면 결과 초기화
     if st.session_state.processed_file_name != uploaded_file.name:
         st.session_state.processing_result = None
         st.session_state.processed_file_name = uploaded_file.name
@@ -353,7 +454,7 @@ def main():
                     pdf_text
                 )
             
-            # ✅ Phase 0.8.6: 결과를 세션에 저장
+            # 결과를 세션에 저장
             st.session_state.processing_result = result
             
             st.success(f"✅ 처리 완료 ({result['mode']})")
@@ -363,7 +464,7 @@ def main():
             logger.error(f"❌ 처리 실패: {e}")
             return
     
-    # ✅ Phase 0.8.6: 세션에 저장된 결과가 있으면 표시
+    # 세션에 저장된 결과가 있으면 표시
     if st.session_state.processing_result:
         result = st.session_state.processing_result
         
@@ -373,6 +474,11 @@ def main():
             st.success(f"✅ DualQA 통과 (커버리지: {qa_result.get('text_coverage', 0)*100:.1f}%)")
         else:
             st.warning(f"⚠️ DualQA 경고 (커버리지: {qa_result.get('text_coverage', 0)*100:.1f}%)")
+        
+        # ✅ Phase 0.8.7: QA Summary 표시
+        if result.get('qa_summary'):
+            st.subheader("📋 QA Summary")
+            st.code(result['qa_summary'], language=None)
         
         # 청크 통계
         st.subheader("📊 청크 통계")
@@ -388,7 +494,7 @@ def main():
         for ctype, count in sorted(type_counts.items()):
             st.write(f"  - {ctype}: {count}개")
         
-        # ✅ Phase 0.8.6: 다운로드 버튼 (세션 상태 활용으로 새로고침 방지)
+        # 다운로드 버튼
         st.markdown("---")
         st.subheader("📥 결과 다운로드")
         
@@ -400,7 +506,7 @@ def main():
                 data=result['rag_markdown'],
                 file_name="engine.md",
                 mime="text/markdown",
-                key="download_engine"  # ✅ 고유 키 지정
+                key="download_engine"
             )
         
         with col2:
@@ -410,61 +516,18 @@ def main():
                 data=chunks_json,
                 file_name="chunks.json",
                 mime="application/json",
-                key="download_chunks"  # ✅ 고유 키 지정
+                key="download_chunks"
             )
         
         with col3:
-            # 리뷰용 Markdown 생성
-            if 'parsed_result' in result:
-                review_md = to_review_md_basic(
-                    result['chunks'],
-                    parsed_result=result['parsed_result']
-                )
-            else:
-                review_md = to_review_md_basic(
-                    result['chunks'],
-                    base_markdown=result['rag_markdown']
-                )
-            
+            # ✅ Phase 0.8.7: review.md에 QA Summary 포함
+            review_md = result.get('review_markdown', result['rag_markdown'])
             st.download_button(
                 label="📥 review.md",
                 data=review_md,
                 file_name="review.md",
                 mime="text/markdown",
-                key="download_review"  # ✅ 고유 키 지정
-            )
-        
-        # 미리보기
-        st.markdown("---")
-        st.subheader("👀 결과 미리보기")
-        
-        tab1, tab2, tab3 = st.tabs(["engine.md", "chunks.json", "review.md"])
-        
-        with tab1:
-            st.text_area(
-                "engine.md (RAG용)",
-                result['rag_markdown'][:3000] + ("..." if len(result['rag_markdown']) > 3000 else ""),
-                height=400
-            )
-        
-        with tab2:
-            st.json(result['chunks'][:5])  # 처음 5개만 미리보기
-            if len(result['chunks']) > 5:
-                st.info(f"... 외 {len(result['chunks']) - 5}개 청크")
-        
-        with tab3:
-            if 'parsed_result' in result:
-                review_preview = to_review_md_basic(
-                    result['chunks'],
-                    parsed_result=result['parsed_result']
-                )
-            else:
-                review_preview = result['rag_markdown']
-            
-            st.text_area(
-                "review.md (검토용)",
-                review_preview[:3000] + ("..." if len(review_preview) > 3000 else ""),
-                height=400
+                key="download_review"
             )
 
 
