@@ -1,20 +1,23 @@
+# annex_subchunker.py - Phase 0.9.2
+#
+# Phase 0.9.2 수정사항:
+# - ✅ Private Use Area 문자 제거 강화 (U+F000~U+F8FF)
+# - ✅ Box drawing 문자 제거 강화
+
 """
-core/annex_subchunker.py - PRISM Phase 0.8.7 Polishing
-Annex 서브청킹 엔진 (노이즈 제거 강화)
+annex_subchunker.py - PRISM Annex SubChunker
 
-Phase 0.8.7 핵심 수정:
-- ✅ 입력 텍스트 노이즈 제거 (□■ 등)
-- ✅ table_rows에서 쓰레기 문자 완전 제거
+Annex 섹션을 의미 단위로 분할
 
-Author: 박준호 (AI/ML Lead) + 이서영 (Backend Lead)
-Date: 2025-11-20
-Version: Phase 0.8.7 Polishing
+Author: 마창수산팀
+Date: 2025-11-20  
+Version: Phase 0.9.2
 """
 
 import re
 import logging
+from typing import List, Optional, Dict, Any
 from dataclasses import dataclass
-from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -23,86 +26,42 @@ logger = logging.getLogger(__name__)
 class SubChunk:
     """서브청크 데이터 클래스"""
     section_id: str
-    section_type: str  # 'header' | 'table_rows' | 'note' | 'exception'
+    section_type: str
     content: str
-    metadata: Dict
+    metadata: Dict[str, Any]
     char_count: int
     order: int
 
 
 class AnnexSubChunker:
     """
-    Annex 서브청킹 엔진
+    Annex 서브청킹
     
-    Phase 0.8.7 수정:
-    - 입력 텍스트 노이즈 제거 강화
-    - 의미 단위 분리
+    Phase 0.9.2:
+    - ✅ 노이즈 문자 제거 강화
     """
     
-    # ✅ Phase 0.8.7: 노이즈 문자 패턴
-    NOISE_CHARS = ''.join([
-        '□', '■', '○', '●', '◇', '◆',  # 박스/도형
-        '━', '─', '═', '┃', '│', '┌', '┐', '└', '┘', '├', '┤', '┬', '┴', '┼',  # 라인/테이블
-        '', '', '',  # Private Use Area
-        '▪', '▫', '◦', '•',  # 불릿
-    ])
-    NOISE_PATTERN = re.compile(f'[{re.escape(NOISE_CHARS)}]')
-    
     def __init__(self):
+        """초기화"""
+        
         self.patterns = {
-            'header': r'\[별표\s*(\d+)\]\s*([^\n]+)',
-            'related_article': r'<(제\d+조.*?)관련>',
-            'amendment': r'\(개정([0-9.,\s]+)\)',
-            'note_marker': r'^\*',
-            'table_separator': r'^임용하고자하는인원수에대한승진후보자범위\((\d+급.*?)\)'
+            'header': r'\[별표\s*(\d+)\]\s*([^\n<]+)',
+            'related_article': r'<(제\d+조[^>]*)관련>',
+            'amendment': r'\[(.*?(\d{4}\.\d{1,2}\.\d{1,2}).*?)\]',
+            'table_separator': r'^([①-⑳■▪●◆◇]?\s*[가-힣\s]+(?:명칭|급별|범위|대상|구분))',
+            'note': r'^\*\s*(.+)$'
         }
-        logger.info("✅ AnnexSubChunker 초기화 (Phase 0.8.7 Polishing)")
+        
+        logger.info("✅ AnnexSubChunker v0.9.2 초기화 (Noise Removal Enhanced)")
     
-    def _clean_annex_text(self, text: str) -> str:
+    def chunk(self, annex_text: str, annex_no: str = "1") -> List[SubChunk]:
         """
-        ✅ Phase 0.8.7: Annex 텍스트 노이즈 제거
-        
-        1. 박스/라인 문자 제거
-        2. 연속 줄바꿈 정리
-        3. 연속 공백 정리
+        Annex 텍스트 → 서브청크 변환
         """
-        if not text:
-            return text
+        logger.info(f"🔧 Annex 서브청킹 시작: {len(annex_text)}자")
         
-        # 1. 노이즈 문자 제거
-        result = self.NOISE_PATTERN.sub('', text)
-        
-        # 2. 연속 줄바꿈 정리 (3개 이상 → 2개)
-        result = re.sub(r'\n{3,}', '\n\n', result)
-        
-        # 3. 연속 공백 정리
-        result = re.sub(r' {2,}', ' ', result)
-        
-        # 4. 각 줄의 앞뒤 공백 정리
-        lines = [line.strip() for line in result.split('\n')]
-        result = '\n'.join(lines)
-        
-        return result.strip()
-    
-    def chunk(self, annex_content: str, annex_no: str = "1") -> List[SubChunk]:
-        """
-        Annex 텍스트 → 서브청크 리스트
-        
-        Args:
-            annex_content: Annex 원문
-            annex_no: 별표 번호
-        
-        Returns:
-            서브청크 리스트 (의미 단위 분리)
-        """
-        if not annex_content or len(annex_content) < 50:
-            logger.warning("⚠️ Annex 내용이 너무 짧음 - 서브청킹 스킵")
-            return []
-        
-        # ✅ Phase 0.8.7: 입력 텍스트 노이즈 제거
-        cleaned_content = self._clean_annex_text(annex_content)
-        
-        logger.info(f"📋 Annex 서브청킹 시작: {len(annex_content)}자 → {len(cleaned_content)}자 (노이즈 제거)")
+        # Phase 0.9.2: 노이즈 제거 강화
+        cleaned_content = self._clean_annex_text(annex_text)
         
         chunks = []
         order = 0
@@ -135,6 +94,41 @@ class AnnexSubChunker:
         self._log_chunk_types(chunks)
         
         return chunks
+    
+    def _clean_annex_text(self, text: str) -> str:
+        """
+        Annex 텍스트 노이즈 제거 (Phase 0.9.2 강화)
+        
+        ✅ Private Use Area 문자 제거
+        ✅ Box drawing 문자 제거
+        """
+        
+        # 1. Private Use Area (U+F000 ~ U+F8FF) 제거
+        text = re.sub(r'[\uF000-\uF8FF]', '', text)
+        
+        # 2. Box drawing characters 제거
+        box_chars = '─━│┃┌┐└┘├┤┬┴┼╋═║╔╗╚╝╠╣╦╩╬■□▪▫'
+        for char in box_chars:
+            text = text.replace(char, '')
+        
+        # 3. 기타 특수 공백 문자 정리
+        text = re.sub(r'[\u200B-\u200D\uFEFF]', '', text)  # Zero-width spaces
+        
+        # 4. 연속 공백 정리
+        text = re.sub(r'[ \t]+', ' ', text)
+        
+        # 5. 연속 개행 정리 (3줄 이상 → 2줄)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        
+        # 6. 각 줄의 앞뒤 공백 제거
+        lines = []
+        for line in text.split('\n'):
+            cleaned_line = line.strip()
+            lines.append(cleaned_line)
+        
+        text = '\n'.join(lines)
+        
+        return text.strip()
     
     def _extract_header(
         self, 
@@ -201,7 +195,7 @@ class AnnexSubChunker:
             # 구분자 없으면 전체를 하나의 테이블로
             table_text = self._extract_table_body(text)
             if table_text:
-                # ✅ Phase 0.8.7: table_text도 노이즈 제거
+                # Phase 0.9.2: 노이즈 제거
                 table_text = self._clean_annex_text(table_text)
                 
                 chunks.append(SubChunk(
@@ -238,7 +232,7 @@ class AnnexSubChunker:
             )
             
             if len(section_text_no_notes.strip()) > 20:
-                # ✅ Phase 0.8.7: 섹션 텍스트 노이즈 제거
+                # Phase 0.9.2: 섹션 텍스트 노이즈 제거
                 cleaned_section = self._clean_annex_text(section_text_no_notes.strip())
                 
                 chunks.append(SubChunk(
@@ -291,124 +285,65 @@ class AnnexSubChunker:
         chunks = []
         order = start_order
         
-        # * 시작하는 모든 줄
+        # * 시작 라인들 수집
         note_lines = []
         for line in text.split('\n'):
             if line.strip().startswith('*'):
                 note_lines.append(line.strip())
         
-        # 각 Note를 개별 청크로
-        for i, note in enumerate(note_lines):
-            # ✅ Phase 0.8.7: 노이즈 제거 강화
-            note_clean = self._clean_note(note)
+        if note_lines:
+            note_content = '\n'.join(note_lines)
             
             chunks.append(SubChunk(
-                section_id=f"annex_{annex_no}_note_{i+1}",
+                section_id=f"annex_{annex_no}_notes",
                 section_type="note",
-                content=note_clean,
+                content=note_content,
                 metadata={
-                    "note_type": self._classify_note(note_clean)
+                    "note_count": len(note_lines)
                 },
-                char_count=len(note_clean),
+                char_count=len(note_content),
                 order=order
             ))
-            order += 1
         
         return chunks
     
-    def _clean_note(self, note: str) -> str:
-        """Note 노이즈 제거"""
-        # 연속된 특수문자 제거 (─, ═, ━ 등)
-        note = re.sub(r'[─═━]{2,}', '', note)
-        
-        # ✅ Phase 0.8.7: 노이즈 문자 제거
-        note = self.NOISE_PATTERN.sub('', note)
-        
-        # 연속 공백 정리
-        note = re.sub(r'\s{2,}', ' ', note)
-        
-        return note.strip()
-    
-    def _classify_note(self, note: str) -> str:
-        """Note 유형 분류"""
-        note_lower = note.lower()
-        
-        if '예외' in note or '단,' in note or '다만' in note:
-            return "exception"
-        elif '포함' in note or '범위' in note:
-            return "rule"
-        else:
-            return "general"
-    
     def _estimate_row_count(self, text: str) -> int:
-        """Row 개수 추정"""
-        lines = text.split('\n')
-        count = sum(1 for line in lines if re.match(r'^\d+\s', line))
-        return count
+        """행 개수 추정"""
+        
+        lines = [line for line in text.split('\n') if line.strip()]
+        
+        # 숫자로 시작하는 라인 개수
+        numbered_lines = [
+            line for line in lines 
+            if re.match(r'^\d+\s', line.strip())
+        ]
+        
+        return len(numbered_lines)
     
     def _log_chunk_types(self, chunks: List[SubChunk]):
-        """청크 타입 통계 로깅"""
+        """청크 타입별 통계"""
+        
         type_counts = {}
         for chunk in chunks:
-            type_counts[chunk.section_type] = type_counts.get(chunk.section_type, 0) + 1
+            ctype = chunk.section_type
+            type_counts[ctype] = type_counts.get(ctype, 0) + 1
         
-        logger.info(f"   📊 청크 타입 분포:")
         for ctype, count in sorted(type_counts.items()):
-            logger.info(f"      - {ctype}: {count}개")
+            logger.info(f"   - {ctype}: {count}개")
 
 
-# ============================================
-# 유틸리티
-# ============================================
-
-def validate_subchunks(chunks: List[SubChunk], original_length: int) -> Dict:
+def validate_subchunks(chunks: List[SubChunk], original_len: int) -> Dict[str, Any]:
     """서브청크 검증"""
+    
     total_chars = sum(c.char_count for c in chunks)
-    loss_rate = abs(total_chars - original_length) / original_length if original_length > 0 else 0
+    loss_rate = abs(total_chars - original_len) / original_len if original_len > 0 else 0
     
-    type_counts = {}
-    for chunk in chunks:
-        type_counts[chunk.section_type] = type_counts.get(chunk.section_type, 0) + 1
-    
-    has_header = 'header' in type_counts
-    has_table = 'table_rows' in type_counts
-    has_note = 'note' in type_counts
-    has_multiple_types = len(type_counts) >= 2
-    
-    is_valid = (
-        loss_rate < 0.10 and  # Phase 0.8.7: 노이즈 제거로 인해 10%까지 허용
-        has_multiple_types and
-        len(chunks) >= 3
-    )
+    is_valid = loss_rate <= 0.05
     
     return {
         'is_valid': is_valid,
-        'loss_rate': loss_rate,
         'chunk_count': len(chunks),
-        'type_counts': type_counts,
-        'has_header': has_header,
-        'has_table': has_table,
-        'has_note': has_note
+        'total_chars': total_chars,
+        'original_len': original_len,
+        'loss_rate': loss_rate
     }
-
-
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
-    
-    # 간단 테스트
-    sample = """
-[별표 1] 승진후보자범위(3급승진제외)
-<제20조제2항관련>(개정2003.3.29)
-□□□□□□□□□□
-임용하고자하는인원수에대한승진후보자범위(3급승진제외)
-1 5번까지
-2 10번까지
-*임용하고자하는인원수가5명까지는서열명부순위의5배수
-"""
-    
-    chunker = AnnexSubChunker()
-    chunks = chunker.chunk(sample)
-    
-    print(f"\n✅ 청크 {len(chunks)}개 생성")
-    for c in chunks:
-        print(f"   - {c.section_type}: {c.char_count}자")

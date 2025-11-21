@@ -1,15 +1,15 @@
 """
-app.py - PRISM Phase 0.9.1 Hotfix
+app.py - PRISM Phase 0.9.2
 문서 전처리 파이프라인 (테이블 구조화 + Graceful Degradation)
 
-Phase 0.9.1 Hotfix:
+Phase 0.9.2:
 - ✅ TableParser 감지 실패 시 기존 annex_table_rows 보존
 - ✅ 조건부 청크 교체 (구조화 성공 시에만)
 - ✅ OCR-friendly TableParser 통합
 
 Author: 마창수산팀
 Date: 2025-11-20
-Version: Phase 0.9.1 Hotfix
+Version: Phase 0.9.2
 """
 
 import streamlit as st
@@ -131,6 +131,8 @@ def generate_qa_summary(
 ) -> str:
     """
     QA Summary 블록 생성 (테이블 통계 포함)
+    
+    ✅ Phase 0.9.2: Chapter/table_row 카운트 동기화
     """
     
     # 커버리지 계산
@@ -151,6 +153,9 @@ def generate_qa_summary(
     # Phase 0.9.1: 테이블 통계
     table_row_count = type_counts.get('table_row', 0)
     
+    # ✅ Phase 0.9.2: Chapter 카운트 (정확한 집계)
+    chapter_count = type_counts.get('chapter', 0)
+    
     # QA 결과
     match_rate = qa_result.get('match_rate', 0) * 100
     is_pass = qa_result.get('is_pass', False)
@@ -165,7 +170,7 @@ def generate_qa_summary(
         f"- PRISM 추출 길이 : {processed_text_len:,}자 (커버리지 {coverage:.1f}%)",
         "",
         "[구조화 결과]",
-        f"- 장(Chapter) : {parsed_result.get('total_chapters', 0)}개",
+        f"- 장(Chapter) : {chapter_count}개",
         f"- 조문(Article) : {parsed_result.get('total_articles', 0)}개",
         f"- 부칙/개정이력 : {len(parsed_result.get('amendment_history', []))}건",
     ]
@@ -302,7 +307,7 @@ def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str)
     """
     LawMode 파이프라인 (Phase 0.9.1 Hotfix)
     
-    ✅ Phase 0.9.1 Hotfix:
+    ✅ Phase 0.9.2:
     - TableParser 감지 실패 시 기존 annex_table_rows 보존
     - 구조화 성공 시에만 청크 교체
     """
@@ -341,7 +346,7 @@ def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str)
             # 테이블 파싱
             table_chunks = table_parser.parse(annex_text)
             
-            # ✅ Phase 0.9.1 Hotfix: 구조화 성공 시에만 교체
+            # ✅ Phase 0.9.2: 구조화 성공 시에만 교체
             if table_chunks and len(table_chunks) > 0:
                 table_structured = True
                 
@@ -374,12 +379,12 @@ def process_document_law_mode(pdf_path: str, pdf_text: str, document_title: str)
                 logger.info(f"✅ TableParser: {len(table_chunks)}개 행 구조화")
                 st.success(f"✅ TableParser: {len(table_chunks)}개 행 구조화")
             else:
-                # ✅ Phase 0.9.1 Hotfix: 구조화 실패 시 기존 청크 보존
+                # ✅ Phase 0.9.2: 구조화 실패 시 기존 청크 보존
                 logger.info("   ℹ️ TableParser 구조화 실패 - 기존 annex_table_rows 보존")
                 st.info("ℹ️ 테이블 구조화 실패 - 기존 형식 유지")
         
         except Exception as e:
-            # ✅ Phase 0.9.1 Hotfix: 예외 발생 시에도 기존 청크 보존
+            # ✅ Phase 0.9.2: 예외 발생 시에도 기존 청크 보존
             logger.warning(f"⚠️ TableParser 처리 실패: {e}")
             st.warning(f"⚠️ TableParser 처리 실패 - 기존 형식 유지")
     
