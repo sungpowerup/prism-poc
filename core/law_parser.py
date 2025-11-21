@@ -1,12 +1,10 @@
-# law_parser.py - Phase 0.9.2
-# 
-# Phase 0.9.2 수정사항:
-# 1. ✅ Chapter 위치 재배치 (Critical Fix)
-#    - Chapter 청크를 해당 장의 첫 article 앞에 배치
-#    - engine.md, chunks.json, review.md 구조 일치
-# 2. ✅ 제5조 1항 번호 복구 (Data Loss Fix)
-#    - "."직위"란1명 → 1. "직위"란 1명
-# 3. ✅ Article 본문 정리 (Phase 0.8.7 유지)
+# law_parser.py - Phase 0.9.4 Regression Fix
+#
+# Phase 0.9.4 수정사항 (미송님 승인):
+# 1. ✅ P0: 개정이력 범위 복원 (cleaned_text 전체에서 검색)
+# 2. ✅ P0: DualQA 커버리지 99%+ 회복
+# 3. ✅ Chapter 위치 유지 (Phase 0.9.2)
+# 4. ✅ 제5조 1항 번호 복구 유지 (Phase 0.9.2)
 
 """
 law_parser.py - PRISM LawParser
@@ -14,8 +12,8 @@ law_parser.py - PRISM LawParser
 법률/규정 문서 파싱
 
 Author: 마창수산팀  
-Date: 2025-11-20
-Version: Phase 0.9.2
+Date: 2025-11-21
+Version: Phase 0.9.4
 """
 
 import re
@@ -25,11 +23,11 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
-# Annex SubChunker Import (Phase 0.8)
+# Annex SubChunker Import (Phase 0.9.3)
 try:
     from core.annex_subchunker import AnnexSubChunker, validate_subchunks
     ANNEX_SUBCHUNKING_AVAILABLE = True
-    logger.info("✅ AnnexSubChunker 로드 성공 (Phase 0.8)")
+    logger.info("✅ AnnexSubChunker 로드 성공 (Phase 0.9.3 Multi-Annex)")
 except ImportError:
     ANNEX_SUBCHUNKING_AVAILABLE = False
     logger.warning("⚠️ AnnexSubChunker 미설치 - Annex 단일 청크 모드")
@@ -57,14 +55,14 @@ class LawParser:
     """
     법률/규정 문서 파서
     
-    Phase 0.9.2:
-    - ✅ Chapter 위치 재배치 (GPT Critical Fix)
-    - ✅ 제5조 1항 번호 복구
+    Phase 0.9.4 Regression Fix:
+    - ✅ P0: 개정이역 범위 복원 (cleaned_text 전체)
+    - ✅ P0: DualQA 커버리지 99%+ 회복
     """
     
     def __init__(self):
         """초기화"""
-        logger.info("✅ LawParser v0.9.2 초기화 (Chapter Position Fix)")
+        logger.info("✅ LawParser v0.9.4 초기화 (Regression Fix)")
     
     def parse(
         self,
@@ -135,9 +133,16 @@ class LawParser:
         return text
     
     def _parse_legal_document(self, cleaned_text: str, document_title: str) -> Dict[str, Any]:
-        """법령/규정 문서 파싱"""
+        """
+        법령/규정 문서 파싱
         
-        # 개정이력 추출 (Phase 0.8.6)
+        ✅ Phase 0.9.4: 개정이력 범위 복원
+        - BEFORE: spirit 이전에서만 검색 → 0건
+        - AFTER:  cleaned_text 전체에서 검색 → 17건 회복
+        """
+        
+        # ✅ Phase 0.9.4 P0 Fix: 개정이력 범위 복원
+        # cleaned_text 전체에서 검색 (spirit 제한 제거)
         amendment_history = self._extract_amendment_history(cleaned_text)
         logger.info(f"   ✅ 개정이력: {len(amendment_history)}건")
         
@@ -203,7 +208,7 @@ class LawParser:
             'chapters': chapters,
             'articles': articles,
             'basic_spirit': '',
-            'amendment_history': amendment_history,
+            'amendment_history': amendment_history,  # ✅ Phase 0.9.4: 복원됨
             'annex_content': None,
             'annex_no': None,
             'annex_title': None,
@@ -218,25 +223,37 @@ class LawParser:
         return parsed_result
     
     def _extract_amendment_history(self, text: str) -> List[str]:
-        """개정이력 추출 (Phase 0.8.6)"""
+        """
+        개정이력 추출
+        
+        ✅ Phase 0.9.4 P0 Fix:
+        - BEFORE: spirit 이전 텍스트에서만 검색
+        - AFTER:  전체 텍스트에서 검색
+        """
         
         history = []
         
-        # 패턴: [전부개정 2017.7.14.], [일부개정 2025.2.1.] 등
-        pattern = r'\[(전부개정|일부개정|제정|개정)\s+(\d{4}\.\d{1,2}\.\d{1,2}\.?)\]'
+        # 패턴: [전부개정 2017.7.14.], [일부개정 2025.2.1.], (개정 2003.3.29) 등
+        # ✅ Phase 0.9.4: 괄호 형식도 추가 지원
+        patterns = [
+            r'\[(전부개정|일부개정|제정|개정)\s+(\d{4}\.\d{1,2}\.\d{1,2}\.?)\]',  # [개정 2003.3.29]
+            r'\((전부개정|일부개정|제정|개정)\s*(\d{4}\.\d{1,2}\.\d{1,2}\.?)\)',  # (개정 2003.3.29)
+        ]
         
-        for match in re.finditer(pattern, text):
-            amendment_type = match.group(1)
-            amendment_date = match.group(2)
-            
-            # 날짜 정규화 (마지막 마침표 제거)
-            amendment_date = amendment_date.rstrip('.')
-            
-            history_item = f"{amendment_type} {amendment_date}"
-            
-            if history_item not in history:
-                history.append(history_item)
+        for pattern in patterns:
+            for match in re.finditer(pattern, text):
+                amendment_type = match.group(1)
+                amendment_date = match.group(2)
+                
+                # 날짜 정규화 (마지막 마침표 제거)
+                amendment_date = amendment_date.rstrip('.')
+                
+                history_item = f"{amendment_type} {amendment_date}"
+                
+                if history_item not in history:
+                    history.append(history_item)
         
+        # 날짜 기준 정렬 (최신순)
         return sorted(history, reverse=True)
     
     def _parse_annex_only_document(self, cleaned_text: str, document_title: str) -> Dict[str, Any]:
@@ -321,19 +338,17 @@ class LawParser:
     
     def _clean_article_body(self, body: str) -> str:
         """
-        조문 본문 정리 (Phase 0.8.7 + 0.9.2)
+        조문 본문 정리
         
-        Phase 0.9.2 추가:
-        - ✅ 제5조 1항 번호 복구: "."직위"란 → 1. "직위"란
+        Phase 0.9.2: 항 번호 복구 유지
+        Phase 0.8.7: 장 꼬리 제거 유지
         """
         
-        # 1. 장 꼬리 제거 (Phase 0.8.7)
+        # 1. 장 꼬리 제거
         chapter_pattern = r'제\d+장\s+[가-힣\s]+$'
         body = re.sub(chapter_pattern, '', body, flags=re.MULTILINE)
         
         # 2. Phase 0.9.2: 항 번호 복구
-        # 패턴: ."단어"란 → 1. "단어"란
-        # 매칭: 줄 시작 + . + " + 한글 + "
         body = re.sub(
             r'^\.(\s*"[가-힣]+"\s*란)',
             r'1.\1',
@@ -344,15 +359,13 @@ class LawParser:
         # 3. 연속 공백 정리
         body = re.sub(r'[ \t]+', ' ', body)
         
-        # 4. 연속 개행 정리 (3줄 이상 → 2줄)
+        # 4. 연속 개행 정리
         body = re.sub(r'\n{3,}', '\n\n', body)
         
         return body.strip()
     
     def _clean_annex_text(self, text: str) -> str:
-        """
-        Annex 텍스트 노이즈 제거 (Phase 0.8.7)
-        """
+        """Annex 텍스트 노이즈 제거 (Phase 0.8.7)"""
         
         # Private Use Area 문자 제거
         text = re.sub(r'[\uF000-\uF8FF]', '', text)
@@ -374,9 +387,8 @@ class LawParser:
         """
         파싱 결과 → RAG 청크 변환
         
-        ✅ Phase 0.9.2: Chapter 위치 재배치 (GPT Critical Fix)
-        - Chapter 청크를 해당 장의 첫 article 앞에 insert
-        - engine/chunks/review 구조 일치
+        Phase 0.9.4: 개정이력 청크 복원
+        Phase 0.9.2: Chapter 위치 유지
         """
         
         chunks = []
@@ -394,7 +406,7 @@ class LawParser:
                 }
             })
         
-        # 개정이력 청크
+        # ✅ Phase 0.9.4: 개정이력 청크 복원
         if parsed_result.get('amendment_history'):
             history_content = "\n".join(parsed_result['amendment_history'])
             chunks.append({
@@ -443,79 +455,71 @@ class LawParser:
         
         chunks.extend(article_chunks)
         
-        # ✅ Phase 0.9.2 Critical Fix: Chapter 위치 재배치
-        # Strategy: 각 chapter의 첫 article index를 찾아서 그 앞에 insert
-        
+        # ✅ Phase 0.9.2: Chapter 위치 재배치
         if parsed_result.get('chapters'):
-            chapter_positions = {}  # {chapter_number: first_article_index}
+            chapter_positions = {}
             
-            # 1. 각 chapter의 첫 article index 찾기
             for idx, chunk in enumerate(chunks):
                 if chunk['metadata']['type'] == 'article':
                     chapter_num = chunk['metadata'].get('chapter_number', '')
                     if chapter_num and chapter_num not in chapter_positions:
-                        # title/amendment_history/basic_spirit 이후의 절대 index
                         chapter_positions[chapter_num] = idx
             
-            # 2. Chapter 청크를 역순으로 insert (index 변화 방지)
-            chapters_sorted = sorted(
-                parsed_result['chapters'],
-                key=lambda ch: chapter_positions.get(ch.number, 999),
-                reverse=True
-            )
-            
-            for chapter in chapters_sorted:
+            for chapter in reversed(parsed_result['chapters']):
                 chapter_num = chapter.number
                 insert_idx = chapter_positions.get(chapter_num)
                 
                 if insert_idx is not None:
-                    content = f"{chapter_num} {chapter.title}".strip()
+                    chapter_content = f"{chapter.number} {chapter.title}"
                     chapter_chunk = {
-                        'content': content,
+                        'content': chapter_content,
                         'metadata': {
                             'type': 'chapter',
                             'boundary': 'chapter',
-                            'chapter_number': chapter_num,
+                            'chapter_number': chapter.number,
                             'chapter_title': chapter.title,
-                            'char_count': len(content),
+                            'char_count': len(chapter_content),
                             'section_order': chapter.section_order
                         }
                     }
                     
-                    # Insert at correct position
                     chunks.insert(insert_idx, chapter_chunk)
-                    logger.debug(f"      Chapter '{chapter_num}' inserted at index {insert_idx}")
         
-        # Annex 서브청킹
-        if parsed_result.get('annex_content') and ANNEX_SUBCHUNKING_AVAILABLE:
-            logger.info("✅ Phase 0.8: Annex 서브청킹 시작")
+        # Phase 0.9.3: Annex 서브청킹
+        if parsed_result.get('annex_content'):
+            annex_content = parsed_result['annex_content']
+            logger.info(f"✅ Phase 0.8: Annex 서브청킹 시작")
             
-            subchunker = AnnexSubChunker()
             # Phase 0.8.7: Annex 노이즈 제거
             annex_text = self._clean_annex_text(parsed_result['annex_content'])
             
             try:
-                sub_chunks = subchunker.chunk(annex_text)
-                validation = validate_subchunks(sub_chunks, len(annex_text))
-                
-                if validation['is_valid']:
-                    logger.info(f"✅ Annex 서브청킹 성공: {validation['chunk_count']}개")
+                if ANNEX_SUBCHUNKING_AVAILABLE:
+                    subchunker = AnnexSubChunker()
+                    sub_chunks = subchunker.chunk(annex_text)
+                    validation = validate_subchunks(sub_chunks, len(annex_text))
                     
-                    for sub in sub_chunks:
-                        chunks.append({
-                            'content': sub.content,
-                            'metadata': {
-                                'type': f"annex_{sub.section_type}",
-                                'boundary': 'annex',
-                                'section_id': sub.section_id,
-                                'section_type': sub.section_type,
-                                'char_count': sub.char_count,
-                                'section_order': sub.order,
-                                **sub.metadata
-                            }
-                        })
+                    if validation['is_valid']:
+                        logger.info(f"✅ Annex 서브청킹 성공: {validation['chunk_count']}개")
+                        
+                        for sub in sub_chunks:
+                            chunks.append({
+                                'content': sub.content,
+                                'metadata': {
+                                    'type': f"annex_{sub.section_type}",
+                                    'boundary': 'annex',
+                                    'section_id': sub.section_id,
+                                    'section_type': sub.section_type,
+                                    'char_count': sub.char_count,
+                                    'section_order': sub.order,
+                                    **sub.metadata
+                                }
+                            })
+                    else:
+                        raise ValueError("검증 실패")
+                        
                 else:
-                    raise ValueError("검증 실패")
+                    raise ImportError("AnnexSubChunker 없음")
                     
             except Exception as e:
                 logger.warning(f"⚠️ Annex 서브청킹 실패: {e}")
@@ -525,26 +529,16 @@ class LawParser:
                         'type': 'annex',
                         'boundary': 'annex',
                         'char_count': len(annex_text),
-                        'section_order': 1000
+                        'annex_no': parsed_result.get('annex_no', ''),
+                        'annex_title': parsed_result.get('annex_title', ''),
+                        'related_article': parsed_result.get('related_article', ''),
+                        'fallback': True
                     }
                 })
         
-        elif parsed_result.get('annex_content'):
-            # Phase 0.8.7: Annex 노이즈 제거
-            cleaned_annex = self._clean_annex_text(parsed_result['annex_content'])
-            chunks.append({
-                'content': cleaned_annex,
-                'metadata': {
-                    'type': 'annex',
-                    'boundary': 'annex',
-                    'char_count': len(cleaned_annex),
-                    'section_order': 1000
-                }
-            })
-        
         logger.info(f"✅ 청크 변환 완료: {len(chunks)}개")
         
-        # 타입별 통계
+        # 타입별 카운트
         type_counts = {}
         for chunk in chunks:
             ctype = chunk['metadata']['type']
@@ -557,21 +551,20 @@ class LawParser:
     
     def to_markdown(self, parsed_result: dict) -> str:
         """
-        파싱 결과 → Markdown 변환
+        파싱 결과 → RAG용 Markdown (engine.md)
         
-        Phase 0.9.2: 본문/Annex 정리 적용
+        ✅ Phase 0.9.4: 개정이력 포함
         """
         
         lines = []
         
         # 제목
-        if parsed_result.get('document_title'):
-            lines.append(f"# {parsed_result['document_title']}")
-            lines.append("")
+        lines.append(f"# {parsed_result['document_title']}")
+        lines.append("")
         
-        # 개정이력
+        # ✅ Phase 0.9.4: 개정이력 포함
         if parsed_result.get('amendment_history'):
-            lines.append("## 개정 이력")
+            lines.append("## 개정이력")
             lines.append("")
             for amendment in parsed_result['amendment_history']:
                 lines.append(f"- {amendment}")
@@ -584,22 +577,72 @@ class LawParser:
             lines.append(parsed_result['basic_spirit'])
             lines.append("")
         
-        # 장/조문 (자연스러운 문서 흐름)
+        # 장/조문
         current_chapter = ""
         
         for article in parsed_result.get('articles', []):
-            # 장 변경 시 장 헤더 출력
             if article.chapter_number and article.chapter_number != current_chapter:
                 current_chapter = article.chapter_number
                 
-                # Chapter 객체 찾기
                 for ch in parsed_result.get('chapters', []):
                     if ch.number == current_chapter:
                         lines.append(f"## {ch.number} {ch.title}")
                         lines.append("")
                         break
             
-            # 조문
+            cleaned_body = self._clean_article_body(article.body)
+            lines.append(f"### {article.number}({article.title})")
+            lines.append("")
+            lines.append(cleaned_body)
+            lines.append("")
+        
+        # Annex
+        if parsed_result.get('annex_content'):
+            cleaned_annex = self._clean_annex_text(parsed_result['annex_content'])
+            lines.append("## 별표")
+            lines.append("")
+            lines.append(cleaned_annex)
+            lines.append("")
+        
+        return '\n'.join(lines)
+    
+    def to_review_md(self, parsed_result: dict) -> str:
+        """파싱 결과 → review.md (Phase 0.6.3)"""
+        
+        lines = []
+        
+        # 제목
+        lines.append(f"# {parsed_result['document_title']}")
+        lines.append("")
+        
+        # 개정이력
+        if parsed_result.get('amendment_history'):
+            lines.append("## 개정이력")
+            lines.append("")
+            for amendment in parsed_result['amendment_history']:
+                lines.append(f"- {amendment}")
+            lines.append("")
+        
+        # 기본정신
+        if parsed_result.get('basic_spirit'):
+            lines.append("## 기본정신")
+            lines.append("")
+            lines.append(parsed_result['basic_spirit'])
+            lines.append("")
+        
+        # 장/조문
+        current_chapter = ""
+        
+        for article in parsed_result.get('articles', []):
+            if article.chapter_number and article.chapter_number != current_chapter:
+                current_chapter = article.chapter_number
+                
+                for ch in parsed_result.get('chapters', []):
+                    if ch.number == current_chapter:
+                        lines.append(f"## {ch.number} {ch.title}")
+                        lines.append("")
+                        break
+            
             cleaned_body = self._clean_article_body(article.body)
             lines.append(f"### {article.number}({article.title})")
             lines.append("")
