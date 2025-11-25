@@ -1,5 +1,10 @@
 """
-law_parser.py - PRISM LawParser Phase 0.9.5
+law_parser.py - PRISM LawParser Phase 0.9.7.7
+
+Phase 0.9.7.7 Critical Fix (GPT 미송님):
+- ✅ Import 실패 원인 logger.exception으로 드러내기
+- ✅ Import 경로 단일화 (core.annex_subchunker)
+- ✅ 패키징 확인 강화
 
 Phase 0.9.5 수정사항 (미송님 가이드):
 1. ✅ 개정이력 패턴 대폭 강화 (17건 완전 추출)
@@ -12,9 +17,9 @@ Phase 0.9.5 수정사항 (미송님 가이드):
 - 🛑 DualQA 로직 변경 금지
 - 🛑 spacing 엔진 변경 금지
 
-Author: 마창수산팀  
-Date: 2025-11-22
-Version: Phase 0.9.5
+Author: 마창수산팀 + GPT 미송님
+Date: 2025-11-25
+Version: Phase 0.9.7.7
 """
 
 import re
@@ -24,14 +29,43 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
-# Annex SubChunker Import (Phase 0.9.5)
+# ============================================================
+# Phase 0.9.7.7 Critical Fix - Import 강화
+# ============================================================
+
+# ✅ GPT 미송님 지시 A: import 실패 원인을 숨기지 말고 드러내라
+ANNEX_SUBCHUNKING_AVAILABLE = False
+AnnexSubChunker = None
+validate_subchunks = None
+
 try:
+    # ✅ GPT 미송님 지시 B: import 경로 단일화
     from core.annex_subchunker import AnnexSubChunker, validate_subchunks
     ANNEX_SUBCHUNKING_AVAILABLE = True
-    logger.info("✅ AnnexSubChunker 로드 성공 (Phase 0.9.5 Complete Restructure)")
-except ImportError:
+    logger.info("✅ AnnexSubChunker import 성공")
+    logger.info(f"   - 모듈 위치: {AnnexSubChunker.__module__}")
+    logger.info(f"   - 클래스: {AnnexSubChunker}")
+except ImportError as e:
+    logger.exception("❌ AnnexSubChunker import 실패 (ImportError)")
+    logger.error(f"   - 원인: {e}")
+    logger.error("   - 확인사항:")
+    logger.error("     1. core/annex_subchunker.py 파일 존재 여부")
+    logger.error("     2. core/__init__.py 파일 존재 여부")
+    logger.error("     3. 프로젝트 루트에 중복 annex_subchunker.py 없는지 확인")
     ANNEX_SUBCHUNKING_AVAILABLE = False
-    logger.warning("⚠️ AnnexSubChunker 미설치 - Annex 단일 청크 모드")
+    AnnexSubChunker = None
+    validate_subchunks = None
+except Exception as e:
+    logger.exception("❌ AnnexSubChunker import 실패 (기타 예외)")
+    logger.error(f"   - 예외 타입: {type(e).__name__}")
+    logger.error(f"   - 원인: {e}")
+    ANNEX_SUBCHUNKING_AVAILABLE = False
+    AnnexSubChunker = None
+    validate_subchunks = None
+
+# 패치 적용 확인
+logger.info("🔧 Phase 0.9.7.7 Critical Fix 패치 적용됨")
+logger.info(f"   - ANNEX_SUBCHUNKING_AVAILABLE: {ANNEX_SUBCHUNKING_AVAILABLE}")
 
 
 @dataclass
@@ -64,7 +98,7 @@ class LawParser:
     
     def __init__(self):
         """초기화"""
-        logger.info("✅ LawParser v0.9.5 초기화 (Amendment Pattern Enhanced)")
+        logger.info("✅ LawParser v0.9.7.7 초기화 (Phase 0.9.7.7 Critical Fix + Amendment Pattern Enhanced)")
     
     def parse(
         self,
