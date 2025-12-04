@@ -1,23 +1,27 @@
 """
-core/annex_subchunker.py - Phase 0.9.8.3 TableParser Interface
+core/annex_subchunker.py - Phase 0.9.9.0 텍스트형 표 감지
 
-Phase 0.9.8.3 (TableParser 인터페이스 개선):
-🎯 목표: 6개 조각 → 2개 논리 그룹 → TableParser 150행 구조화
+Phase 0.9.9.0 (텍스트형 표 기본 구조화):
+🎯 목표: 별표2(텍스트형 표)를 직급 단위 행으로 구조화
 
-핵심 전략 (GPT 미송님):
-A. 청크 라벨링: "3급승진제외" / "3급승진" 자동 감지
-B. 논리 그룹 재조합: label 기반 그룹화
-C. TableParser 피딩: 각 그룹을 통합 테이블로 전달
+Phase 0.9.8.3 기능 유지:
+- 숫자형 표(별표1) 감지 및 구조화 ✅
+- 논리 그룹 재조합 (3급승진제외/3급승진) ✅
+- TableParser 150행 구조화 ✅
+
+Phase 0.9.9.0 추가 기능:
+A. 텍스트형 표 감지 (Generic + Domain-Specific Header Hints)
+B. Numbered List 패턴 인식 (1., 2., 3...)
+C. 별표2 table_rows 승격 로직
 
 성공 기준:
-- Loss < 3% ✅
-- table_rows = 2개 (논리 그룹) ✅
-- TableParser = 150행 ✅
-- Annex 정교 구조 + 구조화 동시 달성
+- 별표1: 기존 150행 구조화 유지 ✅
+- 별표2: table_rows 타입 승격 (P0)
+- 텍스트 Loss = 0% 유지 ✅
 
 Author: 마창수산팀 + GPT 미송님
-Date: 2025-11-27
-Version: Phase 0.9.8.3 TableParser Interface
+Date: 2025-12-01
+Version: Phase 0.9.9.0 Text Table Detection
 """
 
 import re
@@ -27,6 +31,30 @@ from typing import List, Optional, Dict, Any, Tuple
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+# ============================================
+# Phase 0.9.9.0: 텍스트형 표 감지 패턴
+# ============================================
+
+# Generic Header Hints (범용)
+GENERIC_HEADER_HINTS = [
+    "구분", "기준", "대상", "내용",
+    "자격", "비고", "항목", "절차",
+    "방법", "범위", "요건", "조건"
+]
+
+# Domain-Specific Header Hints (KRC 인사규정 특화)
+KRC_PERSONNEL_HINTS = [
+    "직급", "응시자격", "승진후보자범위",
+    "서열명부순위", "임용인원수", "경력기준"
+]
+
+# 통합 Header Hints
+ALL_HEADER_HINTS = GENERIC_HEADER_HINTS + KRC_PERSONNEL_HINTS
+
+# ============================================
+# Phase 0.9.8.3 기존 패턴 (유지)
+# ============================================
 
 # 헤더 키워드
 HEADER_KEYWORDS = re.compile(
@@ -70,7 +98,16 @@ class AnnexSubChunker:
             'header_keywords': r'(직급|응시자격|비고|인원수|서열명부|순위|담당자|자격취득)',
         }
         
-        logger.info("✅ AnnexSubChunker v0.9.8.3 초기화 (TableParser Interface)")
+        # Phase 0.9.9.0: 텍스트형 표 감지 패턴
+        self.text_table_patterns = {
+            'generic_hints': GENERIC_HEADER_HINTS,
+            'domain_hints': KRC_PERSONNEL_HINTS,
+            'all_hints': ALL_HEADER_HINTS,
+            'numbered_list': re.compile(r'^\s*(\d+)\.\s+'),  # "1. ", "2. ", "3. "
+            'rank_pattern': re.compile(r'^\s*(1급|2급|3급|4급|5급|6급|7급|8급|9급)\s*'),  # "1급", "2급"...
+        }
+        
+        logger.info("✅ AnnexSubChunker v0.9.9.0 초기화 (텍스트형 표 감지 추가)")
     
     def chunk(self, annex_text: str, annex_no: str = "1") -> List[SubChunk]:
         """
@@ -694,13 +731,16 @@ class AnnexSubChunker:
                 
                 block_lines = lines[i:para_end]
                 
+                # ✨ Phase 0.9.9.0: paragraph도 features 포함 (텍스트형 표 감지용)
+                para_features = self._calculate_block_features(block_lines)
+                
                 # ✨ Fix A: start/end 메타 포함
                 blocks.append({
                     'type': block_type,
                     'lines': block_lines,
                     'start': i,
                     'end': para_end - 1,
-                    'metadata': {}
+                    'metadata': para_features  # Phase 0.9.9.0: 빈 dict 대신 features 추가
                 })
                 
                 i = para_end
@@ -787,8 +827,28 @@ class AnnexSubChunker:
     def _merge_table_candidates_v0982(self, blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         ✨ Phase 0.9.8.2: Table Candidate Merge (메타 유지)
+        ✨ Phase 0.9.9.0: 텍스트형 표 감지 추가
         """
-        if len(blocks) <= 1:
+        # ✨ Phase 0.9.9.0: 단일 블록일 때도 텍스트형 표 감지 적용
+        if len(blocks) == 1:
+            single_block = blocks[0]
+            if single_block['type'] in ['paragraph', 'table_candidate']:
+                # metadata 완전히 계산
+                meta = self._calculate_block_features(single_block['lines'])
+                
+                # table_score 추가
+                meta['table_score'] = self._calculate_table_score_v0976(meta)
+                
+                # metadata 업데이트
+                single_block['metadata'] = meta
+                
+                # 텍스트형 표 감지
+                single_block = self._enhance_table_candidate_with_text_hints(single_block)
+                blocks[0] = single_block
+            
+            return blocks
+        
+        if len(blocks) == 0:
             return blocks
         
         merged = []
@@ -798,10 +858,18 @@ class AnnexSubChunker:
             current = blocks[i]
             current_type = current['type']
             
+            print(f"[DEBUG LOOP] i={i}, current_type={current_type}")
+            
+            # Phase 0.9.8.2: paragraph → table_candidate 승격 (기존 로직)
             if current_type == "paragraph":
                 meta = current.get('metadata', {})
                 if not meta:
                     meta = self._calculate_block_features(current['lines'])
+                    current['metadata'] = meta
+                
+                # ✨ Phase 0.9.9.0: paragraph에도 table_score 계산 (텍스트형 표 감지용)
+                if 'table_score' not in meta:
+                    meta['table_score'] = self._calculate_table_score_v0976(meta)
                     current['metadata'] = meta
                 
                 if meta.get('digit_density', 0) > 0.35 and meta.get('short_line_ratio', 0) > 0.6:
@@ -812,6 +880,16 @@ class AnnexSubChunker:
                         f"(digit: {meta.get('digit_density'):.2f}, short: {meta.get('short_line_ratio'):.2f})"
                     )
             
+            # ✨ Phase 0.9.9.0: 텍스트형 표 감지 (paragraph/table_candidate 모두 체크)
+            if current_type in ['paragraph', 'table_candidate']:
+                print(f"[DEBUG] 텍스트형 표 감지 시도: {current_type}")
+                logger.info(f"         🔍 텍스트형 표 감지 시도: {current_type}")
+                current = self._enhance_table_candidate_with_text_hints(current)
+                current_type = current['type']  # 승격될 수 있음
+                print(f"[DEBUG] 감지 결과: {current_type}")
+                logger.info(f"         🔍 감지 결과: {current_type}")
+            
+            # Phase 0.9.8.2: table_candidate 병합 로직 (기존 유지)
             if current_type == "table_candidate" and i + 1 < len(blocks):
                 next_block = blocks[i + 1]
                 next_type = next_block['type']
@@ -867,12 +945,14 @@ class AnnexSubChunker:
                     continue
             
             if current_type == "table_candidate":
-                logger.info(
-                    f"         표 후보 강등: paragraph로 처리 "
-                    f"(점수: {current['metadata'].get('table_score', 0):.2f}, "
-                    f"digit: {current['metadata'].get('digit_density', 0):.2f})"
-                )
-                current['type'] = "paragraph"
+                # ✨ Phase 0.9.9.0: 텍스트 힌트로도 승격 못했다면 paragraph로 강등
+                if not current['metadata'].get('upgraded_by_text_hints', False):
+                    logger.info(
+                        f"         표 후보 강등: paragraph로 처리 "
+                        f"(점수: {current['metadata'].get('table_score', 0):.2f}, "
+                        f"digit: {current['metadata'].get('digit_density', 0):.2f})"
+                    )
+                    current['type'] = "paragraph"
             
             merged.append(current)
             i += 1
@@ -999,6 +1079,117 @@ class AnnexSubChunker:
             'header_hint': header_hint,
             'avg_line_length': avg_line_length
         }
+    
+    # ============================================
+    # ✨ Phase 0.9.9.0: 텍스트형 표 감지
+    # ============================================
+    
+    def _check_text_table_hints(self, lines: List[str]) -> Dict[str, Any]:
+        """
+        Phase 0.9.9.0: 텍스트형 표 힌트 확인
+        
+        Returns:
+            {
+                'has_header_hint': bool,
+                'header_keywords': List[str],
+                'has_numbered_list': bool,
+                'numbered_count': int,
+                'has_rank_pattern': bool,
+                'rank_count': int
+            }
+        """
+        if not lines:
+            return {
+                'has_header_hint': False,
+                'header_keywords': [],
+                'has_numbered_list': False,
+                'numbered_count': 0,
+                'has_rank_pattern': False,
+                'rank_count': 0
+            }
+        
+        # 1. Header Hint 확인 (Generic + Domain-Specific)
+        found_keywords = []
+        for line in lines[:5]:  # 첫 5줄만 확인
+            line_clean = line.replace(" ", "")
+            for hint in self.text_table_patterns['all_hints']:
+                if hint in line_clean:
+                    found_keywords.append(hint)
+        
+        has_header_hint = len(found_keywords) > 0
+        
+        # 2. Numbered List 확인 (1., 2., 3...)
+        numbered_pattern = self.text_table_patterns['numbered_list']
+        numbered_lines = [line for line in lines if numbered_pattern.match(line)]
+        has_numbered_list = len(numbered_lines) >= 2  # Phase 0.9.9.0: 2개로 완화
+        
+        # 3. Rank Pattern 확인 (1급, 2급, 3급...)
+        rank_pattern = self.text_table_patterns['rank_pattern']
+        rank_lines = [line for line in lines if rank_pattern.match(line)]
+        has_rank_pattern = len(rank_lines) >= 1  # Phase 0.9.9.0: 1개로 완화
+        
+        return {
+            'has_header_hint': has_header_hint,
+            'header_keywords': list(set(found_keywords)),
+            'has_numbered_list': has_numbered_list,
+            'numbered_count': len(numbered_lines),
+            'has_rank_pattern': has_rank_pattern,
+            'rank_count': len(rank_lines)
+        }
+    
+    def _enhance_table_candidate_with_text_hints(
+        self,
+        block: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Phase 0.9.9.0: table_candidate에 텍스트형 표 힌트 추가
+        
+        기존 table_score와 조합하여 승격 여부 결정
+        """
+        block_type = block.get('type', '')
+        
+        if block_type not in ['table_candidate', 'paragraph']:
+            return block
+        
+        lines = block.get('lines', [])
+        text_hints = self._check_text_table_hints(lines)
+        
+        # 기존 metadata에 text_hints 추가
+        block['metadata']['text_table_hints'] = text_hints
+        
+        # 승격 조건 (Phase 0.9.9.0 P0)
+        # 조건 1: Header Hint + Numbered List 2개 이상 (완화)
+        # 조건 2: Header Hint + table_score >= 0.45 (완화)
+        # 조건 3: Rank Pattern 1개 이상 + Header Hint (완화)
+        
+        existing_table_score = block['metadata'].get('table_score', 0)
+        
+        should_upgrade = False
+        upgrade_reason = ""
+        
+        if text_hints['has_header_hint'] and text_hints['numbered_count'] >= 2:
+            should_upgrade = True
+            upgrade_reason = f"Header({','.join(text_hints['header_keywords'][:2])}) + NumberedList({text_hints['numbered_count']}개)"
+        
+        elif text_hints['has_header_hint'] and existing_table_score >= 0.45:
+            should_upgrade = True
+            upgrade_reason = f"Header({','.join(text_hints['header_keywords'][:2])}) + TableScore({existing_table_score:.2f})"
+        
+        elif text_hints['has_rank_pattern'] and text_hints['has_header_hint']:
+            should_upgrade = True
+            upgrade_reason = f"RankPattern({text_hints['rank_count']}개) + Header"
+        
+        if should_upgrade and block_type in ['table_candidate', 'paragraph']:
+            block['type'] = 'table_rows'
+            block['metadata']['upgraded_by_text_hints'] = True
+            block['metadata']['upgrade_reason'] = upgrade_reason
+            
+            logger.info(
+                f"         ✨ 텍스트형 표 승격: {block_type} → table_rows "
+                f"(이유: {upgrade_reason})"
+            )
+        
+        return block
     
     def _extend_table_block(self, lines: List[str], start: int, end: int, features: Dict[str, Any]) -> int:
         """표 블록 확장"""

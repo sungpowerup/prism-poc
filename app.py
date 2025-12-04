@@ -74,6 +74,17 @@ except ImportError:
     logger.warning("⚠️ TableParser 미설치 - 테이블 구조화 비활성화")
 
 
+# ✅ Phase 0.9.8.4: DocumentClassifier Import
+try:
+    from core.document_classifier import DocumentClassifier
+    CLASSIFIER_AVAILABLE = True
+    logger.info("✅ DocumentClassifier 로드 성공 (Phase 0.9.8.4)")
+except ImportError:
+    CLASSIFIER_AVAILABLE = False
+    logger.warning("⚠️ DocumentClassifier 미설치 - 자동 분류 비활성화")
+
+
+
 LAW_SPACING_KEYWORDS = [
     "임용", "승진", "보수", "복무", "징계", "퇴직",
     "채용", "인사", "직원", "공사", "수습", "결격사유",
@@ -460,13 +471,47 @@ def main():
         st.session_state.processing_result = None
         st.session_state.processed_file_name = uploaded_file.name
     
-    # 처리 모드 선택
-    mode = st.radio(
-        "처리 모드 선택",
-        ["LawMode (규정/법령)", "VLM Mode (일반 문서)"],
-        help="LawMode: 조문 구조 파싱 + 표 판정 강화 | VLM Mode: 이미지 기반 처리"
-    )
+    # ✅ Phase 0.9.8.4: 문서 타입 자동 분류
+    if CLASSIFIER_AVAILABLE:
+        # PDF 텍스트 미리 추출
+        temp_pdf = safe_temp_path(uploaded_file.name)
+        with open(temp_pdf, 'wb') as f:
+            f.write(uploaded_file.getbuffer())
+        
+        pdf_text_preview = extract_pdf_text_layer(str(temp_pdf))
+        
+        # 문서 타입 자동 분류
+        classifier = DocumentClassifier()
+        doc_type, confidence, features = classifier.classify(
+            pdf_text_preview,
+            page_count=len(pdf_text_preview.split('\n\n'))
+        )
+        
+        # 자동 추천 모드
+        if doc_type in ['law_annex', 'form']:
+            recommended_mode = "LawMode (규정/법령)"
+        else:
+            recommended_mode = "VLM Mode (일반 문서)"
+        
+        st.info(f"🎯 자동 감지: **{doc_type}** (신뢰도: {confidence:.0%})")
+        st.info(f"📋 추천 모드: **{recommended_mode}**")
+        
+        # 처리 모드 선택 (자동 추천 반영)
+        mode = st.radio(
+            "처리 모드 선택",
+            ["LawMode (규정/법령)", "VLM Mode (일반 문서)"],
+            index=0 if 'LawMode' in recommended_mode else 1,
+            help=f"✅ 자동 감지: {doc_type} ({confidence:.0%}) | LawMode: 조문 구조 파싱 | VLM Mode: 이미지 기반"
+        )
+    else:
+        # 기존 수동 선택
+        mode = st.radio(
+            "처리 모드 선택",
+            ["LawMode (규정/법령)", "VLM Mode (일반 문서)"],
+            help="LawMode: 조문 구조 파싱 + 표 판정 강화 | VLM Mode: 이미지 기반 처리"
+        )
     
+    # 🔧 Phase 0.9.8.4 Bug Fix: process_mode 변수 선언
     process_mode = "law" if "LawMode" in mode else "vlm"
     
     # 처리 버튼
